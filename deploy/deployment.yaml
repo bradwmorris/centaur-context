@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: centaur-os
+  namespace: centaur
+  labels:
+    app.kubernetes.io/name: centaur-os
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: centaur-os
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: centaur-os
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: centaur-os
+          image: centaur-os:ontology-3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: human
+              containerPort: 8080
+            - name: agent
+              containerPort: 8081
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: DATABASE_URL
+            - name: AGENT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-infra-env
+                  key: CENTAUR_OS_API_TOKEN
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: human
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: human
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

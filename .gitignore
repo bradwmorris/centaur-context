@@ -1,0 +1,12 @@
+/target
+/web/node_modules
+/web/dist
+*.tsbuildinfo
+/.venv-tool
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+.env
+.DS_Store
+*.log

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-os
+  namespace: centaur
+  labels:
+    app.kubernetes.io/name: centaur-os
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-os
+  ports:
+    - name: agent
+      port: 8081
+      targetPort: agent

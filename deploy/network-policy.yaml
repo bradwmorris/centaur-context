@@ -1,0 +1,76 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-os
+  namespace: centaur
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: centaur-os
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              centaur.ai/iron-proxy: "true"
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: centaur
+              app.kubernetes.io/component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-os-allow-iron-proxy-egress
+  namespace: centaur
+spec:
+  podSelector:
+    matchLabels:
+      centaur.ai/iron-proxy: "true"
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: centaur-os
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-os-allow-postgres-ingress
+  namespace: centaur
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: centaur
+      app.kubernetes.io/instance: centaur
+      app.kubernetes.io/component: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: centaur-os
+      ports:
+        - protocol: TCP
+          port: 5432
