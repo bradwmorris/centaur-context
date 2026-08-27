@@ -1,11 +1,12 @@
-export type ObjectKind = "note" | "source" | "decision" | "task" | "chat" | "entity" | "memory";
+export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory";
 export type TaskStatus = "todo" | "doing" | "blocked" | "review" | "done";
 
 export interface SharedObject {
   id: string;
   kind: ObjectKind;
   title: string;
-  body: string;
+  description: string;
+  protected: boolean;
   lifecycle: "active" | "archived";
   revision: number;
   created_by_type: string;
@@ -23,7 +24,8 @@ export interface Connection {
   source_object_id: string;
   kind: string;
   target_object_id: string;
-  reason: string;
+  description: string;
+  protected: boolean;
   revision: number;
   created_by_type: string;
   created_by_id: string;
@@ -33,13 +35,13 @@ export interface Connection {
 export interface Task {
   id: string;
   title: string;
-  body: string;
+  description: string;
   lifecycle: "active" | "archived";
   revision: number;
   provenance: Record<string, string>;
   status: TaskStatus;
-  owner_type: string | null;
-  owner_id: string | null;
+  priority: "low" | "medium" | "high";
+  owner_object_id: string | null;
   agent_eligible: boolean;
   due_at: string | null;
   created_at: string;

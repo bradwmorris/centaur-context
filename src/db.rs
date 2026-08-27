@@ -24,7 +24,8 @@ pub struct Object {
     pub id: Uuid,
     pub kind: String,
     pub title: String,
-    pub body: String,
+    pub description: String,
+    pub protected: bool,
     pub lifecycle: String,
     pub revision: i64,
     pub created_by_type: String,
@@ -46,7 +47,8 @@ pub struct Connection {
     pub source_object_id: Uuid,
     pub kind: String,
     pub target_object_id: Uuid,
-    pub reason: String,
+    pub description: String,
+    pub protected: bool,
     pub revision: i64,
     pub created_by_type: String,
     pub created_by_id: String,
@@ -65,13 +67,13 @@ pub struct Connection {
 pub struct Task {
     pub id: Uuid,
     pub title: String,
-    pub body: String,
+    pub description: String,
     pub lifecycle: String,
     pub revision: i64,
     pub provenance: Value,
     pub status: String,
-    pub owner_type: Option<String>,
-    pub owner_id: Option<String>,
+    pub priority: String,
+    pub owner_object_id: Option<Uuid>,
     pub agent_eligible: bool,
     #[serde(with = "time::serde::rfc3339::option")]
     pub due_at: Option<OffsetDateTime>,
@@ -112,15 +114,16 @@ pub struct ObjectListFilter {
 pub struct NewObject {
     pub kind: String,
     pub title: String,
-    pub body: String,
+    pub description: String,
     pub provenance: Value,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct ObjectChanges {
     pub title: Option<String>,
-    pub body: Option<String>,
+    pub description: Option<String>,
     pub provenance: Option<Value>,
+    pub protected: Option<bool>,
     pub archive: bool,
 }
 
@@ -129,8 +132,17 @@ pub struct NewConnection {
     pub source_object_id: Uuid,
     pub kind: String,
     pub target_object_id: Uuid,
-    pub reason: String,
+    pub description: String,
     pub provenance: Value,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConnectionChanges {
+    pub kind: Option<String>,
+    pub description: Option<String>,
+    pub provenance: Option<Value>,
+    pub protected: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -143,11 +155,11 @@ pub struct TaskListFilter {
 #[derive(Clone, Debug)]
 pub struct NewTask {
     pub title: String,
-    pub body: String,
+    pub description: String,
     pub provenance: Value,
     pub status: String,
-    pub owner_type: Option<String>,
-    pub owner_id: Option<String>,
+    pub priority: String,
+    pub owner_object_id: Option<Uuid>,
     pub agent_eligible: bool,
     pub due_at: Option<OffsetDateTime>,
 }
@@ -155,11 +167,11 @@ pub struct NewTask {
 #[derive(Clone, Debug, Default)]
 pub struct TaskChanges {
     pub title: Option<String>,
-    pub body: Option<String>,
+    pub description: Option<String>,
     pub provenance: Option<Value>,
     pub status: Option<String>,
-    pub owner_type: Option<Option<String>>,
-    pub owner_id: Option<Option<String>>,
+    pub priority: Option<String>,
+    pub owner_object_id: Option<Option<Uuid>>,
     pub agent_eligible: Option<bool>,
     pub due_at: Option<Option<OffsetDateTime>>,
 }
@@ -205,7 +217,7 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
         query
             .push(" AND (strpos(lower(title), lower(")
             .push_bind(search.clone())
-            .push(")) > 0 OR strpos(lower(body), lower(")
+            .push(")) > 0 OR strpos(lower(description), lower(")
             .push_bind(search)
             .push(")) > 0)");
     }
@@ -236,13 +248,13 @@ pub async fn create_object(
     let mut tx = pool.begin().await?;
     let object: Object = sqlx::query_as(
         r#"INSERT INTO objects
-           (id, kind, title, body, created_by_type, created_by_id, updated_by_type, updated_by_id, provenance)
+           (id, kind, title, description, created_by_type, created_by_id, updated_by_type, updated_by_id, provenance)
            VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7) RETURNING *"#,
     )
     .bind(id)
     .bind(&input.kind)
     .bind(&input.title)
-    .bind(&input.body)
+    .bind(&input.description)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(&input.provenance)
@@ -301,10 +313,13 @@ pub async fn update_object(
     }
     let current = get_object(pool, id).await?;
     let title = changes.title.unwrap_or_else(|| current.title.clone());
-    let body = changes.body.unwrap_or_else(|| current.body.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
     let provenance = changes
         .provenance
         .unwrap_or_else(|| current.provenance.clone());
+    let protected = changes.protected.unwrap_or(current.protected);
     let lifecycle = if changes.archive {
         "archived"
     } else {
@@ -317,15 +332,16 @@ pub async fn update_object(
     };
     let mut tx = pool.begin().await?;
     let updated: Option<Object> = sqlx::query_as(
-        r#"UPDATE objects SET title=$3, body=$4, provenance=$5, lifecycle=$6,
-           archived_at=$7, revision=revision+1, updated_by_type=$8, updated_by_id=$9,
+        r#"UPDATE objects SET title=$3, description=$4, provenance=$5, protected=$6, lifecycle=$7,
+           archived_at=$8, revision=revision+1, updated_by_type=$9, updated_by_id=$10,
            updated_at=now() WHERE id=$1 AND revision=$2 RETURNING *"#,
     )
     .bind(id)
     .bind(expected_revision)
     .bind(&title)
-    .bind(&body)
+    .bind(&description)
     .bind(&provenance)
+    .bind(protected)
     .bind(lifecycle)
     .bind(archived_at)
     .bind(actor.actor_type)
@@ -347,7 +363,7 @@ pub async fn update_object(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "body_changed": body != current.body, "lifecycle": lifecycle}),
+        json!({"title": title, "description_changed": description != current.description, "protected": protected, "lifecycle": lifecycle}),
     )
     .await?;
     tx.commit().await?;
@@ -380,18 +396,19 @@ pub async fn create_connection(
     let mut tx = pool.begin().await?;
     let connection: Connection = sqlx::query_as(
         r#"INSERT INTO connections
-           (id, source_object_id, kind, target_object_id, reason,
-            created_by_type, created_by_id, updated_by_type, updated_by_id, provenance)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,$8) RETURNING *"#,
+           (id, source_object_id, kind, target_object_id, description,
+            created_by_type, created_by_id, updated_by_type, updated_by_id, provenance, protected)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,$8,$9) RETURNING *"#,
     )
     .bind(id)
     .bind(input.source_object_id)
     .bind(&input.kind)
     .bind(input.target_object_id)
-    .bind(&input.reason)
+    .bind(&input.description)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(&input.provenance)
+    .bind(input.protected)
     .fetch_one(&mut *tx)
     .await?;
     insert_event(
@@ -404,11 +421,77 @@ pub async fn create_connection(
         Some(idempotency_key),
         None,
         1,
-        json!({"kind": input.kind, "target_object_id": input.target_object_id, "reason": input.reason}),
+        json!({"kind": input.kind, "target_object_id": input.target_object_id, "description": input.description, "protected": input.protected}),
     )
     .await?;
     tx.commit().await?;
     Ok(connection)
+}
+
+pub async fn update_connection(
+    pool: &PgPool,
+    actor: &ActorContext,
+    id: Uuid,
+    expected_revision: i64,
+    changes: ConnectionChanges,
+    idempotency_key: Option<&str>,
+) -> Result<Connection, DbError> {
+    if let Some(key) = idempotency_key
+        && let Some(existing_id) = idempotent_entity(pool, actor, key).await?
+    {
+        return sqlx::query_as("SELECT * FROM connections WHERE id=$1")
+            .bind(existing_id)
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::from);
+    }
+    let current: Connection =
+        sqlx::query_as("SELECT * FROM connections WHERE id=$1 AND archived_at IS NULL")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or(DbError::NotFound)?;
+    let kind = changes.kind.unwrap_or_else(|| current.kind.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
+    let provenance = changes
+        .provenance
+        .unwrap_or_else(|| current.provenance.clone());
+    let protected = changes.protected.unwrap_or(current.protected);
+    let mut tx = pool.begin().await?;
+    let updated: Option<Connection> = sqlx::query_as(
+        r#"UPDATE connections
+           SET kind=$3,description=$4,provenance=$5,protected=$6,
+               revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now()
+           WHERE id=$1 AND revision=$2 AND archived_at IS NULL RETURNING *"#,
+    )
+    .bind(id)
+    .bind(expected_revision)
+    .bind(&kind)
+    .bind(&description)
+    .bind(&provenance)
+    .bind(protected)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let updated = updated.ok_or(DbError::Conflict)?;
+    insert_event(
+        &mut tx,
+        actor,
+        "connection",
+        id,
+        current.source_object_id,
+        "updated",
+        idempotency_key,
+        Some(expected_revision),
+        updated.revision,
+        json!({"kind": kind, "description": description, "protected": protected}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(updated)
 }
 
 pub async fn archive_connection(
@@ -459,8 +542,8 @@ pub async fn archive_connection(
 
 pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Task>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id,o.title,o.body,o.lifecycle,o.revision,o.provenance,
-           t.status,t.owner_type,t.owner_id,t.agent_eligible,t.due_at,
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+           t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE true"#,
     );
     if let Some(status) = filter.status {
@@ -479,8 +562,8 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
 
 pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id,o.title,o.body,o.lifecycle,o.revision,o.provenance,
-           t.status,t.owner_type,t.owner_id,t.agent_eligible,t.due_at,
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+           t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
     .bind(id)
@@ -502,24 +585,24 @@ pub async fn create_task(
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"INSERT INTO objects
-           (id,kind,title,body,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+           (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
            VALUES ($1,'task',$2,$3,$4,$5,$4,$5,$6)"#,
     )
     .bind(id)
     .bind(&input.title)
-    .bind(&input.body)
+    .bind(&input.description)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(&input.provenance)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO tasks (object_id,status,owner_type,owner_id,agent_eligible,due_at) VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO tasks (object_id,status,priority,owner_object_id,agent_eligible,due_at) VALUES ($1,$2,$3,$4,$5,$6)",
     )
     .bind(id)
     .bind(&input.status)
-    .bind(&input.owner_type)
-    .bind(&input.owner_id)
+    .bind(&input.priority)
+    .bind(input.owner_object_id)
     .bind(input.agent_eligible)
     .bind(input.due_at)
     .execute(&mut *tx)
@@ -556,27 +639,27 @@ pub async fn update_task(
     }
     let current = get_task(pool, id).await?;
     let title = changes.title.unwrap_or_else(|| current.title.clone());
-    let body = changes.body.unwrap_or_else(|| current.body.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
     let provenance = changes
         .provenance
         .unwrap_or_else(|| current.provenance.clone());
     let status = changes.status.unwrap_or_else(|| current.status.clone());
-    let owner_type = changes
-        .owner_type
-        .unwrap_or_else(|| current.owner_type.clone());
-    let owner_id = changes.owner_id.unwrap_or_else(|| current.owner_id.clone());
+    let priority = changes.priority.unwrap_or_else(|| current.priority.clone());
+    let owner_object_id = changes.owner_object_id.unwrap_or(current.owner_object_id);
     let agent_eligible = changes.agent_eligible.unwrap_or(current.agent_eligible);
     let due_at = changes.due_at.unwrap_or(current.due_at);
     let mut tx = pool.begin().await?;
     let updated: Option<Object> = sqlx::query_as(
-        r#"UPDATE objects SET title=$3,body=$4,provenance=$5,revision=revision+1,
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,revision=revision+1,
            updated_by_type=$6,updated_by_id=$7,updated_at=now()
            WHERE id=$1 AND revision=$2 AND kind='task' RETURNING *"#,
     )
     .bind(id)
     .bind(expected_revision)
     .bind(&title)
-    .bind(&body)
+    .bind(&description)
     .bind(&provenance)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
@@ -584,12 +667,12 @@ pub async fn update_task(
     .await?;
     let updated = updated.ok_or(DbError::Conflict)?;
     sqlx::query(
-        "UPDATE tasks SET status=$2,owner_type=$3,owner_id=$4,agent_eligible=$5,due_at=$6,updated_at=now() WHERE object_id=$1",
+        "UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,agent_eligible=$5,due_at=$6,updated_at=now() WHERE object_id=$1",
     )
     .bind(id)
     .bind(&status)
-    .bind(&owner_type)
-    .bind(&owner_id)
+    .bind(&priority)
+    .bind(owner_object_id)
     .bind(agent_eligible)
     .bind(due_at)
     .execute(&mut *tx)
@@ -608,7 +691,7 @@ pub async fn update_task(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "status": status, "agent_eligible": agent_eligible}),
+        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_eligible": agent_eligible}),
     )
     .await?;
     tx.commit().await?;

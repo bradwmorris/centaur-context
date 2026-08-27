@@ -13,14 +13,14 @@ DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 
-OBJECT_UPDATE_FIELDS = {"title", "body", "provenance", "archive"}
+OBJECT_UPDATE_FIELDS = {"title", "description", "provenance", "protected", "archive"}
 TASK_UPDATE_FIELDS = {
     "title",
-    "body",
+    "description",
     "provenance",
     "status",
-    "owner_type",
-    "owner_id",
+    "priority",
+    "owner_object_id",
     "clear_owner",
     "agent_eligible",
     "due_at",
@@ -155,7 +155,7 @@ class CentaurOsClient:
             raise RuntimeError("Centaur OS returned invalid JSON") from exc
 
     def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """Search shared records by title or body."""
+        """Search shared records by title or description."""
         query = _clean(query)
         if not query:
             raise ValueError("query is required")
@@ -172,7 +172,7 @@ class CentaurOsClient:
         self,
         kind: str,
         title: str,
-        body: str,
+        description: str,
         provenance: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -180,7 +180,12 @@ class CentaurOsClient:
         return self._request(
             "POST",
             "/api/v1/objects",
-            json={"kind": kind, "title": title, "body": body, "provenance": provenance},
+            json={
+                "kind": kind,
+                "title": title,
+                "description": description,
+                "provenance": provenance,
+            },
             idempotency_key=idempotency_key,
         )
 
@@ -214,7 +219,7 @@ class CentaurOsClient:
         source_id: str,
         kind: str,
         target_id: str,
-        reason: str,
+        description: str,
         provenance: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -226,7 +231,7 @@ class CentaurOsClient:
                 "source_object_id": source_id,
                 "kind": kind,
                 "target_object_id": target_id,
-                "reason": reason,
+                "description": description,
                 "provenance": provenance,
             },
             idempotency_key=idempotency_key,

@@ -50,14 +50,18 @@ def read_object(id: str = typer.Argument(..., help="Object UUID.")) -> None:
 def create_object(
     kind: str = typer.Option(..., help="Non-Task Object kind supported by the API."),
     title: str = typer.Option(...),
-    body: str = typer.Option(""),
+    description: str = typer.Option(...),
     provenance_json: str = typer.Option("{}", help="Provenance JSON object."),
     idempotency_key: str = typer.Option(..., help="Stable unique key for safe retries."),
 ) -> None:
     """Create one shared Object."""
     _print(
         _client().create_object(
-            kind, title, body, _json_object(provenance_json, "provenance"), idempotency_key
+            kind,
+            title,
+            description,
+            _json_object(provenance_json, "provenance"),
+            idempotency_key,
         )
     )
 
@@ -89,9 +93,9 @@ def list_connections(id: str = typer.Argument(..., help="Object UUID.")) -> None
 @app.command("create-connection")
 def create_connection(
     source_id: str = typer.Option(...),
-    kind: str = typer.Option(..., help="supports, depends_on, references, part_of, or supersedes."),
+    kind: str = typer.Option(..., help="involves, about, related_to, depends_on, or derived_from."),
     target_id: str = typer.Option(...),
-    reason: str = typer.Option(...),
+    description: str = typer.Option(...),
     provenance_json: str = typer.Option("{}", help="Provenance JSON object."),
     idempotency_key: str = typer.Option(..., help="Stable unique key for safe retries."),
 ) -> None:
@@ -101,7 +105,7 @@ def create_connection(
             source_id,
             kind,
             target_id,
-            reason,
+            description,
             _json_object(provenance_json, "provenance"),
             idempotency_key,
         )

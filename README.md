@@ -7,8 +7,12 @@ Its ontology contains:
 
 - canonical Objects;
 - explained Connections;
-- one-to-one Task, Chat, Entity, and Memory subtype records;
+- one-to-one Task, Chat, User, Entity, and event-shaped Memory subtype records;
 - immutable Object Events.
+
+Every Object has one primary type and a mandatory concise description. The MVP
+Connection vocabulary is `involves`, `about`, `related_to`, `depends_on`, and
+`derived_from`; each Connection also requires a plain-language description.
 
 The Rust service owns validation and PostgreSQL access. The React/TypeScript UI
 is compiled to static assets and served by the same process.

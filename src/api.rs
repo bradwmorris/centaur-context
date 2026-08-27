@@ -20,10 +20,13 @@ use tower_http::{
 use uuid::Uuid;
 
 use crate::{
-    db::{self, DbError, NewConnection, NewObject, NewTask, ObjectChanges, TaskChanges},
+    db::{
+        self, ConnectionChanges, DbError, NewConnection, NewObject, NewTask, ObjectChanges,
+        TaskChanges,
+    },
     domain::{
-        ActorContext, CONNECTION_KINDS, OBJECT_KINDS, TASK_STATUSES, ValidationError, allowed,
-        optional_text, provenance, required_text,
+        ActorContext, CONNECTION_KINDS, OBJECT_KINDS, TASK_PRIORITIES, TASK_STATUSES,
+        ValidationError, allowed, optional_text, provenance, required_text,
     },
 };
 
@@ -69,6 +72,7 @@ fn service_router(state: AppState) -> Router {
                 .route("/objects/{id}/connections", get(list_connections))
                 .route("/objects/{id}/events", get(list_events))
                 .route("/connections", post(create_connection))
+                .route("/connections/{id}", axum::routing::patch(update_connection))
                 .route("/connections/{id}/archive", post(archive_connection))
                 .route("/tasks", get(list_tasks).post(create_task))
                 .route("/tasks/{id}", get(read_task).patch(update_task)),
@@ -176,8 +180,7 @@ async fn list_objects(
 struct CreateObjectRequest {
     kind: String,
     title: String,
-    #[serde(default)]
-    body: String,
+    description: String,
     provenance: Option<Value>,
 }
 
@@ -189,10 +192,10 @@ async fn create_object(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let kind = allowed(input.kind, "kind", OBJECT_KINDS)?;
-    if kind == "task" {
-        return Err(ApiError::BadRequest(
-            "use POST /api/v1/tasks to create a task".to_owned(),
-        ));
+    if matches!(kind.as_str(), "task" | "user") {
+        return Err(ApiError::BadRequest(format!(
+            "use the typed endpoint to create a {kind}"
+        )));
     }
     let object = db::create_object(
         &state.pool,
@@ -200,7 +203,7 @@ async fn create_object(
         NewObject {
             kind,
             title: required_text(input.title, "title", 300)?,
-            body: input.body,
+            description: required_text(input.description, "description", 1000)?,
             provenance: provenance(input.provenance)?,
         },
         &key,
@@ -222,8 +225,9 @@ async fn read_object(
 struct UpdateObjectRequest {
     expected_revision: i64,
     title: Option<String>,
-    body: Option<String>,
+    description: Option<String>,
     provenance: Option<Value>,
+    protected: Option<bool>,
     #[serde(default)]
     archive: bool,
 }
@@ -246,11 +250,15 @@ async fn update_object(
                 .title
                 .map(|value| required_text(value, "title", 300))
                 .transpose()?,
-            body: input.body,
+            description: input
+                .description
+                .map(|value| required_text(value, "description", 1000))
+                .transpose()?,
             provenance: input
                 .provenance
                 .map(|value| provenance(Some(value)))
                 .transpose()?,
+            protected: input.protected,
             archive: input.archive,
         },
         key.as_deref(),
@@ -274,8 +282,10 @@ struct CreateConnectionRequest {
     source_object_id: Uuid,
     kind: String,
     target_object_id: Uuid,
-    reason: String,
+    description: String,
     provenance: Option<Value>,
+    #[serde(default)]
+    protected: bool,
 }
 
 async fn create_connection(
@@ -295,13 +305,57 @@ async fn create_connection(
             source_object_id: input.source_object_id,
             kind: allowed(input.kind, "connection kind", CONNECTION_KINDS)?,
             target_object_id: input.target_object_id,
-            reason: required_text(input.reason, "reason", 1000)?,
+            description: required_text(input.description, "description", 1000)?,
             provenance: provenance(input.provenance)?,
+            protected: input.protected,
         },
         &key,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(json!({"data": connection}))))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateConnectionRequest {
+    expected_revision: i64,
+    kind: Option<String>,
+    description: Option<String>,
+    provenance: Option<Value>,
+    protected: Option<bool>,
+}
+
+async fn update_connection(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<UpdateConnectionRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let key = idempotency_key(&headers, actor.is_agent, &actor)?;
+    let connection = db::update_connection(
+        &state.pool,
+        &actor,
+        id,
+        input.expected_revision,
+        ConnectionChanges {
+            kind: input
+                .kind
+                .map(|value| allowed(value, "connection kind", CONNECTION_KINDS))
+                .transpose()?,
+            description: input
+                .description
+                .map(|value| required_text(value, "description", 1000))
+                .transpose()?,
+            provenance: input
+                .provenance
+                .map(|value| provenance(Some(value)))
+                .transpose()?,
+            protected: input.protected,
+        },
+        key.as_deref(),
+    )
+    .await?;
+    Ok(Json(json!({"data": connection})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,13 +412,13 @@ async fn list_tasks(
 #[derive(Debug, Deserialize)]
 struct CreateTaskRequest {
     title: String,
-    #[serde(default)]
-    body: String,
+    description: String,
     provenance: Option<Value>,
     #[serde(default = "default_task_status")]
     status: String,
-    owner_type: Option<String>,
-    owner_id: Option<String>,
+    #[serde(default = "default_task_priority")]
+    priority: String,
+    owner_object_id: Option<Uuid>,
     #[serde(default)]
     agent_eligible: bool,
     due_at: Option<String>,
@@ -374,27 +428,27 @@ fn default_task_status() -> String {
     "todo".to_owned()
 }
 
+fn default_task_priority() -> String {
+    "medium".to_owned()
+}
+
 async fn create_task(
     State(state): State<AppState>,
     Extension(actor): Extension<ActorContext>,
     headers: HeaderMap,
     Json(input): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    validate_owner(&input.owner_type, &input.owner_id)?;
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let task = db::create_task(
         &state.pool,
         &actor,
         NewTask {
             title: required_text(input.title, "title", 300)?,
-            body: input.body,
+            description: required_text(input.description, "description", 1000)?,
             provenance: provenance(input.provenance)?,
             status: allowed(input.status, "status", TASK_STATUSES)?,
-            owner_type: input
-                .owner_type
-                .map(|value| allowed(value, "owner_type", &["human", "centaur_agent"]))
-                .transpose()?,
-            owner_id: optional_text(input.owner_id, "owner_id", 200)?,
+            priority: allowed(input.priority, "priority", TASK_PRIORITIES)?,
+            owner_object_id: input.owner_object_id,
             agent_eligible: input.agent_eligible,
             due_at: parse_due_at(input.due_at)?,
         },
@@ -415,11 +469,11 @@ async fn read_task(
 struct UpdateTaskRequest {
     expected_revision: i64,
     title: Option<String>,
-    body: Option<String>,
+    description: Option<String>,
     provenance: Option<Value>,
     status: Option<String>,
-    owner_type: Option<String>,
-    owner_id: Option<String>,
+    priority: Option<String>,
+    owner_object_id: Option<Uuid>,
     #[serde(default)]
     clear_owner: bool,
     agent_eligible: Option<bool>,
@@ -435,32 +489,20 @@ async fn update_task(
     headers: HeaderMap,
     Json(input): Json<UpdateTaskRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if input.clear_owner && (input.owner_type.is_some() || input.owner_id.is_some()) {
+    if input.clear_owner && input.owner_object_id.is_some() {
         return Err(ApiError::BadRequest(
             "clear_owner cannot be combined with owner fields".to_owned(),
         ));
-    }
-    if input.owner_type.is_some() || input.owner_id.is_some() {
-        validate_owner(&input.owner_type, &input.owner_id)?;
     }
     if input.clear_due_at && input.due_at.is_some() {
         return Err(ApiError::BadRequest(
             "clear_due_at cannot be combined with due_at".to_owned(),
         ));
     }
-    let owner_type = if input.clear_owner {
+    let owner_object_id = if input.clear_owner {
         Some(None)
     } else {
-        input
-            .owner_type
-            .map(|value| allowed(value, "owner_type", &["human", "centaur_agent"]))
-            .transpose()?
-            .map(Some)
-    };
-    let owner_id = if input.clear_owner {
-        Some(None)
-    } else {
-        optional_text(input.owner_id, "owner_id", 200)?.map(Some)
+        input.owner_object_id.map(Some)
     };
     let due_at = if input.clear_due_at {
         Some(None)
@@ -483,7 +525,10 @@ async fn update_task(
                 .title
                 .map(|value| required_text(value, "title", 300))
                 .transpose()?,
-            body: input.body,
+            description: input
+                .description
+                .map(|value| required_text(value, "description", 1000))
+                .transpose()?,
             provenance: input
                 .provenance
                 .map(|value| provenance(Some(value)))
@@ -492,8 +537,11 @@ async fn update_task(
                 .status
                 .map(|value| allowed(value, "status", TASK_STATUSES))
                 .transpose()?,
-            owner_type,
-            owner_id,
+            priority: input
+                .priority
+                .map(|value| allowed(value, "priority", TASK_PRIORITIES))
+                .transpose()?,
+            owner_object_id,
             agent_eligible: input.agent_eligible,
             due_at,
         },
@@ -511,13 +559,6 @@ async fn list_events(
     Ok(Json(
         json!({"data": db::list_events(&state.pool, id).await?}),
     ))
-}
-
-fn validate_owner(owner_type: &Option<String>, owner_id: &Option<String>) -> Result<(), ApiError> {
-    if owner_type.is_some() != owner_id.is_some() {
-        return Err(ValidationError::InvalidOwner.into());
-    }
-    Ok(())
 }
 
 fn parse_due_at(value: Option<String>) -> Result<Option<OffsetDateTime>, ApiError> {

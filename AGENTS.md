@@ -12,9 +12,9 @@ for Centaur users and agents.
   client is part of the public API contract.
 - Organization-specific agents, prompts, workflows, retention choices, and
   business rules belong in that organization's private overlay.
-- Keep the ontology centred on canonical Objects, with Tasks, Chats, Entities,
-  and Memories as one-to-one subtype records, universal Connections, and
-  immutable Object Events.
+- Keep the ontology centred on canonical Objects, with Tasks, Chats, Users,
+  Entities, and event-shaped Memories as one-to-one subtype records, explained
+  Connections, and immutable Object Events.
 - Do not copy code, credentials, data, or schema wholesale from The AGI Post.
 - Do not add public ingress, cloud deployment, or external integrations without
   Brad's explicit approval.

@@ -57,7 +57,7 @@ export const api = {
   createObject(body: {
     kind: string;
     title: string;
-    body: string;
+    description: string;
     provenance: Record<string, string>;
   }) {
     return request<SharedObject>("/api/v1/objects", write("POST", body));

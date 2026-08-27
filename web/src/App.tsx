@@ -4,7 +4,7 @@ import type { Connection, ObjectEvent, SharedObject, Task, TaskStatus } from "./
 
 type Section = "objects" | "tasks" | "chats" | "entities" | "memories";
 
-const connectionKinds = ["supports", "depends_on", "references", "part_of", "supersedes"];
+const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
 const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", entities: "Entities", memories: "Memories" };
 const sectionSingular: Record<Section, string> = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory" };
@@ -12,8 +12,8 @@ const sectionDescriptions: Record<Section, string> = {
   objects: "The canonical record of everything in Centaur OS.",
   tasks: "Work that can be tracked or handed to an agent.",
   chats: "Canonical conversations shared across the system.",
-  entities: "People, organisations, places, and named things.",
-  memories: "Durable context worth carrying forward.",
+  entities: "Organisations, places, products, projects, and named things.",
+  memories: "Simple event-shaped records of what happened.",
 };
 const sectionKinds = { chats: "chat", entities: "entity", memories: "memory" } as const;
 
@@ -109,7 +109,7 @@ export default function App() {
                   <span className="row-grip">···</span>
                   <span className={`kind ${"kind" in item ? item.kind : item.status}`}>{"kind" in item ? item.kind : item.status}</span>
                   <strong>{item.title}</strong>
-                  <p>{item.body || "No description"}</p>
+                  <p>{item.description}</p>
                   {"agent_eligible" in item && item.agent_eligible ? <span className="agent-pill">Agent</span> : <span />}
                   <time>{relative(item.updated_at)}</time>
                 </button>
@@ -148,7 +148,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
     const data = new FormData(event.currentTarget);
     try {
       onCreated(await api.createObject({
-        kind: fixedKind ?? String(data.get("kind")), title: String(data.get("title")), body: String(data.get("body")),
+        kind: fixedKind ?? String(data.get("kind")), title: String(data.get("title")), description: String(data.get("description")),
         provenance: { source_type: "human", note: "Created in Centaur OS" },
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
@@ -156,9 +156,9 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="body" rows={5} placeholder="Add details…" aria-label={`${name} body`} />
+    <textarea className="create-body" name="description" rows={5} required placeholder="Explain what this is in simple language…" aria-label={`${name} description`} />
     {error && <p className="form-error">{error}</p>}
-    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" defaultValue="note"><option value="note">Note</option><option value="source">Source</option><option value="decision">Decision</option><option value="chat">Chat</option><option value="entity">Entity</option><option value="memory">Memory</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
+    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" defaultValue="memory"><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
 }
 
@@ -167,12 +167,12 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try { onCreated(await api.createTask({ title: String(data.get("title")), body: String(data.get("body")), status: "todo", agent_eligible: data.get("agent_eligible") === "on", provenance: { source_type: "human", note: "Created in Centaur OS" } })); }
+    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_eligible: data.get("agent_eligible") === "on", provenance: { source_type: "human", note: "Created in Centaur OS" } })); }
     catch (cause) { setError(message(cause)); setBusy(false); }
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="body" rows={5} placeholder="Add a description…" aria-label="Task description" />
+    <textarea className="create-body" name="description" rows={5} required placeholder="Explain what this task is…" aria-label="Task description" />
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_eligible" /> Agent eligible</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
@@ -191,7 +191,7 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
   if (!item) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { setItem(await api.updateObject(id, { expected_revision: item.revision, title: String(data.get("title")), body: String(data.get("body")) })); await Promise.all([load(), onChanged()]); }
+    try { setItem(await api.updateObject(id, { expected_revision: item.revision, title: String(data.get("title")), description: String(data.get("description")) })); await Promise.all([load(), onChanged()]); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page">
@@ -208,7 +208,7 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="body" aria-label="Object body" defaultValue={item.body} key={`${item.id}-${item.revision}-body`} rows={9} placeholder="Add details…" />
+        <textarea className="body-input" name="description" required aria-label="Object description" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={9} placeholder="Explain what this is…" />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
@@ -222,12 +222,12 @@ function Connections({ object, objects, connections, onCreated }: { object: Shar
   const [open, setOpen] = useState(false); const [error, setError] = useState<string | null>(null);
   const titles = useMemo(() => new Map(objects.map((item) => [item.id, item.title])), [objects]);
   const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), reason: String(data.get("reason")), provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
+    try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), description: String(data.get("description")), provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
     catch (cause) { setError(message(cause)); }
   };
   return <Section title="Relationships" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
-    {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="reason" required placeholder="Why are these connected?" /><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-    <div className="connections">{connections.map((connection) => { const other = connection.source_object_id === object.id ? connection.target_object_id : connection.source_object_id; return <div className="connection" key={connection.id}><span>{connection.kind.replace("_", " ")}</span><strong>{titles.get(other) ?? other}</strong><p>{connection.reason}</p></div>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
+    {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
+    <div className="connections">{connections.map((connection) => { const other = connection.source_object_id === object.id ? connection.target_object_id : connection.source_object_id; return <div className="connection" key={connection.id}><span>{connection.kind.replace("_", " ")}</span><strong>{titles.get(other) ?? other}</strong><p>{connection.description}</p></div>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
   </Section>;
 }
 
@@ -237,7 +237,7 @@ function TaskDetail({ id, onChanged }: { id: string; onChanged: () => Promise<vo
   useEffect(() => { void load(); }, [load]);
   if (!task) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { setTask(await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), body: String(data.get("body")), status: String(data.get("status")), agent_eligible: data.get("agent_eligible") === "on" })); await onChanged(); }
+    try { setTask(await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), status: String(data.get("status")), priority: String(data.get("priority")), agent_eligible: data.get("agent_eligible") === "on" })); await onChanged(); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <form className="record-page" onSubmit={save}>
@@ -249,13 +249,14 @@ function TaskDetail({ id, onChanged }: { id: string; onChanged: () => Promise<vo
           <div className="properties-grid">
             <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
             <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.id}-${task.revision}-eligible`} /> Eligible</label></Property>
-            <Property label="Owner">{task.owner_id ?? "Unassigned"}</Property>
+            <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
+            <Property label="Owner">{task.owner_object_id ?? "Unassigned"}</Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
             <Property label="Revision">{task.revision}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="body" aria-label="Task body" defaultValue={task.body} key={`${task.id}-${task.revision}-body`} rows={9} placeholder="Add a description…" />
+        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.id}-${task.revision}-description`} rows={9} placeholder="Explain what this task is…" />
         <button className="secondary save-button">Save changes</button>
       </div>
       {error && <p className="form-error">{error}</p>}

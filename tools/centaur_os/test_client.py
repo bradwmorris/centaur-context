@@ -28,15 +28,15 @@ def test_search_objects_sends_scoped_agent_context() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return json_response({"data": [{"id": "object-1", "title": "Shared note"}]})
+        return json_response({"data": [{"id": "object-1", "title": "Shared memory"}]})
 
-    result = make_client(handler).search_objects("shared", kind="note", limit=500)
+    result = make_client(handler).search_objects("shared", kind="memory", limit=500)
 
-    assert result == [{"id": "object-1", "title": "Shared note"}]
+    assert result == [{"id": "object-1", "title": "Shared memory"}]
     request = requests[0]
     assert request.url.path == "/api/v1/objects"
     assert request.url.params["q"] == "shared"
-    assert request.url.params["kind"] == "note"
+    assert request.url.params["kind"] == "memory"
     assert request.url.params["limit"] == "100"
     assert request.headers["authorization"] == "Bearer placeholder-token"
     assert request.headers["x-centaur-principal-id"] == "principal-1"
@@ -51,7 +51,7 @@ def test_create_object_sends_idempotency_and_exact_payload() -> None:
         return json_response({"data": {"id": "object-1", "revision": 1}}, 201)
 
     result = make_client(handler).create_object(
-        "decision",
+        "memory",
         "Use the Centaur OS tool",
         "Keep Centaur reusable.",
         {"source_type": "agent", "source_ref": "phase-4"},
@@ -61,7 +61,7 @@ def test_create_object_sends_idempotency_and_exact_payload() -> None:
     assert result == {"id": "object-1", "revision": 1}
     assert requests[0].headers["idempotency-key"] == "phase4-create-1"
     assert requests[0].read() == (
-        b'{"kind":"decision","title":"Use the Centaur OS tool","body":"Keep Centaur reusable.",'
+        b'{"kind":"memory","title":"Use the Centaur OS tool","description":"Keep Centaur reusable.",'
         b'"provenance":{"source_type":"agent","source_ref":"phase-4"}}'
     )
 
@@ -143,7 +143,7 @@ def test_create_connection_uses_only_explained_relationship_fields() -> None:
 
     result = make_client(handler).create_connection(
         "source-1",
-        "supports",
+        "related_to",
         "target-1",
         "The source provides evidence.",
         {"source_type": "agent"},

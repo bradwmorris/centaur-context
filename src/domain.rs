@@ -35,8 +35,6 @@ pub enum ValidationError {
     ProvenanceObject,
     #[error("source and target objects must be different")]
     SelfConnection,
-    #[error("owner_type and owner_id must both be set or both be null")]
-    InvalidOwner,
 }
 
 pub fn required_text(
@@ -99,17 +97,17 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
     Ok(value)
 }
 
-pub const OBJECT_KINDS: &[&str] = &[
-    "note", "source", "decision", "task", "chat", "entity", "memory",
-];
+pub const OBJECT_KINDS: &[&str] = &["task", "chat", "user", "entity", "memory"];
 pub const CONNECTION_KINDS: &[&str] = &[
-    "supports",
+    "involves",
+    "about",
+    "related_to",
     "depends_on",
-    "references",
-    "part_of",
-    "supersedes",
+    "derived_from",
 ];
 pub const TASK_STATUSES: &[&str] = &["todo", "doing", "blocked", "review", "done"];
+pub const TASK_PRIORITIES: &[&str] = &["low", "medium", "high"];
+pub const USER_KINDS: &[&str] = &["human", "agent"];
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProvenanceInput {
@@ -152,8 +150,8 @@ mod tests {
     #[test]
     fn validates_and_normalizes_enums() {
         assert_eq!(
-            allowed(" NOTE ".to_owned(), "kind", OBJECT_KINDS).unwrap(),
-            "note"
+            allowed(" MEMORY ".to_owned(), "kind", OBJECT_KINDS).unwrap(),
+            "memory"
         );
         assert!(allowed("report".to_owned(), "kind", OBJECT_KINDS).is_err());
     }
