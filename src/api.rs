@@ -88,7 +88,10 @@ fn service_router(state: AppState) -> Router {
                 .route("/objects/{id}/connections", get(list_connections))
                 .route("/objects/{id}/events", get(list_events))
                 .route("/connections", post(create_connection))
-                .route("/connections/{id}", axum::routing::patch(update_connection))
+                .route(
+                    "/connections/{id}",
+                    get(read_connection).patch(update_connection),
+                )
                 .route("/connections/{id}/archive", post(archive_connection))
                 .route("/tasks", get(list_tasks).post(create_task))
                 .route("/tasks/{id}", get(read_task).patch(update_task))
@@ -371,6 +374,15 @@ async fn list_connections(
     db::get_object(&state.pool, id).await?;
     Ok(Json(
         json!({"data": db::list_connections(&state.pool, id).await?}),
+    ))
+}
+
+async fn read_connection(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": db::get_connection(&state.pool, id).await?}),
     ))
 }
 

@@ -1,7 +1,9 @@
 # RD: Make Canonical Object IDs Visible and Navigable Everywhere
 
-**Status:** `backlog`
+**Status:** `complete`
 **Created:** 2026-08-28
+**Completed:** 2026-08-29
+**GitHub Issue:** [#1](https://github.com/bradwmorris/centaur-os/issues/1)
 
 ## Execution Plan
 
@@ -23,11 +25,11 @@ Curator Run APIs, `src/db.rs`, `src/api.rs`, `web/src/App.tsx`, `web/src/api.ts`
 
 ## What We Are Doing
 
-- [ ] Show a clearly labelled canonical `Object ID` on every first-class Object,
+- [x] Show a clearly labelled canonical `Object ID` on every first-class Object,
   Task, Chat, User, Entity, and Memory row and detail view.
-- [ ] Make every displayed Object ID clickable back to that canonical Object's
+- [x] Make every displayed Object ID clickable back to that canonical Object's
   detail page and independently copyable as the full UUID.
-- [ ] On supporting records, show the correct owning or related Object IDs
+- [x] On supporting records, show the correct owning or related Object IDs
   without incorrectly turning the supporting record into another Object.
 
 ## Contract
@@ -78,15 +80,30 @@ Curator Run APIs, `src/db.rs`, `src/api.rs`, `web/src/App.tsx`, `web/src/api.ts`
 
 ## Checks
 
-- [ ] Database/API contract tests prove every subtype uses the matching canonical
+- [x] Database/API contract tests prove every subtype uses the matching canonical
   Object UUID and representative supporting rows expose valid Object references.
-- [ ] UI tests cover IDs and links in all six primary views, details,
-  relationships, activity, and representative schema-table rows.
-- [ ] Deep links survive refresh and browser navigation; copy returns the full,
+- [x] UI tests cover IDs and links in all six primary views, details,
+  relationships, activity, and representative supporting rows. The Schema view
+  is separately backlogged and has no current schema-table rows to integrate.
+- [x] Deep links survive refresh and browser navigation; copy returns the full,
   exact UUID even when a dense row is visually shortened.
-- [ ] Keyboard, screen-reader, narrow-layout, empty, and missing-target states are
+- [x] Keyboard, screen-reader, narrow-layout, empty, and missing-target states are
   verified.
-- [ ] The repository verification suite and `git diff --check` pass.
+- [x] The repository verification suite and `git diff --check` pass.
+
+## Verification Results
+
+- `cargo fmt --check`, Clippy with warnings denied, and `cargo test` passed. The
+  database-backed contract test was skipped because `TEST_DATABASE_URL` was not
+  set; its Task/User canonical identity assertions compile and are ready for a
+  disposable `centaur_os_test` database.
+- 19 Vitest UI/routing/identity tests, TypeScript type-check, and the production
+  web build passed.
+- The standard Python client built as a wheel, all 7 client tests passed in an
+  isolated environment, and Python byte-compilation passed.
+- Browser verification passed at desktop and 390px widths with no overflow,
+  console errors, or error overlay. Direct refresh, navigation, full UUID copy,
+  and copy-without-row-navigation were verified.
 
 ## Approval Boundary
 

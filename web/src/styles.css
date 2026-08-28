@@ -77,8 +77,12 @@ button { color: inherit; }
 .list-group-head > span:last-child { color: #5f6168; }
 .status-ring { width: 13px; height: 13px; border: 1.5px solid #8a8c93; border-radius: 50%; }
 .record-list { min-height: 0; padding: 0 12px; }
-.record { width: 100%; min-height: 43px; display: grid; grid-template-columns: 28px 76px minmax(150px, 1.4fr) minmax(160px, 1fr) 55px 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; cursor: pointer; margin-bottom: 2px; }
+.record { position: relative; width: 100%; min-height: 49px; display: grid; grid-template-columns: 28px 76px minmax(150px, 1.4fr) minmax(160px, 1fr) minmax(150px, auto) 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; margin-bottom: 2px; }
 .record:hover { background: #17181b; }
+.record > :not(.record-open) { position: relative; z-index: 1; pointer-events: none; }
+.record > .object-identity { pointer-events: auto; }
+.record-open { position: absolute; inset: 0; z-index: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
+.record-open:focus-visible { outline: 2px solid #8d91a0; outline-offset: -2px; }
 .row-grip { color: #4e5056; letter-spacing: 1px; }
 .record time { color: #5e6067; font-size: 10px; text-align: right; }
 .record strong { min-width: 0; color: #dedee0; font-size: 12px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -95,6 +99,17 @@ button { color: inherit; }
 .kind.queued { color: #c5ac6e; background: rgba(197,172,110,.08); }
 .kind.reversed { color: #999ba2; background: rgba(153,155,162,.08); }
 .agent-pill { color: #9e8fce; font-size: 9px; }
+.object-identity { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; color: #aeb0b6; font-size: 10px; line-height: 1.35; }
+.object-identity .identity-label { flex-basis: 100%; color: #65676e; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.object-identity a, .supporting-identity a { min-width: 0; color: #aeb0b6; overflow-wrap: anywhere; text-decoration: none; }
+.object-identity a:hover, .supporting-identity a:hover { color: #f1f1f2; text-decoration: underline; text-underline-offset: 2px; }
+.object-identity button { border: 0; border-radius: 4px; background: #202126; color: #85878e; padding: 2px 5px; cursor: pointer; font-size: 8px; }
+.object-identity button:hover { color: #e1e1e3; background: #292a30; }
+.object-identity.compact { flex-wrap: nowrap; white-space: nowrap; }
+.object-identity.compact .identity-label { flex-basis: auto; }
+.supporting-identity { min-width: 0; display: grid; gap: 3px; color: #686a71; font-size: 9px; }
+.supporting-identity > span { text-transform: uppercase; letter-spacing: .05em; font-size: 8px; }
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .detail-page { background: #0d0e10; }
 .record-page { width: min(920px, 100%); min-height: 100%; margin: 0 auto; }
@@ -127,13 +142,14 @@ button { color: inherit; }
 .connection-form button { justify-self: start; }
 .connection-form .property-check { grid-column: 1 / -1; }
 .connection-form .form-error { grid-column: 1 / -1; }
-.connection { display: grid; grid-template-columns: 90px 1fr; gap: 5px 12px; border-radius: 6px; background: #161719; padding: 10px 12px; margin: 8px 0; }
+.connection { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 5px 12px; border-radius: 6px; background: #161719; padding: 10px 12px; margin: 8px 0; }
 .connection span { color: #6e7077; font-size: 9px; text-transform: uppercase; }
 .connection strong { font-size: 11px; }
 .protect-action { justify-self: start; border: 0; background: transparent; color: #74767d; padding: 0; cursor: pointer; font-size: 9px; }
 .protect-action:hover { color: #b2b4ba; }
-.connection p { grid-column: 2; color: #85878e; font-size: 11px; margin: 0; }
-.connection small { grid-column: 2; color: #585a61; font-size: 9px; overflow-wrap: anywhere; }
+.connection p { grid-column: 2 / 4; color: #85878e; font-size: 11px; margin: 0; }
+.connection-identities { grid-column: 2 / 4; display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.connection small { grid-column: 2 / 4; color: #585a61; font-size: 9px; overflow-wrap: anywhere; }
 .identity { display: grid; gap: 4px; }
 .identity span { color: #65676e; font-size: 9px; text-transform: uppercase; }
 .identity strong { color: #b8bac0; font-size: 11px; font-weight: 520; }
@@ -165,6 +181,7 @@ button { color: inherit; }
 .chat-message header span { color: #71737a; text-transform: capitalize; }
 .chat-message header time { margin-left: auto; color: #5e6067; font-size: 9px; }
 .chat-message p { margin: 7px 0 0; color: #a2a4aa; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.chat-message footer { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
 .field { display: grid; gap: 6px; }
 .field > span { color: #777981; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .form input, .form textarea, .form select, .connection-form input, .connection-form select { background: #17181b; color: #e3e3e5; border: 0; border-radius: 6px; padding: 9px 10px; outline: 0; }
@@ -208,7 +225,7 @@ button { color: inherit; }
   .nav-button { justify-content: center; padding: 0; font-size: 0; }
   .nav-button > span { width: auto; font-size: 15px; }
   .nav-foot { justify-content: center; padding: 9px 0; font-size: 0; }
-  .record { grid-template-columns: 24px 68px minmax(130px, 1fr) 45px 58px; }
+  .record { grid-template-columns: 24px 68px minmax(130px, 1fr) minmax(105px, auto) 58px; }
   .record p { display: none; }
   .record-primary { padding-left: 32px; padding-right: 32px; }
 }
@@ -216,8 +233,8 @@ button { color: inherit; }
 @media (max-width: 640px) {
   .topbar { min-height: 45px; padding: 7px 10px; }
   .workspace { margin: 0; }
-  .record { grid-template-columns: 19px 60px minmax(120px, 1fr) 50px; padding-right: 10px; }
-  .record .agent-pill, .record > span:empty { display: none; }
+  .record { grid-template-columns: 48px minmax(62px, 1fr) 112px 28px; gap: 5px; padding-right: 7px; }
+  .record .row-grip { display: none; }
   .record-primary { padding: 38px 24px 45px; }
   .modal-backdrop { padding-top: 8vh; }
   .create-footer { align-items: stretch; flex-wrap: wrap; }

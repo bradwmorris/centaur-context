@@ -371,10 +371,17 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(task.revision, 1);
     assert!(task.agent_eligible);
     assert_eq!(task.priority, "high");
+    assert_eq!(
+        db::get_object(&pool, task.object_id).await.unwrap().id,
+        task.object_id
+    );
+    let task_api_contract = serde_json::to_value(&task).unwrap();
+    assert_eq!(task_api_contract["object_id"], task.object_id.to_string());
+    assert!(task_api_contract.get("id").is_none());
     let protected_task = db::update_task(
         &pool,
         &actor(),
-        task.id,
+        task.object_id,
         task.revision,
         TaskChanges {
             protected: Some(true),
@@ -598,7 +605,19 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(ordered_messages.len(), 5);
     assert_eq!(ordered_messages[3].provider_message_id, "1780086400.000100");
     assert_eq!(ordered_messages[4].provider_message_id, "1780086401.000100");
-    assert_eq!(db::list_users(&pool, 100).await.unwrap().len(), 2);
+    let users = db::list_users(&pool, 100).await.unwrap();
+    assert_eq!(users.len(), 2);
+    assert!(
+        first_ingest
+            .participant_object_ids
+            .contains(&users[0].object_id)
+    );
+    let user_api_contract = serde_json::to_value(&users[0]).unwrap();
+    assert_eq!(
+        user_api_contract["object_id"],
+        users[0].object_id.to_string()
+    );
+    assert!(user_api_contract.get("id").is_none());
     assert_eq!(
         db::list_external_identities(&pool, first_ingest.participant_object_ids[0])
             .await
