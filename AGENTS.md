@@ -19,6 +19,11 @@ for Centaur users and agents.
 - Do not add public ingress, cloud deployment, or external integrations without
   the repository owner's explicit approval.
 
+## Development Jobs
+
+Before planning or executing a requirements document, read `dev/AGENTS.md` and
+the relevant file in `dev/rd/`. Planning and execution are separate modes.
+
 ## Verification
 
 Run before handing off changes:
