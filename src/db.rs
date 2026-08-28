@@ -71,6 +71,7 @@ pub struct Task {
     pub lifecycle: String,
     pub revision: i64,
     pub provenance: Value,
+    pub protected: bool,
     pub status: String,
     pub priority: String,
     pub owner_object_id: Option<Uuid>,
@@ -116,6 +117,35 @@ pub struct ChatMessage {
     pub ingested_sequence: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub ingested_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct User {
+    pub id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub provenance: Value,
+    pub user_kind: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ExternalIdentity {
+    pub id: Uuid,
+    pub user_object_id: Uuid,
+    pub provider: String,
+    pub workspace_id: String,
+    pub provider_user_id: String,
+    pub display_name: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug)]
@@ -304,6 +334,7 @@ pub struct TaskChanges {
     pub title: Option<String>,
     pub description: Option<String>,
     pub provenance: Option<Value>,
+    pub protected: Option<bool>,
     pub status: Option<String>,
     pub priority: Option<String>,
     pub owner_object_id: Option<Option<Uuid>>,
@@ -675,7 +706,7 @@ pub async fn archive_connection(
 
 pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Task>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE true"#,
     );
@@ -695,7 +726,7 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
 
 pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
@@ -778,6 +809,7 @@ pub async fn update_task(
     let provenance = changes
         .provenance
         .unwrap_or_else(|| current.provenance.clone());
+    let protected = changes.protected.unwrap_or(current.protected);
     let status = changes.status.unwrap_or_else(|| current.status.clone());
     let priority = changes.priority.unwrap_or_else(|| current.priority.clone());
     let owner_object_id = changes.owner_object_id.unwrap_or(current.owner_object_id);
@@ -785,8 +817,8 @@ pub async fn update_task(
     let due_at = changes.due_at.unwrap_or(current.due_at);
     let mut tx = pool.begin().await?;
     let updated: Option<Object> = sqlx::query_as(
-        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,revision=revision+1,
-           updated_by_type=$6,updated_by_id=$7,updated_at=now()
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,revision=revision+1,
+           updated_by_type=$7,updated_by_id=$8,updated_at=now()
            WHERE id=$1 AND revision=$2 AND kind='task' RETURNING *"#,
     )
     .bind(id)
@@ -794,6 +826,7 @@ pub async fn update_task(
     .bind(&title)
     .bind(&description)
     .bind(&provenance)
+    .bind(protected)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .fetch_optional(&mut *tx)
@@ -824,7 +857,7 @@ pub async fn update_task(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_eligible": agent_eligible}),
+        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_eligible": agent_eligible, "protected": protected}),
     )
     .await?;
     tx.commit().await?;
@@ -862,6 +895,46 @@ pub async fn list_chat_messages(
            ORDER BY m.source_created_at,m.provider_message_id"#,
     )
     .bind(chat_object_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError> {
+    Ok(sqlx::query_as(
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+                  u.user_kind,o.created_at,o.updated_at
+           FROM users u JOIN objects o ON o.id=u.object_id
+           WHERE o.lifecycle='active' ORDER BY o.updated_at DESC,o.id LIMIT $1"#,
+    )
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, DbError> {
+    sqlx::query_as(
+        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+                  u.user_kind,o.created_at,o.updated_at
+           FROM users u JOIN objects o ON o.id=u.object_id WHERE o.id=$1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
+pub async fn list_external_identities(
+    pool: &PgPool,
+    user_object_id: Uuid,
+) -> Result<Vec<ExternalIdentity>, DbError> {
+    get_user(pool, user_object_id).await?;
+    Ok(sqlx::query_as(
+        r#"SELECT id,user_object_id,provider,workspace_id,provider_user_id,display_name,
+                  created_at,updated_at
+           FROM external_identities WHERE user_object_id=$1
+           ORDER BY provider,workspace_id,provider_user_id"#,
+    )
+    .bind(user_object_id)
     .fetch_all(pool)
     .await?)
 }

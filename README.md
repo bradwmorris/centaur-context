@@ -92,6 +92,26 @@ the run and restores earlier values using new revisions. It never deletes
 source messages or audit history and refuses Undo if a later edit would be
 overwritten.
 
+## Human workspace and API compatibility
+
+The human workspace keeps the ontology visible without exposing database
+details. Objects are the first navigation item. Users are read from their
+canonical Object and `users` subtype rows, with provider identities shown
+separately so equal display names are never treated as the same person.
+Object and Task pages show incoming and outgoing Connections, the required
+plain-language Connection explanation, and exact Chat/message provenance.
+
+Curator Runs have a deliberately small operational view: interaction boundary,
+source messages, model and prompt version, committed graph changes, error state,
+and whole-run Undo. Protected records remain visible but cannot be changed by
+the Curator. Undo is a human control and its actor is recorded in the immutable
+event trail.
+
+The supported HTTP contract is explicitly `/api/v1`. `GET /api/v1/meta`
+reports the API and ontology versions and the fail-closed compatibility policy.
+Unknown versions return `404`; Centaur OS does not silently reinterpret a
+request made against another API version.
+
 There is deliberately no default model provider. Automatic processing is
 enabled only when all four OpenAI-compatible settings are present:
 
@@ -207,9 +227,12 @@ To run the real schema contract, set `TEST_DATABASE_URL` to a disposable
 database whose name contains `centaur_os_test`. The test validates the
 canonical object/subtype contract, idempotent creation, optimistic revision
 conflicts, Connections, Tasks, Slack transcript replay, continuation windows,
-inactivity queueing, full-text and vector retrieval, one-hop context expansion,
-the ten-Object cap, rebuildable embedding jobs, Curator atomicity, exact
-provenance, idempotent replay, whole-run Undo, and audit events. The
+inactivity queueing, distinct users with equal Slack display names, DM and
+channel-mention interactions, full-text and vector retrieval, one-hop context
+expansion, the ten-Object cap, rebuildable embedding jobs, confirmed Task
+creation with due dates, Curator atomicity, exact message provenance,
+idempotent replay, protected-record rejection, whole-run Undo, and audit
+events. The
 deterministic policy cases in `evals/context_curator_mvp.json` run with the Rust
 tests and do not require a model provider.
 

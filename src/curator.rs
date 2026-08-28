@@ -205,14 +205,27 @@ struct CurrentConnection {
     archived_at: Option<OffsetDateTime>,
 }
 
-#[derive(Debug, FromRow)]
-struct ChangeRow {
-    id: Uuid,
-    entity_type: String,
-    entity_id: Uuid,
-    action: String,
-    before_state: Option<Value>,
-    after_revision: i64,
+#[derive(Debug, FromRow, Serialize)]
+pub struct CuratorRunChange {
+    pub id: Uuid,
+    pub sequence: i32,
+    pub entity_type: String,
+    pub entity_id: Uuid,
+    pub action: String,
+    pub before_state: Option<Value>,
+    pub after_state: Value,
+    pub after_revision: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub undone_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CuratorRunDetail {
+    pub run: CuratorRun,
+    pub messages: Vec<crate::db::ChatMessage>,
+    pub changes: Vec<CuratorRunChange>,
 }
 
 fn default_status() -> String {
@@ -312,6 +325,52 @@ pub async fn get_run(pool: &PgPool, id: Uuid) -> Result<CuratorRun, CuratorError
     .fetch_optional(pool)
     .await?
     .ok_or(CuratorError::NotFound)
+}
+
+pub async fn list_runs(pool: &PgPool, limit: i64) -> Result<Vec<CuratorRun>, CuratorError> {
+    Ok(sqlx::query_as(
+        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
+                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
+                  created_at,started_at,completed_at,reversed_at,error_message
+           FROM curator_runs ORDER BY created_at DESC,id DESC LIMIT $1"#,
+    )
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn run_detail(pool: &PgPool, id: Uuid) -> Result<CuratorRunDetail, CuratorError> {
+    let run = get_run(pool, id).await?;
+    let messages: Vec<crate::db::ChatMessage> = sqlx::query_as(
+        r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
+                  o.title AS sender_title,u.user_kind AS sender_kind,m.content,
+                  m.source_created_at,m.ingested_sequence,m.ingested_at
+           FROM chat_messages m
+           JOIN users u ON u.object_id=m.sender_user_object_id
+           JOIN objects o ON o.id=u.object_id
+           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
+             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingested_sequence"#,
+    )
+    .bind(run.chat_object_id)
+    .bind(run.first_message_id)
+    .bind(run.last_message_id)
+    .fetch_all(pool)
+    .await?;
+    let changes = sqlx::query_as(
+        r#"SELECT id,sequence,entity_type,entity_id,action,before_state,after_state,
+                  after_revision,created_at,undone_at
+           FROM curator_run_changes WHERE curator_run_id=$1 ORDER BY sequence"#,
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    Ok(CuratorRunDetail {
+        run,
+        messages,
+        changes,
+    })
 }
 
 pub async fn reconcile(
@@ -606,6 +665,19 @@ async fn reconcile_owned(
 }
 
 pub async fn undo(pool: &PgPool, run_id: Uuid) -> Result<Value, CuratorError> {
+    undo_as(
+        pool,
+        run_id,
+        &crate::domain::ActorContext::system("context-curator"),
+    )
+    .await
+}
+
+pub async fn undo_as(
+    pool: &PgPool,
+    run_id: Uuid,
+    actor: &crate::domain::ActorContext,
+) -> Result<Value, CuratorError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
@@ -619,15 +691,15 @@ pub async fn undo(pool: &PgPool, run_id: Uuid) -> Result<Value, CuratorError> {
     if run.status != "completed" {
         return Err(CuratorError::Conflict);
     }
-    let changes: Vec<ChangeRow> = sqlx::query_as(
-        "SELECT id,entity_type,entity_id,action,before_state,after_revision FROM curator_run_changes WHERE curator_run_id=$1 AND undone_at IS NULL ORDER BY sequence DESC FOR UPDATE",
+    let changes: Vec<CuratorRunChange> = sqlx::query_as(
+        "SELECT id,sequence,entity_type,entity_id,action,before_state,after_state,after_revision,created_at,undone_at FROM curator_run_changes WHERE curator_run_id=$1 AND undone_at IS NULL ORDER BY sequence DESC FOR UPDATE",
     ).bind(run_id).fetch_all(&mut *tx).await?;
     for change in &changes {
         match (change.entity_type.as_str(), change.action.as_str()) {
-            ("connection", "created") => archive_created_connection(&mut tx, change).await?,
-            ("connection", "updated") => restore_connection(&mut tx, change).await?,
-            ("object", "created") => archive_created_object(&mut tx, change).await?,
-            ("object", "updated") => restore_object(&mut tx, change).await?,
+            ("connection", "created") => archive_created_connection(&mut tx, change, actor).await?,
+            ("connection", "updated") => restore_connection(&mut tx, change, actor).await?,
+            ("object", "created") => archive_created_object(&mut tx, change, actor).await?,
+            ("object", "updated") => restore_object(&mut tx, change, actor).await?,
             _ => {
                 return Err(CuratorError::Invalid(
                     "unsupported curator change journal entry".into(),
@@ -648,18 +720,7 @@ pub async fn undo(pool: &PgPool, run_id: Uuid) -> Result<Value, CuratorError> {
     .bind(&result)
     .execute(&mut *tx)
     .await?;
-    insert_event(
-        &mut tx,
-        run_id,
-        "curator_run",
-        run_id,
-        run.chat_object_id,
-        "curator_undone",
-        None,
-        1,
-        json!({"reversed_change_count": changes.len()}),
-    )
-    .await?;
+    insert_undo_event(&mut tx, run_id, run.chat_object_id, actor, changes.len()).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1181,6 +1242,36 @@ async fn insert_event(
     Ok(())
 }
 
+async fn insert_undo_event(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    chat_object_id: Uuid,
+    actor: &crate::domain::ActorContext,
+    reversed_change_count: usize,
+) -> Result<(), CuratorError> {
+    sqlx::query(
+        r#"INSERT INTO object_events
+           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
+            centaur_thread_key,centaur_execution_id,idempotency_key,to_revision,changes)
+           VALUES ($1,'curator_run',$2,$3,'curator_undone',$4,$5,$6,$7,$8,1,$9)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(run_id)
+    .bind(chat_object_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(&actor.centaur_thread_key)
+    .bind(&actor.centaur_execution_id)
+    .bind(format!(
+        "curator:{run_id}:undo:{}:{}",
+        actor.actor_type, actor.actor_id
+    ))
+    .bind(json!({"reversed_change_count": reversed_change_count}))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn record_failure(pool: &PgPool, run_id: Uuid, message: &str) -> Result<(), CuratorError> {
     sqlx::query(
         r#"UPDATE curator_runs SET status='failed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
@@ -1197,10 +1288,11 @@ fn value_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, CuratorError> {
 }
 async fn archive_created_connection(
     tx: &mut Transaction<'_, Postgres>,
-    change: &ChangeRow,
+    change: &CuratorRunChange,
+    actor: &crate::domain::ActorContext,
 ) -> Result<(), CuratorError> {
-    let result = sqlx::query("UPDATE connections SET archived_at=now(),revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
-        .bind(change.entity_id).bind(change.after_revision).execute(&mut **tx).await?;
+    let result = sqlx::query("UPDATE connections SET archived_at=now(),revision=revision+1,updated_by_type=$3,updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
+        .bind(change.entity_id).bind(change.after_revision).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
     }
@@ -1209,14 +1301,15 @@ async fn archive_created_connection(
 
 async fn archive_created_object(
     tx: &mut Transaction<'_, Postgres>,
-    change: &ChangeRow,
+    change: &CuratorRunChange,
+    actor: &crate::domain::ActorContext,
 ) -> Result<(), CuratorError> {
     let active_edges: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1))").bind(change.entity_id).fetch_one(&mut **tx).await?;
     if active_edges {
         return Err(CuratorError::Conflict);
     }
-    let result = sqlx::query("UPDATE objects SET lifecycle='archived',archived_at=now(),revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
-        .bind(change.entity_id).bind(change.after_revision).execute(&mut **tx).await?;
+    let result = sqlx::query("UPDATE objects SET lifecycle='archived',archived_at=now(),revision=revision+1,updated_by_type=$3,updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+        .bind(change.entity_id).bind(change.after_revision).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
     }
@@ -1225,14 +1318,15 @@ async fn archive_created_object(
 
 async fn restore_connection(
     tx: &mut Transaction<'_, Postgres>,
-    change: &ChangeRow,
+    change: &CuratorRunChange,
+    actor: &crate::domain::ActorContext,
 ) -> Result<(), CuratorError> {
     let before = change
         .before_state
         .as_ref()
         .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
-    let result = sqlx::query("UPDATE connections SET kind=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
-        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"kind")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).execute(&mut **tx).await?;
+    let result = sqlx::query("UPDATE connections SET kind=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
+        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"kind")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
     }
@@ -1241,14 +1335,15 @@ async fn restore_connection(
 
 async fn restore_object(
     tx: &mut Transaction<'_, Postgres>,
-    change: &ChangeRow,
+    change: &CuratorRunChange,
+    actor: &crate::domain::ActorContext,
 ) -> Result<(), CuratorError> {
     let before = change
         .before_state
         .as_ref()
         .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
-    let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
-        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).execute(&mut **tx).await?;
+    let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
     }

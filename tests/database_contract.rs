@@ -1,11 +1,11 @@
 use centaur_os::{
     curator::{
         self, CreateConnection as CuratorConnection, CreateObject as CuratorObject, MemoryFields,
-        ObjectRef, ReconciliationPlan,
+        ObjectRef, ReconciliationPlan, TaskFields,
     },
     db::{
         self, ConnectionChanges, DbError, NewConnection, NewObject, NewTask, ObjectChanges,
-        ObjectListFilter,
+        ObjectListFilter, TaskChanges,
     },
     domain::ActorContext,
     ingest::{
@@ -371,6 +371,20 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(task.revision, 1);
     assert!(task.agent_eligible);
     assert_eq!(task.priority, "high");
+    let protected_task = db::update_task(
+        &pool,
+        &actor(),
+        task.id,
+        task.revision,
+        TaskChanges {
+            protected: Some(true),
+            ..TaskChanges::default()
+        },
+        Some("protect-task"),
+    )
+    .await
+    .unwrap();
+    assert!(protected_task.protected);
 
     let table_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs','curator_run_changes','object_embeddings','object_embedding_jobs')",
@@ -584,6 +598,14 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(ordered_messages.len(), 5);
     assert_eq!(ordered_messages[3].provider_message_id, "1780086400.000100");
     assert_eq!(ordered_messages[4].provider_message_id, "1780086401.000100");
+    assert_eq!(db::list_users(&pool, 100).await.unwrap().len(), 2);
+    assert_eq!(
+        db::list_external_identities(&pool, first_ingest.participant_object_ids[0])
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     let run_id = finished.curator_run_id.unwrap();
     let supporting_message_id: uuid::Uuid =
@@ -673,6 +695,10 @@ async fn canonical_ontology_and_revision_conflicts() {
         curator::get_run(&pool, run_id).await.unwrap().status,
         "completed"
     );
+    let run_detail = curator::run_detail(&pool, run_id).await.unwrap();
+    assert_eq!(run_detail.messages.len(), 3);
+    assert_eq!(run_detail.changes.len(), 2);
+    assert_eq!(curator::list_runs(&pool, 100).await.unwrap().len(), 2);
     let provenance: serde_json::Value =
         sqlx::query_scalar("SELECT provenance FROM objects WHERE id=$1")
             .bind(memory_id)
@@ -688,7 +714,7 @@ async fn canonical_ontology_and_revision_conflicts() {
         "replaying the same committed plan must be idempotent"
     );
 
-    let undo = curator::undo(&pool, run_id).await.unwrap();
+    let undo = curator::undo_as(&pool, run_id, &actor()).await.unwrap();
     assert_eq!(undo["status"], "reversed");
     let reversed: (String, i64, i64) = sqlx::query_as(
         r#"SELECT o.lifecycle,o.revision,
@@ -700,6 +726,14 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
     assert_eq!(reversed, ("archived".to_owned(), 2, 0));
+    let undo_actor: String = sqlx::query_scalar(
+        "SELECT actor_type FROM object_events WHERE entity_type='curator_run' AND entity_id=$1 AND action='curator_undone'",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(undo_actor, "human");
 
     let update_run_id: uuid::Uuid =
         sqlx::query_scalar("SELECT id FROM curator_runs WHERE trigger='inactivity'")
@@ -814,4 +848,138 @@ async fn canonical_ontology_and_revision_conflicts() {
         original_second.revision + 2,
         "Undo restores content through a compensating revision"
     );
+
+    let dm_human_a = SlackSenderInput {
+        provider_user_id: "U_DM_A".to_owned(),
+        display_name: "Alex Example".to_owned(),
+        user_kind: "human".to_owned(),
+    };
+    let dm_human_b = SlackSenderInput {
+        provider_user_id: "U_DM_B".to_owned(),
+        display_name: "Alex Example".to_owned(),
+        user_kind: "human".to_owned(),
+    };
+    let dm_agent = SlackSenderInput {
+        provider_user_id: "U_DM_AGENT".to_owned(),
+        display_name: "Centaur Assistant".to_owned(),
+        user_kind: "agent".to_owned(),
+    };
+    let dm = ingest(
+        &pool,
+        SlackInteractionInput {
+            workspace_id: "T_PUBLIC".to_owned(),
+            channel_id: "D_CONTEXT".to_owned(),
+            thread_id: "1780200000.000100".to_owned(),
+            surface_kind: "dm".to_owned(),
+            channel_name: None,
+            title: Some("Context planning DM".to_owned()),
+            messages: vec![
+                message(
+                    "1780200000.000100",
+                    dm_human_a,
+                    "Please create a task to verify the customer import tomorrow.",
+                    "2026-05-29T00:00:00Z",
+                ),
+                message(
+                    "1780200001.000100",
+                    dm_human_b,
+                    "I confirm that task should be tracked.",
+                    "2026-05-29T00:00:01Z",
+                ),
+                message(
+                    "1780200002.000100",
+                    dm_agent,
+                    "Confirmed. The task is ready to record.",
+                    "2026-05-29T00:00:02Z",
+                ),
+            ],
+            interaction_finished: true,
+        }
+        .validate()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(dm.participant_object_ids.len(), 3);
+    assert_eq!(
+        dm.participant_object_ids
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3,
+        "matching display names must not merge distinct provider identities"
+    );
+    let dm_surface: String =
+        sqlx::query_scalar("SELECT surface_kind FROM chats WHERE object_id=$1")
+            .bind(dm.chat_object_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(dm_surface, "dm");
+    let dm_run_id = dm.curator_run_id.unwrap();
+    let dm_supporting_message_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT first_message_id FROM curator_runs WHERE id=$1")
+            .bind(dm_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let dm_plan = ReconciliationPlan {
+        create_objects: vec![
+            CuratorObject {
+                client_id: "dm-memory".to_owned(),
+                kind: "memory".to_owned(),
+                title: "Customer import verification was confirmed".to_owned(),
+                description: "The users explicitly confirmed that customer import verification should be tracked as a task.".to_owned(),
+                supporting_message_ids: vec![dm_supporting_message_id],
+                task: None,
+                memory: Some(MemoryFields {
+                    primary_event: true,
+                    happened_at: timestamp("2026-05-29T00:00:02Z"),
+                }),
+            },
+            CuratorObject {
+                client_id: "dm-task".to_owned(),
+                kind: "task".to_owned(),
+                title: "Verify the customer import".to_owned(),
+                description: "Verify the customer import as explicitly requested and confirmed in the Slack DM."
+                    .to_owned(),
+                supporting_message_ids: vec![dm_supporting_message_id],
+                task: Some(TaskFields {
+                    confirmed: true,
+                    status: "todo".to_owned(),
+                    priority: "medium".to_owned(),
+                    owner_object_id: None,
+                    agent_eligible: false,
+                    due_at: Some(timestamp("2026-05-30T00:00:00Z")),
+                }),
+                memory: None,
+            },
+        ],
+        update_objects: vec![],
+        create_connections: vec![
+            CuratorConnection {
+                source: ObjectRef::Created { client_id: "dm-memory".to_owned() },
+                kind: "derived_from".to_owned(),
+                target: ObjectRef::Existing { object_id: dm.chat_object_id },
+                description: "This Memory records the confirmed outcome of the Slack DM.".to_owned(),
+                supporting_message_ids: vec![dm_supporting_message_id],
+            },
+            CuratorConnection {
+                source: ObjectRef::Created { client_id: "dm-task".to_owned() },
+                kind: "derived_from".to_owned(),
+                target: ObjectRef::Existing { object_id: dm.chat_object_id },
+                description: "This Task was explicitly requested and confirmed in the Slack DM.".to_owned(),
+                supporting_message_ids: vec![dm_supporting_message_id],
+            },
+        ],
+        update_connections: vec![],
+    };
+    let dm_result = curator::reconcile(&pool, dm_run_id, "contract-model", "prompt-v1", dm_plan)
+        .await
+        .unwrap();
+    let dm_task_id =
+        uuid::Uuid::parse_str(dm_result["created_objects"]["dm-task"].as_str().unwrap()).unwrap();
+    let dm_task = db::get_task(&pool, dm_task_id).await.unwrap();
+    assert_eq!(dm_task.status, "todo");
+    assert_eq!(dm_task.due_at, Some(timestamp("2026-05-30T00:00:00Z")));
 }

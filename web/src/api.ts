@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, ObjectEvent, SharedObject, Task } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, SharedObject, Task, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -71,11 +71,32 @@ export const api = {
   createConnection(body: Record<string, unknown>) {
     return request<Connection>("/api/v1/connections", write("POST", body));
   },
+  updateConnection(id: string, body: Record<string, unknown>) {
+    return request<Connection>(`/api/v1/connections/${id}`, write("PATCH", body));
+  },
   events(id: string) {
     return request<ObjectEvent[]>(`/api/v1/objects/${id}/events`);
   },
   chatMessages(id: string) {
     return request<ChatMessage[]>(`/api/v1/chats/${id}/messages`);
+  },
+  users() {
+    return request<User[]>("/api/v1/users");
+  },
+  user(id: string) {
+    return request<User>(`/api/v1/users/${id}`);
+  },
+  userIdentities(id: string) {
+    return request<ExternalIdentity[]>(`/api/v1/users/${id}/identities`);
+  },
+  curatorRuns() {
+    return request<CuratorRun[]>("/api/v1/curator-runs");
+  },
+  curatorRun(id: string) {
+    return request<CuratorRunDetail>(`/api/v1/curator-runs/${id}`);
+  },
+  undoCuratorRun(id: string) {
+    return request<Record<string, unknown>>(`/api/v1/curator-runs/${id}/undo`, write("POST", {}));
   },
   tasks() {
     return request<Task[]>("/api/v1/tasks");

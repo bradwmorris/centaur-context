@@ -3,11 +3,12 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_os::{
-    api::{AppState, agent_router},
+    api::{AppState, agent_router, human_router},
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
 };
 use sqlx::postgres::PgPoolOptions;
+use std::path::PathBuf;
 use tower::ServiceExt;
 
 fn state() -> AppState {
@@ -46,6 +47,32 @@ async fn curator_listener_uses_its_own_credential_and_is_not_an_agent_surface() 
         .await
         .unwrap();
     assert_eq!(curator_credential.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
+    let router = human_router(state(), PathBuf::from("web/dist"));
+    let meta = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let unsupported = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/objects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

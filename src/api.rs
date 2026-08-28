@@ -80,6 +80,7 @@ fn service_router(state: AppState) -> Router {
         .nest(
             "/api/v1",
             Router::new()
+                .route("/meta", get(api_meta))
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/objects/{id}", get(read_object).patch(update_object))
                 .route("/context", get(get_context))
@@ -91,7 +92,13 @@ fn service_router(state: AppState) -> Router {
                 .route("/connections/{id}/archive", post(archive_connection))
                 .route("/tasks", get(list_tasks).post(create_task))
                 .route("/tasks/{id}", get(read_task).patch(update_task))
-                .route("/chats/{id}/messages", get(list_chat_messages)),
+                .route("/chats/{id}/messages", get(list_chat_messages))
+                .route("/users", get(list_users))
+                .route("/users/{id}", get(read_user))
+                .route("/users/{id}/identities", get(list_user_identities))
+                .route("/curator-runs", get(list_curator_runs))
+                .route("/curator-runs/{id}", get(read_curator_run))
+                .route("/curator-runs/{id}/undo", post(undo_curator_run)),
         )
         .with_state(state)
 }
@@ -152,6 +159,16 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
 
 async fn health() -> Json<Value> {
     Json(json!({"ok": true}))
+}
+
+async fn api_meta() -> Json<Value> {
+    Json(json!({
+        "data": {
+            "api_version": "v1",
+            "ontology_version": "v1",
+            "compatibility": "Only documented /api/v1 routes are supported; unknown versions fail closed."
+        }
+    }))
 }
 
 async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -546,6 +563,7 @@ struct UpdateTaskRequest {
     title: Option<String>,
     description: Option<String>,
     provenance: Option<Value>,
+    protected: Option<bool>,
     status: Option<String>,
     priority: Option<String>,
     owner_object_id: Option<Uuid>,
@@ -608,6 +626,7 @@ async fn update_task(
                 .provenance
                 .map(|value| provenance(Some(value)))
                 .transpose()?,
+            protected: input.protected,
             status: input
                 .status
                 .map(|value| allowed(value, "status", TASK_STATUSES))
@@ -643,6 +662,73 @@ async fn list_chat_messages(
     Ok(Json(
         json!({"data": db::list_chat_messages(&state.pool, id).await?}),
     ))
+}
+
+async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": db::list_users(&state.pool, 100).await?}),
+    ))
+}
+
+async fn read_user(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data": db::get_user(&state.pool, id).await?})))
+}
+
+async fn list_user_identities(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": db::list_external_identities(&state.pool, id).await?}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct CuratorRunListQuery {
+    limit: Option<i64>,
+}
+
+async fn list_curator_runs(
+    State(state): State<AppState>,
+    Query(query): Query<CuratorRunListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let runs = crate::curator::list_runs(&state.pool, bounded_limit(query.limit))
+        .await
+        .map_err(map_curator_error)?;
+    Ok(Json(json!({"data": runs})))
+}
+
+async fn read_curator_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let detail = crate::curator::run_detail(&state.pool, id)
+        .await
+        .map_err(map_curator_error)?;
+    Ok(Json(json!({"data": detail})))
+}
+
+async fn undo_curator_run(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    let result = crate::curator::undo_as(&state.pool, id, &actor)
+        .await
+        .map_err(map_curator_error)?;
+    Ok(Json(json!({"data": result})))
+}
+
+fn map_curator_error(error: crate::curator::CuratorError) -> ApiError {
+    match error {
+        crate::curator::CuratorError::NotFound => ApiError::Db(DbError::NotFound),
+        crate::curator::CuratorError::Conflict => ApiError::Db(DbError::Conflict),
+        crate::curator::CuratorError::Invalid(message) => ApiError::BadRequest(message),
+        crate::curator::CuratorError::Sqlx(error) => ApiError::Db(DbError::Sqlx(error)),
+    }
 }
 
 fn parse_due_at(value: Option<String>) -> Result<Option<OffsetDateTime>, ApiError> {
