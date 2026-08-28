@@ -28,8 +28,19 @@ Use different tokens. Add more approved surfaces with commas.
 
 ## Centaur settings
 
-Use a Centaur build that supports `slackbotv2.interactionSink` and
-`slackbotv2.contextBuilder`.
+Centaur OS does not connect to Slack directly. Centaur needs two optional
+integration hooks: one sends completed interactions to Centaur OS, and the
+other gets context before an agent replies.
+
+The tested Centaur integration is this three-commit patch set:
+
+- `225a6104` adds `slackbotv2.interactionSink`.
+- `d8a7dfc2` makes that integration portable across Centaur builds.
+- `33e7cd59` adds `slackbotv2.contextBuilder`.
+
+These commits modify Centaur, not Centaur OS. They are currently additions to a
+Centaur fork and are not part of Paradigm's upstream Centaur repository. Pin a
+Centaur revision containing all three.
 
 ```yaml
 slackbotv2:
