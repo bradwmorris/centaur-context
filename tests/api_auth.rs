@@ -2,7 +2,10 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use centaur_os::api::{AppState, agent_router};
+use centaur_os::{
+    api::{AppState, agent_router},
+    ingest::{ApprovedSlackSurfaces, router as ingest_router},
+};
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
@@ -58,4 +61,77 @@ async fn agent_listener_accepts_scoped_request() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ingestion_listener_uses_a_separate_bearer_credential() {
+    let approved = ApprovedSlackSurfaces::parse("T1:C1").unwrap();
+    let router = ingest_router(state(), "i".repeat(32), approved);
+    let missing = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+    let agent_credential = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent_credential.status(), StatusCode::UNAUTHORIZED);
+
+    let ingestion_credential = router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "i".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ingestion_credential.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ingestion_listener_rejects_unapproved_slack_surfaces_before_database_access() {
+    let approved = ApprovedSlackSurfaces::parse("T1:C1").unwrap();
+    let response = ingest_router(state(), "i".repeat(32), approved)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ingest/slack/interactions")
+                .header("authorization", format!("Bearer {}", "i".repeat(32)))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "workspace_id":"T1",
+                        "channel_id":"C_DENIED",
+                        "thread_id":"1780000000.000100",
+                        "surface_kind":"channel",
+                        "messages":[{
+                            "provider_message_id":"1780000000.000100",
+                            "sender":{"provider_user_id":"U1","display_name":"Example User","user_kind":"human"},
+                            "content":"This surface is not approved.",
+                            "source_created_at":"2026-08-28T00:00:00Z"
+                        }]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

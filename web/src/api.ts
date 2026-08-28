@@ -1,4 +1,4 @@
-import type { Connection, ObjectEvent, SharedObject, Task } from "./types";
+import type { ChatMessage, Connection, ObjectEvent, SharedObject, Task } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -73,6 +73,9 @@ export const api = {
   },
   events(id: string) {
     return request<ObjectEvent[]>(`/api/v1/objects/${id}/events`);
+  },
+  chatMessages(id: string) {
+    return request<ChatMessage[]>(`/api/v1/chats/${id}/messages`);
   },
   tasks() {
     return request<Task[]>("/api/v1/tasks");

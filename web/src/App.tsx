@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
-import type { Connection, ObjectEvent, SharedObject, Task, TaskStatus } from "./types";
+import type { ChatMessage, Connection, ObjectEvent, SharedObject, Task, TaskStatus } from "./types";
 
 type Section = "objects" | "tasks" | "chats" | "entities" | "memories";
 
@@ -212,10 +212,33 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
+      {item.kind === "chat" && <ChatTranscript id={item.id} />}
       <Connections object={item} objects={objects} connections={connections} onCreated={load} />
       <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
     </div>
   </div>;
+}
+
+function ChatTranscript({ id }: { id: string }) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.chatMessages(id)
+      .then((items) => { if (active) setMessages(items); })
+      .catch((cause) => { if (active) setError(message(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  return <Section title="Messages">
+    {error && <p className="form-error">{error}</p>}
+    <div className="chat-transcript">
+      {messages.map((item) => <article className="chat-message" key={item.id}>
+        <header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header>
+        <p>{item.content}</p>
+      </article>)}
+      {!error && messages.length === 0 && <p className="muted">No messages have been ingested.</p>}
+    </div>
+  </Section>;
 }
 
 function Connections({ object, objects, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; connections: Connection[]; onCreated: () => Promise<void> }) {

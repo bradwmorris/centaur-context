@@ -102,6 +102,22 @@ pub struct ObjectEvent {
     pub created_at: OffsetDateTime,
 }
 
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ChatMessage {
+    pub id: Uuid,
+    pub chat_object_id: Uuid,
+    pub provider_message_id: String,
+    pub sender_user_object_id: Uuid,
+    pub sender_title: String,
+    pub sender_kind: String,
+    pub content: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub source_created_at: OffsetDateTime,
+    pub ingested_sequence: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub ingested_at: OffsetDateTime,
+}
+
 #[derive(Clone, Debug)]
 pub struct ObjectListFilter {
     pub query: Option<String>,
@@ -703,6 +719,32 @@ pub async fn list_events(pool: &PgPool, object_id: Uuid) -> Result<Vec<ObjectEve
         "SELECT * FROM object_events WHERE object_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100",
     )
     .bind(object_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn list_chat_messages(
+    pool: &PgPool,
+    chat_object_id: Uuid,
+) -> Result<Vec<ChatMessage>, DbError> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chats WHERE object_id=$1)")
+        .bind(chat_object_id)
+        .fetch_one(pool)
+        .await?;
+    if !exists {
+        return Err(DbError::NotFound);
+    }
+    Ok(sqlx::query_as(
+        r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
+                  o.title AS sender_title,u.user_kind AS sender_kind,m.content,
+                  m.source_created_at,m.ingested_sequence,m.ingested_at
+           FROM chat_messages m
+           JOIN users u ON u.object_id=m.sender_user_object_id
+           JOIN objects o ON o.id=u.object_id
+           WHERE m.chat_object_id=$1
+           ORDER BY m.source_created_at,m.provider_message_id"#,
+    )
+    .bind(chat_object_id)
     .fetch_all(pool)
     .await?)
 }

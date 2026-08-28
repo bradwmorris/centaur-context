@@ -13,3 +13,6 @@ spec:
     - name: agent
       port: 8081
       targetPort: agent
+    - name: ingest
+      port: 8082
+      targetPort: ingest

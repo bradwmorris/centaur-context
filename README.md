@@ -28,12 +28,44 @@ not own or duplicate the standard Centaur OS tool.
 - Human UI/API: port `8080`, reached only with a localhost port-forward.
 - Agent API: port `8081`, exposed by the ClusterIP Service and requiring a
   bearer credential injected by Centaur iron-proxy.
+- Chat ingestion API: port `8082`, reachable only from an approved chat
+  transport and protected by a different bearer credential. The server also
+  checks the exact Slack workspace/channel pair against its allowlist.
 - Database: logical database `centaur_os`, accessed only by role
   `centaur_os_app`.
 - The service refuses migrations unless the current database is `centaur_os`
   or its name contains `centaur_os_test`.
 
 There is no public ingress and no agent database access.
+
+## Slack interaction ingestion
+
+The MVP accepts a provider-neutral transcript envelope at
+`POST /api/v1/ingest/slack/interactions` on the ingestion listener. Centaur's
+Slack transport is the producer; Centaur OS never reads Centaur's private
+session tables.
+
+For each approved Slack thread, Centaur OS:
+
+- creates or reuses one canonical Chat Object;
+- creates or reuses canonical human and agent User Objects by Slack identity;
+- stores ordered Chat Messages idempotently by Slack message ID;
+- creates one explained `involves` Connection per participant; and
+- queues only the not-yet-queued message range for the later Curator.
+
+`interaction_finished: true` queues the range immediately. Otherwise the
+background worker queues it after ten minutes without a new message. A later
+message in the same Slack thread reuses the Chat and begins a new range. This
+phase creates durable Curator queue records; it does not yet run a model or
+write Memories, Tasks, Entities, or additional Connections.
+
+The required configuration is:
+
+```text
+CHAT_INGEST_API_TOKEN=<a distinct secret of at least 32 characters>
+APPROVED_SLACK_SURFACES=<workspace_id>:<channel_id>[,...]
+INTERACTION_INACTIVITY_SECONDS=600
+```
 
 ## Standard agent tool
 
@@ -78,8 +110,9 @@ npm --prefix web run build
 Start the service with a disposable or approved `centaur_os` database:
 
 ```bash
-# Set AGENT_API_TOKEN outside source control to a secret of at least 32 characters.
+# Set both API tokens outside source control to distinct secrets of at least 32 characters.
 DATABASE_URL=postgres://.../centaur_os \
+APPROVED_SLACK_SURFACES=T_EXAMPLE:C_EXAMPLE \
 cargo run
 ```
 
@@ -102,7 +135,8 @@ python3 -m compileall -q tools/centaur_os
 To run the real schema contract, set `TEST_DATABASE_URL` to a disposable
 database whose name contains `centaur_os_test`. The test validates the
 canonical object/subtype contract, idempotent creation, optimistic revision
-conflicts, Connections, Tasks, and audit events.
+conflicts, Connections, Tasks, Slack transcript replay, continuation windows,
+inactivity queueing, and audit events.
 
 ## Deployment gate
 

@@ -75,7 +75,8 @@ fn service_router(state: AppState) -> Router {
                 .route("/connections/{id}", axum::routing::patch(update_connection))
                 .route("/connections/{id}/archive", post(archive_connection))
                 .route("/tasks", get(list_tasks).post(create_task))
-                .route("/tasks/{id}", get(read_task).patch(update_task)),
+                .route("/tasks/{id}", get(read_task).patch(update_task))
+                .route("/chats/{id}/messages", get(list_chat_messages)),
         )
         .with_state(state)
 }
@@ -561,6 +562,15 @@ async fn list_events(
     ))
 }
 
+async fn list_chat_messages(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": db::list_chat_messages(&state.pool, id).await?}),
+    ))
+}
+
 fn parse_due_at(value: Option<String>) -> Result<Option<OffsetDateTime>, ApiError> {
     value
         .map(|value| {
@@ -597,6 +607,7 @@ fn idempotency_key(
 pub enum ApiError {
     BadRequest(String),
     Unauthorized,
+    Forbidden(String),
     Validation(ValidationError),
     Db(DbError),
 }
@@ -620,8 +631,9 @@ impl IntoResponse for ApiError {
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
-                "Agent authentication failed.".to_owned(),
+                "Authentication failed.".to_owned(),
             ),
+            Self::Forbidden(message) => (StatusCode::FORBIDDEN, "forbidden", message),
             Self::Validation(error) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "validation_error",

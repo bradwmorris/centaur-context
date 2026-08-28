@@ -34,16 +34,46 @@ async fn main() -> Result<()> {
     let agent_listener = TcpListener::bind(config.agent_addr)
         .await
         .context("bind agent listener")?;
+    let ingest_listener = TcpListener::bind(config.ingest_addr)
+        .await
+        .context("bind chat ingestion listener")?;
     let state = AppState { pool };
     let human = api::human_router(state.clone(), config.static_dir);
-    let agent = api::agent_router(state, config.agent_api_token);
+    let agent = api::agent_router(state.clone(), config.agent_api_token);
+    let ingest = centaur_os::ingest::router(
+        state.clone(),
+        config.chat_ingest_api_token,
+        config.approved_slack_surfaces,
+    );
+    let inactivity_pool = state.pool.clone();
+    let inactivity_duration = config.interaction_inactivity;
+    let poll_interval = config.inactivity_poll_interval;
+    let inactivity_worker = async move {
+        let mut interval = tokio::time::interval(poll_interval);
+        loop {
+            interval.tick().await;
+            match centaur_os::ingest::queue_inactive_interactions(
+                &inactivity_pool,
+                inactivity_duration,
+            )
+            .await
+            {
+                Ok(queued) if queued > 0 => info!(queued, "queued inactive Slack interactions"),
+                Ok(_) => {}
+                Err(error) => tracing::error!(%error, "inactivity queue pass failed"),
+            }
+        }
+    };
 
     info!(address = %config.human_addr, "human UI listener ready");
     info!(address = %config.agent_addr, "agent API listener ready");
+    info!(address = %config.ingest_addr, "chat ingestion listener ready");
 
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
+        result = axum::serve(ingest_listener, ingest) => result.context("chat ingestion server stopped")?,
+        _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = shutdown_signal() => info!("shutdown signal received"),
     }
     Ok(())

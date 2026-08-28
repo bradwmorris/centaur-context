@@ -4,9 +4,15 @@ use centaur_os::{
         ObjectListFilter,
     },
     domain::ActorContext,
+    ingest::{
+        SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
+        queue_inactive_interactions,
+    },
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::time::Duration;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 async fn test_pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
@@ -35,7 +41,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     };
     db::migrate(&pool).await.unwrap();
     sqlx::query(
-        "TRUNCATE object_events, connections, external_identities, tasks, chats, users, entities, memories, objects",
+        "TRUNCATE object_events, curator_runs, chat_messages, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
     )
         .execute(&pool)
         .await
@@ -236,12 +242,12 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(task.priority, "high");
 
     let table_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events')",
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(table_count, 9);
+    assert_eq!(table_count, 11);
     let blank_descriptions: i64 =
         sqlx::query_scalar("SELECT count(*) FROM objects WHERE btrim(description) = ''")
             .fetch_one(&pool)
@@ -274,4 +280,177 @@ async fn canonical_ontology_and_revision_conflicts() {
         delete_subtype_tx.commit().await.is_err(),
         "a canonical subtype must not be removable while its Object remains"
     );
+
+    let timestamp = |value: &str| OffsetDateTime::parse(value, &Rfc3339).unwrap();
+    let human = SlackSenderInput {
+        provider_user_id: "U_HUMAN".to_owned(),
+        display_name: "Example Human".to_owned(),
+        user_kind: "human".to_owned(),
+    };
+    let agent = SlackSenderInput {
+        provider_user_id: "U_AGENT".to_owned(),
+        display_name: "Centaur Agent".to_owned(),
+        user_kind: "agent".to_owned(),
+    };
+    let message = |id: &str, sender: SlackSenderInput, content: &str, at: &str| SlackMessageInput {
+        provider_message_id: id.to_owned(),
+        sender,
+        content: content.to_owned(),
+        source_created_at: timestamp(at),
+    };
+    let interaction = |messages: Vec<SlackMessageInput>, finished| SlackInteractionInput {
+        workspace_id: "T_PUBLIC".to_owned(),
+        channel_id: "C_APPROVED".to_owned(),
+        thread_id: "1780000000.000100".to_owned(),
+        surface_kind: "channel".to_owned(),
+        channel_name: Some("example-project".to_owned()),
+        title: None,
+        messages,
+        interaction_finished: finished,
+    };
+
+    let first_messages = vec![
+        message(
+            "1780000000.000100",
+            human.clone(),
+            "Please summarize the project.",
+            "2026-05-27T00:00:00Z",
+        ),
+        message(
+            "1780000001.000100",
+            agent.clone(),
+            "Here is the concise summary.",
+            "2026-05-27T00:00:01Z",
+        ),
+    ];
+    let first_ingest = ingest(
+        &pool,
+        interaction(first_messages.clone(), false)
+            .validate()
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_ingest.inserted_message_count, 2);
+    assert_eq!(first_ingest.duplicate_message_count, 0);
+    assert!(first_ingest.curator_run_id.is_none());
+    assert_eq!(first_ingest.participant_object_ids.len(), 2);
+
+    let replay = ingest(
+        &pool,
+        interaction(first_messages, false).validate().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.chat_object_id, first_ingest.chat_object_id);
+    assert_eq!(replay.inserted_message_count, 0);
+    assert_eq!(replay.duplicate_message_count, 2);
+
+    let finished = ingest(
+        &pool,
+        interaction(
+            vec![message(
+                "1780000002.000100",
+                human.clone(),
+                "Finished.",
+                "2026-05-27T00:00:02Z",
+            )],
+            true,
+        )
+        .validate()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(finished.inserted_message_count, 1);
+    assert!(finished.curator_run_id.is_some());
+
+    let finished_replay = ingest(
+        &pool,
+        interaction(
+            vec![message(
+                "1780000002.000100",
+                human.clone(),
+                "Finished.",
+                "2026-05-27T00:00:02Z",
+            )],
+            true,
+        )
+        .validate()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(finished_replay.inserted_message_count, 0);
+    assert!(finished_replay.curator_run_id.is_none());
+
+    let continuation = ingest(
+        &pool,
+        interaction(
+            vec![
+                message(
+                    "1780086401.000100",
+                    agent,
+                    "A later reply delivered first.",
+                    "2026-05-28T00:00:01Z",
+                ),
+                message(
+                    "1780086400.000100",
+                    human,
+                    "A new message in the same thread tomorrow.",
+                    "2026-05-28T00:00:00Z",
+                ),
+            ],
+            false,
+        )
+        .validate()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(continuation.chat_object_id, first_ingest.chat_object_id);
+    assert_eq!(continuation.inserted_message_count, 2);
+    assert_eq!(
+        queue_inactive_interactions(&pool, Duration::ZERO)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        queue_inactive_interactions(&pool, Duration::ZERO)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let counts: (i64, i64, i64, i64, i64) = sqlx::query_as(
+        r#"SELECT
+             (SELECT count(*) FROM chats WHERE provider='slack'),
+             (SELECT count(*) FROM users),
+             (SELECT count(*) FROM chat_messages),
+             (SELECT count(*) FROM connections WHERE kind='involves' AND archived_at IS NULL),
+             (SELECT count(*) FROM curator_runs)"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 2, 5, 2, 2));
+    let windows: Vec<(String, i32)> =
+        sqlx::query_as("SELECT trigger,message_count FROM curator_runs ORDER BY created_at,id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        windows,
+        vec![
+            ("explicit_finish".to_owned(), 3),
+            ("inactivity".to_owned(), 2)
+        ]
+    );
+    let ordered_messages = db::list_chat_messages(&pool, first_ingest.chat_object_id)
+        .await
+        .unwrap();
+    assert_eq!(ordered_messages.len(), 5);
+    assert_eq!(ordered_messages[3].provider_message_id, "1780086400.000100");
+    assert_eq!(ordered_messages[4].provider_message_id, "1780086401.000100");
 }

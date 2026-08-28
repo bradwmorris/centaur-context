@@ -60,3 +60,16 @@ export interface ObjectEvent {
   changes: Record<string, unknown>;
   created_at: string;
 }
+
+export interface ChatMessage {
+  id: string;
+  chat_object_id: string;
+  provider_message_id: string;
+  sender_user_object_id: string;
+  sender_title: string;
+  sender_kind: "human" | "agent";
+  content: string;
+  source_created_at: string;
+  ingested_sequence: number;
+  ingested_at: string;
+}

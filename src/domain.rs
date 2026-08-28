@@ -21,6 +21,16 @@ impl ActorContext {
             is_agent: false,
         }
     }
+
+    pub fn system(actor_id: impl Into<String>) -> Self {
+        Self {
+            actor_type: "system",
+            actor_id: actor_id.into(),
+            centaur_thread_key: None,
+            centaur_execution_id: None,
+            is_agent: false,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
