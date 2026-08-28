@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0,<9"]
+test = ["pytest>=9.0.3,<10"]
 
 [project.scripts]
 centaur-os = "centaur_tool_centaur_os.cli:main"
