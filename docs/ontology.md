@@ -1,0 +1,57 @@
+# Ontology
+
+Centaur OS stores a business as Objects and Connections.
+
+## Objects
+
+Every first-class node starts with one row in `objects`. That row holds its
+title, plain-language description, type, revision, lifecycle, and provenance.
+
+An Object may have one matching subtype row:
+
+| Type | Meaning |
+| --- | --- |
+| Task | Confirmed work to do |
+| Chat | One conversation thread |
+| User | A human or agent |
+| Entity | A company, project, product, place, or other named thing |
+| Memory | A simple record of what happened |
+
+The Object is canonical. The subtype stores fields specific to that type.
+
+## Supporting records
+
+These are not Objects:
+
+- Connections
+- Chat messages
+- Embeddings
+- Curator Runs
+- Audit events
+
+They support the graph but are not first-class business nodes.
+
+## Connections
+
+A Connection joins two Objects. It must use one of five types and include a
+short explanation.
+
+| Type | Use |
+| --- | --- |
+| `involves` | A person or agent took part |
+| `about` | One Object is mainly about another |
+| `related_to` | The Objects have a useful general link |
+| `depends_on` | One Object needs another first |
+| `derived_from` | An Object came from a source Chat |
+
+## Rules
+
+- Every Object needs a clear, concise description.
+- Every Object has one primary type.
+- Each subtype row belongs to exactly one Object.
+- Each Curator Run creates exactly one primary Memory.
+- A Task is created only from an explicit instruction or commitment.
+- Updates use revisions so newer changes are not overwritten.
+- Every Curator change points back to its source Chat and messages.
+- Curator Runs are atomic: all changes commit, or none do.
+- Undo reverses a whole Curator Run without deleting its audit history.
