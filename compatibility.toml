@@ -1,0 +1,22 @@
+[centaur_os]
+version = "0.1.0"
+api_version = "v1"
+ontology_version = "v1"
+database_schema_version = 6
+tool_version = "0.1.0"
+
+[runtime]
+postgres_major = 16
+buildable_container_architectures = ["linux/amd64", "linux/arm64"]
+verified_container_architecture = "linux/arm64"
+deployment_profile = "single-organization-local-or-private-network"
+
+[centaur]
+integration = "pinned overlay tool source plus authenticated Slack post-response ingestion"
+compatibility = "contract-based"
+notes = "Centaur must provide iron-proxy principal/thread headers and the documented Slack ingestion envelope. No Centaur semantic-version range is claimed until upstream publishes one."
+
+[policy]
+public_ingress = false
+interactive_agent_writes = false
+automatic_external_model_access = false

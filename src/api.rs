@@ -164,8 +164,13 @@ async fn health() -> Json<Value> {
 async fn api_meta() -> Json<Value> {
     Json(json!({
         "data": {
-            "api_version": "v1",
-            "ontology_version": "v1",
+            "product": "centaur-os",
+            "product_version": crate::version::PRODUCT_VERSION,
+            "api_version": crate::version::API_VERSION,
+            "ontology_version": crate::version::ONTOLOGY_VERSION,
+            "database_schema_version": crate::version::DATABASE_SCHEMA_VERSION,
+            "tool_version": crate::version::TOOL_VERSION,
+            "compatibility_policy": "fail_closed",
             "compatibility": "Only documented /api/v1 routes are supported; unknown versions fail closed."
         }
     }))

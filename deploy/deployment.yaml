@@ -2,9 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: centaur-os
-  namespace: centaur
   labels:
     app.kubernetes.io/name: centaur-os
+    app.kubernetes.io/version: "0.1.0"
 spec:
   replicas: 1
   selector:
@@ -14,6 +14,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: centaur-os
+        app.kubernetes.io/version: "0.1.0"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -22,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: centaur-os
-          image: centaur-os:phase-2
+          image: centaur-os:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: human
@@ -42,8 +43,8 @@ spec:
             - name: AGENT_API_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: centaur-infra-env
-                  key: CENTAUR_OS_API_TOKEN
+                  name: centaur-os-env
+                  key: AGENT_API_TOKEN
             - name: CHAT_INGEST_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -122,6 +123,12 @@ spec:
               port: human
             initialDelaySeconds: 2
             periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: human
+            failureThreshold: 30
+            periodSeconds: 2
           livenessProbe:
             httpGet:
               path: /healthz
@@ -133,3 +140,4 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+      terminationGracePeriodSeconds: 30

@@ -17,7 +17,7 @@ for Centaur users and agents.
   Connections, and immutable Object Events.
 - Do not copy code, credentials, data, or schema wholesale from The AGI Post.
 - Do not add public ingress, cloud deployment, or external integrations without
-  Brad's explicit approval.
+  the repository owner's explicit approval.
 
 ## Verification
 

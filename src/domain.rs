@@ -15,7 +15,7 @@ impl ActorContext {
     pub fn human() -> Self {
         Self {
             actor_type: "human",
-            actor_id: "brad-local".to_owned(),
+            actor_id: "local-human".to_owned(),
             centaur_thread_key: None,
             centaur_execution_id: None,
             is_agent: false,

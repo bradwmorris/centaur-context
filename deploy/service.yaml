@@ -2,9 +2,9 @@ apiVersion: v1
 kind: Service
 metadata:
   name: centaur-os
-  namespace: centaur
   labels:
     app.kubernetes.io/name: centaur-os
+    app.kubernetes.io/version: "0.1.0"
 spec:
   type: ClusterIP
   selector:
@@ -16,6 +16,3 @@ spec:
     - name: ingest
       port: 8082
       targetPort: ingest
-    - name: curator
-      port: 8083
-      targetPort: curator

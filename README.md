@@ -17,6 +17,11 @@ Connection vocabulary is `involves`, `about`, `related_to`, `depends_on`, and
 The Rust service owns validation and PostgreSQL access. The React/TypeScript UI
 is compiled to static assets and served by the same process.
 
+Release `0.1.0` is a deliberately narrow, single-organization MVP. Its stable
+contract is recorded in [`compatibility.toml`](compatibility.toml). Start with
+the [installation guide](docs/installation.md), then retain the
+[operations guide](docs/operations.md) with the installation record.
+
 The repository also owns the standard `centaur-os` agent tool under
 `tools/centaur_os`. Centaur installs that constrained client through its normal
 overlay source mechanism. An organization may load a separate private overlay
@@ -213,6 +218,7 @@ API requests to the human listener.
 ## Verification
 
 ```bash
+./scripts/check-package.py
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
@@ -239,7 +245,8 @@ tests and do not require a model provider.
 ## Deployment gate
 
 The files in `deploy/` are reviewable manifests, not authorization to apply
-them. Before local deployment:
+them. Use the guarded scripts and the full [installation](docs/installation.md)
+and [operations](docs/operations.md) procedures. Before local deployment:
 
 1. verify the Kubernetes context is `kind-centaur-lab`;
 2. verify free disk remains above 15 GiB;
@@ -247,7 +254,8 @@ them. Before local deployment:
 4. create the separate database and least-privilege role;
 5. create only the named secret keys required by the Deployment;
 6. build and pin the local image;
-7. apply the manifests and verify both NetworkPolicy paths.
+7. apply the manifests and verify the Centaur OS NetworkPolicy paths without
+   adding policies that select Centaur-owned pods.
 
-Do not create a public tunnel or push this repository without Brad's explicit
-approval.
+Do not create a public tunnel, publish a release, or change repository
+visibility without the repository owner's explicit approval.

@@ -6,3 +6,4 @@ pub mod domain;
 pub mod embeddings;
 pub mod ingest;
 pub mod search;
+pub mod version;

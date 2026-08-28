@@ -7,6 +7,7 @@ use centaur_os::{
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
 };
+use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use tower::ServiceExt;
@@ -63,6 +64,16 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
         .await
         .unwrap();
     assert_eq!(meta.status(), StatusCode::OK);
+    let body = meta.into_body().collect().await.unwrap().to_bytes();
+    let metadata: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let metadata = &metadata["data"];
+    assert_eq!(metadata["product"], "centaur-os");
+    assert_eq!(metadata["product_version"], "0.1.0");
+    assert_eq!(metadata["api_version"], "v1");
+    assert_eq!(metadata["ontology_version"], "v1");
+    assert_eq!(metadata["database_schema_version"], 6);
+    assert_eq!(metadata["tool_version"], "0.1.0");
+    assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
         .oneshot(
             Request::builder()

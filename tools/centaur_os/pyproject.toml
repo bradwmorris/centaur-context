@@ -1,6 +1,6 @@
 [project]
 name = "centaur-os"
-description = "Read and update shared Centaur OS context and tasks"
+description = "Read shared Centaur OS context through a constrained agent API"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
