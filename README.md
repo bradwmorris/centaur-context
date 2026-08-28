@@ -66,6 +66,12 @@ Version `0.1.0` is a single-organization MVP for a local machine or trusted
 private network. The supported contract is in
 [`compatibility.toml`](compatibility.toml).
 
+## License
+
+Centaur OS uses the [MIT License](LICENSE). It runs alongside
+[Centaur](https://github.com/paradigmxyz/centaur), which is separate software
+with its own license.
+
 ## Development
 
 ```bash
