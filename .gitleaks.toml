@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented Kubernetes Secret placeholder"
+regexTarget = "secret"
+regexes = ['''replace-with-a-third-distinct-32-character-secret''']
