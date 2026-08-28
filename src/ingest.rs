@@ -649,8 +649,8 @@ async fn queue_next_window(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO curator_runs
-           (id,chat_object_id,first_message_id,last_message_id,trigger,message_count)
-           VALUES ($1,$2,$3,$4,$5,$6)"#,
+           (id,chat_object_id,first_message_id,last_message_id,trigger,message_count,idempotency_key)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)"#,
     )
     .bind(id)
     .bind(chat_object_id)
@@ -658,6 +658,9 @@ async fn queue_next_window(
     .bind(last_message_id)
     .bind(trigger)
     .bind(i32::try_from(messages.len()).expect("message request is bounded"))
+    .bind(format!(
+        "curator-window:{chat_object_id}:{last_message_id}"
+    ))
     .execute(&mut **tx)
     .await?;
     sqlx::query("UPDATE chats SET last_queued_message_id=$2,updated_at=now() WHERE object_id=$1")

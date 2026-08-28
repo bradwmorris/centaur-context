@@ -31,6 +31,9 @@ not own or duplicate the standard Centaur OS tool.
 - Chat ingestion API: port `8082`, reachable only from an approved chat
   transport and protected by a different bearer credential. The server also
   checks the exact Slack workspace/channel pair against its allowlist.
+- Context Curator API: port `8083`, protected by a third bearer credential and
+  denied to both the Slack transport and agent sandboxes by the supplied
+  NetworkPolicy.
 - Database: logical database `centaur_os`, accessed only by role
   `centaur_os_app`.
 - The service refuses migrations unless the current database is `centaur_os`
@@ -55,9 +58,9 @@ For each approved Slack thread, Centaur OS:
 
 `interaction_finished: true` queues the range immediately. Otherwise the
 background worker queues it after ten minutes without a new message. A later
-message in the same Slack thread reuses the Chat and begins a new range. This
-phase creates durable Curator queue records; it does not yet run a model or
-write Memories, Tasks, Entities, or additional Connections.
+message in the same Slack thread reuses the Chat and begins a new range. The
+ingestion path only creates durable Curator queue records. It never asks the
+interactive Slack agent to write inferred context.
 
 The required configuration is:
 
@@ -66,6 +69,42 @@ CHAT_INGEST_API_TOKEN=<a distinct secret of at least 32 characters>
 APPROVED_SLACK_SURFACES=<workspace_id>:<channel_id>[,...]
 INTERACTION_INACTIVITY_SECONDS=600
 ```
+
+## Context Curator
+
+The Context Curator is a separate background concern. At the end of an
+interaction it claims one message window, retrieves candidate Objects without
+using connection-count popularity, and asks a configured model for a bounded,
+structured reconciliation plan. Centaur OS validates that plan independently
+before one short PostgreSQL transaction commits it.
+
+The validator requires exactly one primary event Memory, exact supporting
+message IDs for every change, explicit confirmation for any Task, optimistic
+revisions for updates, the five-kind Connection vocabulary, and a
+`derived_from` link from every changed Object to the source Chat. It rejects
+changes to protected records and to Chat or User Objects. A failure commits no
+partial graph writes.
+
+Each completed run stores its model and prompt version, proposed and committed
+plans, result, immutable Object Events, and before/after change journal.
+Whole-run Undo is a compensating transaction: it archives records created by
+the run and restores earlier values using new revisions. It never deletes
+source messages or audit history and refuses Undo if a later edit would be
+overwritten.
+
+There is deliberately no default model provider. Automatic processing is
+enabled only when all four OpenAI-compatible settings are present:
+
+```text
+CURATOR_MODEL_API_URL=https://provider.example/v1/chat/completions
+CURATOR_MODEL_API_TOKEN=<provider credential>
+CURATOR_MODEL=<provider model name>
+CURATOR_PROMPT_VERSION=centaur-os-curator-v1
+```
+
+`CURATOR_POLL_SECONDS` defaults to five seconds. Without model settings, runs
+remain queued for evaluation or submission through the authenticated internal
+Curator API. This keeps the database contract provider-independent.
 
 ## Context Builder and search
 
@@ -142,7 +181,7 @@ npm --prefix web run build
 Start the service with a disposable or approved `centaur_os` database:
 
 ```bash
-# Set both API tokens outside source control to distinct secrets of at least 32 characters.
+# Set all three API tokens outside source control to distinct secrets of at least 32 characters.
 DATABASE_URL=postgres://.../centaur_os \
 APPROVED_SLACK_SURFACES=T_EXAMPLE:C_EXAMPLE \
 cargo run
@@ -169,7 +208,10 @@ database whose name contains `centaur_os_test`. The test validates the
 canonical object/subtype contract, idempotent creation, optimistic revision
 conflicts, Connections, Tasks, Slack transcript replay, continuation windows,
 inactivity queueing, full-text and vector retrieval, one-hop context expansion,
-the ten-Object cap, rebuildable embedding jobs, and audit events.
+the ten-Object cap, rebuildable embedding jobs, Curator atomicity, exact
+provenance, idempotent replay, whole-run Undo, and audit events. The
+deterministic policy cases in `evals/context_curator_mvp.json` run with the Rust
+tests and do not require a model provider.
 
 ## Deployment gate
 

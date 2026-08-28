@@ -47,6 +47,9 @@ async fn main() -> Result<()> {
     let ingest_listener = TcpListener::bind(config.ingest_addr)
         .await
         .context("bind chat ingestion listener")?;
+    let curator_listener = TcpListener::bind(config.curator_addr)
+        .await
+        .context("bind context curator listener")?;
     let state = AppState {
         pool,
         embeddings: embedding_client.clone(),
@@ -58,6 +61,7 @@ async fn main() -> Result<()> {
         config.chat_ingest_api_token,
         config.approved_slack_surfaces,
     );
+    let curator = centaur_os::curator::router(state.clone(), config.curator_api_token);
     let inactivity_pool = state.pool.clone();
     let inactivity_duration = config.interaction_inactivity;
     let poll_interval = config.inactivity_poll_interval;
@@ -89,17 +93,33 @@ async fn main() -> Result<()> {
             std::future::pending::<()>().await;
         }
     };
+    let curator_pool = state.pool.clone();
+    let curator_embeddings = state.embeddings.clone();
+    let curator_model = config.curator_model.clone();
+    let curator_worker = async move {
+        if let Some(curator_model) = curator_model {
+            centaur_os::curator::run_worker(curator_pool, curator_embeddings, curator_model).await;
+        } else {
+            info!(
+                "Context Curator model disabled; queued runs remain available for the internal curator API"
+            );
+            std::future::pending::<()>().await;
+        }
+    };
 
     info!(address = %config.human_addr, "human UI listener ready");
     info!(address = %config.agent_addr, "agent API listener ready");
     info!(address = %config.ingest_addr, "chat ingestion listener ready");
+    info!(address = %config.curator_addr, "context curator listener ready");
 
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
         result = axum::serve(ingest_listener, ingest) => result.context("chat ingestion server stopped")?,
+        result = axum::serve(curator_listener, curator) => result.context("context curator server stopped")?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
+        _ = curator_worker => unreachable!("curator worker runs until shutdown"),
         _ = shutdown_signal() => info!("shutdown signal received"),
     }
     Ok(())

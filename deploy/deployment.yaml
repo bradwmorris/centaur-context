@@ -31,6 +31,8 @@ spec:
               containerPort: 8081
             - name: ingest
               containerPort: 8082
+            - name: curator
+              containerPort: 8083
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -47,6 +49,11 @@ spec:
                 secretKeyRef:
                   name: centaur-os-env
                   key: CHAT_INGEST_API_TOKEN
+            - name: CURATOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: CURATOR_API_TOKEN
             - name: APPROVED_SLACK_SURFACES
               valueFrom:
                 secretKeyRef:
@@ -77,6 +84,30 @@ spec:
                 secretKeyRef:
                   name: centaur-os-env
                   key: EMBEDDING_DIMENSIONS
+                  optional: true
+            - name: CURATOR_MODEL_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: CURATOR_MODEL_API_URL
+                  optional: true
+            - name: CURATOR_MODEL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: CURATOR_MODEL_API_TOKEN
+                  optional: true
+            - name: CURATOR_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: CURATOR_MODEL
+                  optional: true
+            - name: CURATOR_PROMPT_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: CURATOR_PROMPT_VERSION
                   optional: true
           resources:
             requests:

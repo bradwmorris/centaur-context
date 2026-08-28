@@ -4,6 +4,7 @@ use axum::{
 };
 use centaur_os::{
     api::{AppState, agent_router},
+    curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
 };
 use sqlx::postgres::PgPoolOptions;
@@ -16,6 +17,35 @@ fn state() -> AppState {
             .unwrap(),
         embeddings: None,
     }
+}
+
+#[tokio::test]
+async fn curator_listener_uses_its_own_credential_and_is_not_an_agent_surface() {
+    let router = curator_router(state(), "c".repeat(32));
+    let agent_credential = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent_credential.status(), StatusCode::UNAUTHORIZED);
+
+    let curator_credential = router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "c".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(curator_credential.status(), StatusCode::OK);
 }
 
 #[tokio::test]

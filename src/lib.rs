@@ -1,5 +1,6 @@
 pub mod api;
 pub mod config;
+pub mod curator;
 pub mod db;
 pub mod domain;
 pub mod embeddings;

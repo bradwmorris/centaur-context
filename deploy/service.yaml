@@ -16,3 +16,6 @@ spec:
     - name: ingest
       port: 8082
       targetPort: ingest
+    - name: curator
+      port: 8083
+      targetPort: curator

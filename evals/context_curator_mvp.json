@@ -1,0 +1,83 @@
+{
+  "cases": [
+    {
+      "name": "one event memory linked to its source chat",
+      "expected_valid": true,
+      "plan": {
+        "create_objects": [{
+          "client_id": "memory-1",
+          "kind": "memory",
+          "title": "Interaction completed",
+          "description": "The user and agent completed a discussion about the shared context layer.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000011"],
+          "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+        }],
+        "create_connections": [{
+          "source": {"client_id": "memory-1"},
+          "kind": "derived_from",
+          "target": {"object_id": "00000000-0000-0000-0000-000000000021"},
+          "description": "This event Memory was derived from the source Slack interaction.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000011"]
+        }]
+      }
+    },
+    {
+      "name": "ambiguous unconfirmed task is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [
+          {
+            "client_id": "memory-1",
+            "kind": "memory",
+            "title": "Possible next step discussed",
+            "description": "The interaction mentioned a possible action without confirming it.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000012"],
+            "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+          },
+          {
+            "client_id": "task-1",
+            "kind": "task",
+            "title": "Take the possible action",
+            "description": "An action that was merely implied.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000012"],
+            "task": {"confirmed": false, "status": "todo", "priority": "medium"}
+          }
+        ]
+      }
+    },
+    {
+      "name": "run without a primary event memory is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [{
+          "client_id": "entity-1",
+          "kind": "entity",
+          "title": "Example customer",
+          "description": "A customer mentioned in the Slack interaction.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000013"]
+        }]
+      }
+    },
+    {
+      "name": "relationship outside the controlled vocabulary is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [{
+          "client_id": "memory-1",
+          "kind": "memory",
+          "title": "Interaction completed",
+          "description": "The interaction produced one durable event record.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000014"],
+          "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+        }],
+        "create_connections": [{
+          "source": {"client_id": "memory-1"},
+          "kind": "mentions",
+          "target": {"object_id": "00000000-0000-0000-0000-000000000021"},
+          "description": "An unsupported relationship.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000014"]
+        }]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1574 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use axum::{
+    Json, Router,
+    extract::{Path, Request, State},
+    http::{StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
+use subtle::ConstantTimeEq;
+use time::OffsetDateTime;
+use tower_http::trace::TraceLayer;
+use uuid::Uuid;
+
+use crate::{
+    api::AppState,
+    config::CuratorModelConfig,
+    domain::{
+        CONNECTION_KINDS, TASK_PRIORITIES, TASK_STATUSES, allowed, optional_text, required_text,
+    },
+};
+
+const MAX_OPERATIONS: usize = 100;
+
+#[derive(Clone)]
+struct CuratorAuth(Arc<String>);
+
+#[derive(Debug, Error)]
+pub enum CuratorError {
+    #[error("record not found")]
+    NotFound,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("revision conflict")]
+    Conflict,
+    #[error(transparent)]
+    Sqlx(#[from] sqlx::Error),
+}
+
+use thiserror::Error;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ReconciliationPlan {
+    #[serde(default)]
+    pub create_objects: Vec<CreateObject>,
+    #[serde(default)]
+    pub update_objects: Vec<UpdateObject>,
+    #[serde(default)]
+    pub create_connections: Vec<CreateConnection>,
+    #[serde(default)]
+    pub update_connections: Vec<UpdateConnection>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateObject {
+    pub client_id: String,
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    pub supporting_message_ids: Vec<Uuid>,
+    pub task: Option<TaskFields>,
+    pub memory: Option<MemoryFields>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpdateObject {
+    pub object_id: Uuid,
+    pub expected_revision: i64,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub supporting_message_ids: Vec<Uuid>,
+    pub task: Option<TaskPatch>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TaskFields {
+    pub confirmed: bool,
+    #[serde(default = "default_status")]
+    pub status: String,
+    #[serde(default = "default_priority")]
+    pub priority: String,
+    pub owner_object_id: Option<Uuid>,
+    #[serde(default)]
+    pub agent_eligible: bool,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub due_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TaskPatch {
+    pub confirmed: bool,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub owner_object_id: Option<Uuid>,
+    #[serde(default)]
+    pub clear_owner: bool,
+    pub agent_eligible: Option<bool>,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub due_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub clear_due_at: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MemoryFields {
+    pub primary_event: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub happened_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ObjectRef {
+    Existing { object_id: Uuid },
+    Created { client_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CreateConnection {
+    pub source: ObjectRef,
+    pub kind: String,
+    pub target: ObjectRef,
+    pub description: String,
+    pub supporting_message_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpdateConnection {
+    pub connection_id: Uuid,
+    pub expected_revision: i64,
+    pub kind: Option<String>,
+    pub description: Option<String>,
+    pub supporting_message_ids: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ReconcileRequest {
+    model: String,
+    prompt_version: String,
+    plan: ReconciliationPlan,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct CuratorRun {
+    pub id: Uuid,
+    pub chat_object_id: Uuid,
+    pub first_message_id: Uuid,
+    pub last_message_id: Uuid,
+    pub trigger: String,
+    pub status: String,
+    pub message_count: i32,
+    pub idempotency_key: String,
+    pub attempts: i32,
+    pub worker_id: Option<String>,
+    pub model: Option<String>,
+    pub prompt_version: Option<String>,
+    pub proposed_plan: Option<Value>,
+    pub committed_plan: Option<Value>,
+    pub result: Option<Value>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub completed_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub reversed_at: Option<OffsetDateTime>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct CurrentObject {
+    id: Uuid,
+    kind: String,
+    title: String,
+    description: String,
+    protected: bool,
+    lifecycle: String,
+    revision: i64,
+    provenance: Value,
+    status: Option<String>,
+    priority: Option<String>,
+    owner_object_id: Option<Uuid>,
+    agent_eligible: Option<bool>,
+    due_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, FromRow)]
+struct CurrentConnection {
+    id: Uuid,
+    source_object_id: Uuid,
+    kind: String,
+    target_object_id: Uuid,
+    description: String,
+    protected: bool,
+    revision: i64,
+    provenance: Value,
+    archived_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, FromRow)]
+struct ChangeRow {
+    id: Uuid,
+    entity_type: String,
+    entity_id: Uuid,
+    action: String,
+    before_state: Option<Value>,
+    after_revision: i64,
+}
+
+fn default_status() -> String {
+    "todo".to_owned()
+}
+fn default_priority() -> String {
+    "medium".to_owned()
+}
+
+pub fn router(state: AppState, token: String) -> Router {
+    Router::new()
+        .route("/healthz", get(|| async { Json(json!({"ok": true})) }))
+        .route("/readyz", get(ready))
+        .nest(
+            "/api/v1/curator",
+            Router::new()
+                .route("/runs/{id}", get(read_run))
+                .route("/runs/{id}/reconcile", post(reconcile_run))
+                .route("/runs/{id}/undo", post(undo_run)),
+        )
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            CuratorAuth(Arc::new(token)),
+            authenticate,
+        ))
+        .layer(TraceLayer::new_for_http())
+}
+
+async fn authenticate(
+    State(auth): State<CuratorAuth>,
+    request: Request,
+    next: Next,
+) -> Result<Response, CuratorApiError> {
+    let supplied = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or(CuratorApiError::Unauthorized)?;
+    if supplied.len() != auth.0.len()
+        || supplied.as_bytes().ct_eq(auth.0.as_bytes()).unwrap_u8() != 1
+    {
+        return Err(CuratorApiError::Unauthorized);
+    }
+    Ok(next.run(request).await)
+}
+
+async fn ready(State(state): State<AppState>) -> Result<Json<Value>, CuratorApiError> {
+    crate::db::ready(&state.pool)
+        .await
+        .map_err(|error| CuratorError::Invalid(error.to_string()))?;
+    Ok(Json(json!({"ok": true, "ready": true})))
+}
+
+async fn read_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, CuratorApiError> {
+    Ok(Json(json!({"data": get_run(&state.pool, id).await?})))
+}
+
+async fn reconcile_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<ReconcileRequest>,
+) -> Result<Json<Value>, CuratorApiError> {
+    let model = required_text(input.model, "model", 300)
+        .map_err(|e| CuratorError::Invalid(e.to_string()))?;
+    let prompt_version = required_text(input.prompt_version, "prompt_version", 300)
+        .map_err(|e| CuratorError::Invalid(e.to_string()))?;
+    match reconcile(&state.pool, id, &model, &prompt_version, input.plan).await {
+        Ok(result) => Ok(Json(json!({"data": result}))),
+        Err(error) => {
+            if !matches!(error, CuratorError::NotFound | CuratorError::Conflict) {
+                let _ = record_failure(&state.pool, id, &error.to_string()).await;
+            }
+            Err(error.into())
+        }
+    }
+}
+
+async fn undo_run(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, CuratorApiError> {
+    Ok(Json(json!({"data": undo(&state.pool, id).await?})))
+}
+
+pub async fn get_run(pool: &PgPool, id: Uuid) -> Result<CuratorRun, CuratorError> {
+    sqlx::query_as(
+        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
+                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
+                  created_at,started_at,completed_at,reversed_at,error_message
+           FROM curator_runs WHERE id=$1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(CuratorError::NotFound)
+}
+
+pub async fn reconcile(
+    pool: &PgPool,
+    run_id: Uuid,
+    model: &str,
+    prompt_version: &str,
+    plan: ReconciliationPlan,
+) -> Result<Value, CuratorError> {
+    reconcile_owned(pool, run_id, model, prompt_version, plan, None).await
+}
+
+async fn reconcile_owned(
+    pool: &PgPool,
+    run_id: Uuid,
+    model: &str,
+    prompt_version: &str,
+    mut plan: ReconciliationPlan,
+    claimed_by: Option<&str>,
+) -> Result<Value, CuratorError> {
+    validate_plan(&mut plan)?;
+    let plan_json =
+        serde_json::to_value(&plan).map_err(|e| CuratorError::Invalid(e.to_string()))?;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '10s'")
+        .execute(&mut *tx)
+        .await?;
+    let run = lock_run(&mut tx, run_id).await?;
+    if run.status == "completed" {
+        if run.proposed_plan.as_ref() == Some(&plan_json) {
+            return Ok(run
+                .result
+                .unwrap_or_else(|| json!({"run_id": run_id, "status": "completed"})));
+        }
+        return Err(CuratorError::Conflict);
+    }
+    if run.status == "reversed"
+        || (run.status == "running" && run.worker_id.as_deref() != claimed_by)
+    {
+        return Err(CuratorError::Conflict);
+    }
+    if run.status != "running" {
+        sqlx::query(
+            r#"UPDATE curator_runs SET status='running',started_at=COALESCE(started_at,now()),
+                  completed_at=NULL,lease_started_at=now(),worker_id='curator-api',attempts=attempts+1,
+                  model=$2,prompt_version=$3,proposed_plan=$4,error_message=NULL WHERE id=$1"#,
+        ).bind(run_id).bind(model).bind(prompt_version).bind(&plan_json).execute(&mut *tx).await?;
+    } else {
+        sqlx::query("UPDATE curator_runs SET proposed_plan=$2,error_message=NULL WHERE id=$1")
+            .bind(run_id)
+            .bind(&plan_json)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    let message_ids = load_message_window(&mut tx, &run).await?;
+    validate_message_refs(&plan, &message_ids)?;
+    let mut created = HashMap::new();
+    let mut changed_objects = HashMap::new();
+    let mut sequence = 0_i32;
+
+    for item in &plan.create_objects {
+        sequence += 1;
+        let id = Uuid::new_v4();
+        let provenance = curator_provenance(
+            run_id,
+            run.chat_object_id,
+            &item.supporting_message_ids,
+            model,
+            prompt_version,
+        );
+        insert_object(&mut tx, id, item, &provenance).await?;
+        let after = object_snapshot(&mut tx, id).await?;
+        insert_change(
+            &mut tx, run_id, sequence, "object", id, "created", None, &after, 1,
+        )
+        .await?;
+        insert_event(
+            &mut tx,
+            run_id,
+            "object",
+            id,
+            id,
+            "created",
+            None,
+            1,
+            json!({"kind": item.kind, "supporting_message_ids": item.supporting_message_ids}),
+        )
+        .await?;
+        created.insert(item.client_id.clone(), id);
+        changed_objects.insert(
+            id,
+            item.supporting_message_ids
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>(),
+        );
+    }
+
+    for item in &plan.update_objects {
+        sequence += 1;
+        let current = current_object(&mut tx, item.object_id).await?;
+        if current.protected || current.lifecycle != "active" {
+            return Err(CuratorError::Invalid(
+                "the curator cannot update a protected or archived Object".into(),
+            ));
+        }
+        if current.revision != item.expected_revision {
+            return Err(CuratorError::Conflict);
+        }
+        if current.kind == "chat" || current.kind == "user" {
+            return Err(CuratorError::Invalid(
+                "Chat and User Objects are protected from curator reconciliation".into(),
+            ));
+        }
+        validate_task_patch(&current.kind, item.task.as_ref())?;
+        let before = current_object_json(&current);
+        let provenance = curator_provenance(
+            run_id,
+            run.chat_object_id,
+            &item.supporting_message_ids,
+            model,
+            prompt_version,
+        );
+        update_object(&mut tx, &current, item, &provenance).await?;
+        let after = object_snapshot(&mut tx, item.object_id).await?;
+        insert_change(
+            &mut tx,
+            run_id,
+            sequence,
+            "object",
+            item.object_id,
+            "updated",
+            Some(&before),
+            &after,
+            current.revision + 1,
+        )
+        .await?;
+        insert_event(
+            &mut tx,
+            run_id,
+            if current.kind == "task" {
+                "task"
+            } else {
+                "object"
+            },
+            item.object_id,
+            item.object_id,
+            "updated",
+            Some(current.revision),
+            current.revision + 1,
+            json!({"supporting_message_ids": item.supporting_message_ids}),
+        )
+        .await?;
+        changed_objects.insert(
+            item.object_id,
+            item.supporting_message_ids
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>(),
+        );
+    }
+
+    for item in &plan.create_connections {
+        sequence += 1;
+        let source = resolve_ref(&item.source, &created)?;
+        let target = resolve_ref(&item.target, &created)?;
+        if source == target {
+            return Err(CuratorError::Invalid(
+                "a connection cannot link an Object to itself".into(),
+            ));
+        }
+        ensure_active_object(&mut tx, source).await?;
+        ensure_active_object(&mut tx, target).await?;
+        let id = Uuid::new_v4();
+        let provenance = curator_provenance(
+            run_id,
+            run.chat_object_id,
+            &item.supporting_message_ids,
+            model,
+            prompt_version,
+        );
+        sqlx::query(
+            r#"INSERT INTO connections
+               (id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,
+                updated_by_type,updated_by_id,provenance)
+               VALUES ($1,$2,$3,$4,$5,'system','context-curator','system','context-curator',$6)"#,
+        )
+        .bind(id)
+        .bind(source)
+        .bind(&item.kind)
+        .bind(target)
+        .bind(&item.description)
+        .bind(&provenance)
+        .execute(&mut *tx)
+        .await?;
+        let after = connection_snapshot(&mut tx, id).await?;
+        insert_change(
+            &mut tx,
+            run_id,
+            sequence,
+            "connection",
+            id,
+            "created",
+            None,
+            &after,
+            1,
+        )
+        .await?;
+        insert_event(&mut tx, run_id, "connection", id, source, "connected", None, 1, json!({"kind": item.kind, "target_object_id": target, "supporting_message_ids": item.supporting_message_ids})).await?;
+    }
+
+    for item in &plan.update_connections {
+        sequence += 1;
+        let current = current_connection(&mut tx, item.connection_id).await?;
+        if current.protected || current.archived_at.is_some() {
+            return Err(CuratorError::Invalid(
+                "the curator cannot update a protected or archived connection".into(),
+            ));
+        }
+        if current.revision != item.expected_revision {
+            return Err(CuratorError::Conflict);
+        }
+        let before = connection_json(&current);
+        let provenance = curator_provenance(
+            run_id,
+            run.chat_object_id,
+            &item.supporting_message_ids,
+            model,
+            prompt_version,
+        );
+        sqlx::query(
+            r#"UPDATE connections SET kind=COALESCE($3,kind),description=COALESCE($4,description),
+                  provenance=$5,revision=revision+1,updated_by_type='system',updated_by_id='context-curator',updated_at=now()
+               WHERE id=$1 AND revision=$2 AND archived_at IS NULL"#,
+        ).bind(item.connection_id).bind(item.expected_revision).bind(&item.kind).bind(&item.description).bind(&provenance).execute(&mut *tx).await?;
+        let after = connection_snapshot(&mut tx, item.connection_id).await?;
+        insert_change(
+            &mut tx,
+            run_id,
+            sequence,
+            "connection",
+            item.connection_id,
+            "updated",
+            Some(&before),
+            &after,
+            current.revision + 1,
+        )
+        .await?;
+        insert_event(
+            &mut tx,
+            run_id,
+            "connection",
+            item.connection_id,
+            current.source_object_id,
+            "updated",
+            Some(current.revision),
+            current.revision + 1,
+            json!({"supporting_message_ids": item.supporting_message_ids}),
+        )
+        .await?;
+    }
+
+    validate_derived_connections(&plan, &created, &changed_objects, run.chat_object_id)?;
+    let result = json!({
+        "run_id": run_id, "status": "completed", "chat_object_id": run.chat_object_id,
+        "created_objects": created, "change_count": sequence,
+    });
+    sqlx::query(
+        r#"UPDATE curator_runs SET status='completed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
+                  committed_plan=$2,result=$3,error_message=NULL WHERE id=$1"#,
+    ).bind(run_id).bind(&plan_json).bind(&result).execute(&mut *tx).await?;
+    sqlx::query("UPDATE chats SET last_curated_message_id=$2,updated_at=now() WHERE object_id=$1")
+        .bind(run.chat_object_id)
+        .bind(run.last_message_id)
+        .execute(&mut *tx)
+        .await?;
+    insert_event(
+        &mut tx,
+        run_id,
+        "curator_run",
+        run_id,
+        run.chat_object_id,
+        "curator_committed",
+        None,
+        1,
+        json!({"change_count": sequence, "model": model, "prompt_version": prompt_version}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub async fn undo(pool: &PgPool, run_id: Uuid) -> Result<Value, CuratorError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '10s'")
+        .execute(&mut *tx)
+        .await?;
+    let run = lock_run(&mut tx, run_id).await?;
+    if run.status == "reversed" {
+        return Ok(run
+            .result
+            .unwrap_or_else(|| json!({"run_id": run_id, "status": "reversed"})));
+    }
+    if run.status != "completed" {
+        return Err(CuratorError::Conflict);
+    }
+    let changes: Vec<ChangeRow> = sqlx::query_as(
+        "SELECT id,entity_type,entity_id,action,before_state,after_revision FROM curator_run_changes WHERE curator_run_id=$1 AND undone_at IS NULL ORDER BY sequence DESC FOR UPDATE",
+    ).bind(run_id).fetch_all(&mut *tx).await?;
+    for change in &changes {
+        match (change.entity_type.as_str(), change.action.as_str()) {
+            ("connection", "created") => archive_created_connection(&mut tx, change).await?,
+            ("connection", "updated") => restore_connection(&mut tx, change).await?,
+            ("object", "created") => archive_created_object(&mut tx, change).await?,
+            ("object", "updated") => restore_object(&mut tx, change).await?,
+            _ => {
+                return Err(CuratorError::Invalid(
+                    "unsupported curator change journal entry".into(),
+                ));
+            }
+        }
+        sqlx::query("UPDATE curator_run_changes SET undone_at=now() WHERE id=$1")
+            .bind(change.id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let result =
+        json!({"run_id": run_id, "status": "reversed", "reversed_change_count": changes.len()});
+    sqlx::query(
+        "UPDATE curator_runs SET status='reversed',reversed_at=now(),result=$2 WHERE id=$1",
+    )
+    .bind(run_id)
+    .bind(&result)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(
+        &mut tx,
+        run_id,
+        "curator_run",
+        run_id,
+        run.chat_object_id,
+        "curator_undone",
+        None,
+        1,
+        json!({"reversed_change_count": changes.len()}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> {
+    let count = plan.create_objects.len()
+        + plan.update_objects.len()
+        + plan.create_connections.len()
+        + plan.update_connections.len();
+    if count == 0 || count > MAX_OPERATIONS {
+        return Err(CuratorError::Invalid(
+            "a reconciliation plan must contain between 1 and 100 operations".into(),
+        ));
+    }
+    let mut clients = HashSet::new();
+    let primary_memories = plan
+        .create_objects
+        .iter()
+        .filter(|item| {
+            item.kind.trim().eq_ignore_ascii_case("memory")
+                && item.memory.as_ref().is_some_and(|m| m.primary_event)
+        })
+        .count();
+    if primary_memories != 1 {
+        return Err(CuratorError::Invalid(
+            "each curator run must create exactly one primary event Memory".into(),
+        ));
+    }
+    for item in &mut plan.create_objects {
+        item.client_id = required_text(std::mem::take(&mut item.client_id), "client_id", 100)
+            .map_err(invalid)?;
+        if !clients.insert(item.client_id.clone()) {
+            return Err(CuratorError::Invalid(
+                "client_id values must be unique".into(),
+            ));
+        }
+        item.kind = allowed(
+            std::mem::take(&mut item.kind),
+            "kind",
+            &["task", "entity", "memory"],
+        )
+        .map_err(invalid)?;
+        item.title =
+            required_text(std::mem::take(&mut item.title), "title", 300).map_err(invalid)?;
+        item.description =
+            required_text(std::mem::take(&mut item.description), "description", 1000)
+                .map_err(invalid)?;
+        match item.kind.as_str() {
+            "task" => {
+                let task = item.task.as_mut().ok_or_else(|| {
+                    CuratorError::Invalid("Task creation requires task fields".into())
+                })?;
+                validate_task_fields(task)?;
+                if item.memory.is_some() {
+                    return Err(CuratorError::Invalid(
+                        "Task creation cannot include memory fields".into(),
+                    ));
+                }
+            }
+            "memory" => {
+                if item.memory.is_none() || item.task.is_some() {
+                    return Err(CuratorError::Invalid(
+                        "Memory creation requires only memory fields".into(),
+                    ));
+                }
+            }
+            _ if item.task.is_some() || item.memory.is_some() => {
+                return Err(CuratorError::Invalid(
+                    "Entity creation cannot include typed fields".into(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut updated_object_ids = HashSet::new();
+    for item in &mut plan.update_objects {
+        if !updated_object_ids.insert(item.object_id) {
+            return Err(CuratorError::Invalid(
+                "an Object may be updated only once in a reconciliation plan".into(),
+            ));
+        }
+        if item.expected_revision < 1 {
+            return Err(CuratorError::Invalid(
+                "expected_revision must be positive".into(),
+            ));
+        }
+        item.title = optional_text(item.title.take(), "title", 300).map_err(invalid)?;
+        item.description =
+            optional_text(item.description.take(), "description", 1000).map_err(invalid)?;
+        if let Some(task) = &mut item.task {
+            if !task.confirmed {
+                return Err(CuratorError::Invalid(
+                    "a Task update requires an explicit confirmed instruction or commitment".into(),
+                ));
+            }
+            task.status = task
+                .status
+                .take()
+                .map(|value| allowed(value, "status", TASK_STATUSES))
+                .transpose()
+                .map_err(invalid)?;
+            task.priority = task
+                .priority
+                .take()
+                .map(|value| allowed(value, "priority", TASK_PRIORITIES))
+                .transpose()
+                .map_err(invalid)?;
+            if task.clear_owner && task.owner_object_id.is_some() {
+                return Err(CuratorError::Invalid(
+                    "clear_owner conflicts with owner_object_id".into(),
+                ));
+            }
+            if task.clear_due_at && task.due_at.is_some() {
+                return Err(CuratorError::Invalid(
+                    "clear_due_at conflicts with due_at".into(),
+                ));
+            }
+        }
+        if item.title.is_none() && item.description.is_none() && item.task.is_none() {
+            return Err(CuratorError::Invalid("Object update has no changes".into()));
+        }
+    }
+    for item in &mut plan.create_connections {
+        for reference in [&mut item.source, &mut item.target] {
+            if let ObjectRef::Created { client_id } = reference {
+                *client_id =
+                    required_text(std::mem::take(client_id), "client_id", 100).map_err(invalid)?;
+            }
+        }
+        item.kind = allowed(
+            std::mem::take(&mut item.kind),
+            "connection kind",
+            CONNECTION_KINDS,
+        )
+        .map_err(invalid)?;
+        item.description = required_text(
+            std::mem::take(&mut item.description),
+            "connection description",
+            1000,
+        )
+        .map_err(invalid)?;
+    }
+    let mut updated_connection_ids = HashSet::new();
+    for item in &mut plan.update_connections {
+        if !updated_connection_ids.insert(item.connection_id) {
+            return Err(CuratorError::Invalid(
+                "a connection may be updated only once in a reconciliation plan".into(),
+            ));
+        }
+        if item.expected_revision < 1 {
+            return Err(CuratorError::Invalid(
+                "expected_revision must be positive".into(),
+            ));
+        }
+        item.kind = item
+            .kind
+            .take()
+            .map(|v| allowed(v, "connection kind", CONNECTION_KINDS))
+            .transpose()
+            .map_err(invalid)?;
+        item.description = optional_text(item.description.take(), "connection description", 1000)
+            .map_err(invalid)?;
+        if item.kind.is_none() && item.description.is_none() {
+            return Err(CuratorError::Invalid(
+                "Connection update has no changes".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid(error: impl std::fmt::Display) -> CuratorError {
+    CuratorError::Invalid(error.to_string())
+}
+
+fn validate_task_fields(task: &mut TaskFields) -> Result<(), CuratorError> {
+    if !task.confirmed {
+        return Err(CuratorError::Invalid(
+            "a Task requires an explicit confirmed instruction or commitment".into(),
+        ));
+    }
+    task.status =
+        allowed(std::mem::take(&mut task.status), "status", TASK_STATUSES).map_err(invalid)?;
+    task.priority = allowed(
+        std::mem::take(&mut task.priority),
+        "priority",
+        TASK_PRIORITIES,
+    )
+    .map_err(invalid)?;
+    Ok(())
+}
+
+fn validate_task_patch(kind: &str, task: Option<&TaskPatch>) -> Result<(), CuratorError> {
+    if kind == "task" {
+        let task = task.ok_or_else(|| {
+            CuratorError::Invalid("updating a Task requires confirmed task fields".into())
+        })?;
+        debug_assert!(task.confirmed, "plan validation enforces Task confirmation");
+    } else if task.is_some() {
+        return Err(CuratorError::Invalid(
+            "only Task Objects accept task fields".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn lock_run(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<CuratorRun, CuratorError> {
+    sqlx::query_as(
+        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
+                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
+                  created_at,started_at,completed_at,reversed_at,error_message
+           FROM curator_runs WHERE id=$1 FOR UPDATE"#,
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(CuratorError::NotFound)
+}
+
+async fn load_message_window(
+    tx: &mut Transaction<'_, Postgres>,
+    run: &CuratorRun,
+) -> Result<HashSet<Uuid>, CuratorError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        r#"SELECT m.id FROM chat_messages m
+           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
+             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingested_sequence"#,
+    )
+    .bind(run.chat_object_id)
+    .bind(run.first_message_id)
+    .bind(run.last_message_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    if ids.len() != run.message_count as usize {
+        return Err(CuratorError::Invalid(
+            "curator run message window no longer matches its recorded count".into(),
+        ));
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn validate_message_refs(
+    plan: &ReconciliationPlan,
+    allowed_ids: &HashSet<Uuid>,
+) -> Result<(), CuratorError> {
+    let sets = plan
+        .create_objects
+        .iter()
+        .map(|i| &i.supporting_message_ids)
+        .chain(
+            plan.update_objects
+                .iter()
+                .map(|i| &i.supporting_message_ids),
+        )
+        .chain(
+            plan.create_connections
+                .iter()
+                .map(|i| &i.supporting_message_ids),
+        )
+        .chain(
+            plan.update_connections
+                .iter()
+                .map(|i| &i.supporting_message_ids),
+        );
+    for ids in sets {
+        if ids.is_empty() || ids.iter().any(|id| !allowed_ids.contains(id)) {
+            return Err(CuratorError::Invalid(
+                "every change must cite one or more messages from the exact curator run window"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_derived_connections(
+    plan: &ReconciliationPlan,
+    created: &HashMap<String, Uuid>,
+    changed: &HashMap<Uuid, HashSet<Uuid>>,
+    chat_id: Uuid,
+) -> Result<(), CuratorError> {
+    let mut linked = HashSet::new();
+    for connection in &plan.create_connections {
+        if connection.kind != "derived_from" {
+            continue;
+        }
+        let source = resolve_ref(&connection.source, created)?;
+        let target = resolve_ref(&connection.target, created)?;
+        let connection_messages = connection
+            .supporting_message_ids
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        if target == chat_id && changed.get(&source) == Some(&connection_messages) {
+            linked.insert(source);
+        }
+        if source == chat_id && changed.get(&target) == Some(&connection_messages) {
+            linked.insert(target);
+        }
+    }
+    if changed.keys().any(|id| !linked.contains(id)) {
+        return Err(CuratorError::Invalid("every new or updated Object must have a derived_from connection to the source Chat with the same exact supporting message IDs".into()));
+    }
+    Ok(())
+}
+
+fn resolve_ref(
+    reference: &ObjectRef,
+    created: &HashMap<String, Uuid>,
+) -> Result<Uuid, CuratorError> {
+    match reference {
+        ObjectRef::Existing { object_id } => Ok(*object_id),
+        ObjectRef::Created { client_id } => created.get(client_id).copied().ok_or_else(|| {
+            CuratorError::Invalid(format!("unknown created Object client_id: {client_id}"))
+        }),
+    }
+}
+
+fn curator_provenance(
+    run_id: Uuid,
+    chat_id: Uuid,
+    message_ids: &[Uuid],
+    model: &str,
+    prompt_version: &str,
+) -> Value {
+    json!({"source_type":"context_curator","source_ref":run_id,"curator_run_id":run_id,"chat_object_id":chat_id,"supporting_message_ids":message_ids,"model":model,"prompt_version":prompt_version})
+}
+
+async fn insert_object(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    item: &CreateObject,
+    provenance: &Value,
+) -> Result<(), CuratorError> {
+    sqlx::query(
+        r#"INSERT INTO objects (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+           VALUES ($1,$2,$3,$4,'system','context-curator','system','context-curator',$5)"#,
+    ).bind(id).bind(&item.kind).bind(&item.title).bind(&item.description).bind(provenance).execute(&mut **tx).await?;
+    match item.kind.as_str() {
+        "task" => {
+            let task = item.task.as_ref().expect("validated");
+            if let Some(owner_id) = task.owner_object_id {
+                ensure_user(tx, owner_id).await?;
+            }
+            sqlx::query("INSERT INTO tasks (object_id,status,priority,owner_object_id,agent_eligible,due_at) VALUES ($1,$2,$3,$4,$5,$6)").bind(id).bind(&task.status).bind(&task.priority).bind(task.owner_object_id).bind(task.agent_eligible).bind(task.due_at).execute(&mut **tx).await?;
+        }
+        "entity" => {
+            sqlx::query("INSERT INTO entities (object_id) VALUES ($1)")
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "memory" => {
+            sqlx::query("INSERT INTO memories (object_id,happened_at) VALUES ($1,$2)")
+                .bind(id)
+                .bind(item.memory.as_ref().expect("validated").happened_at)
+                .execute(&mut **tx)
+                .await?;
+        }
+        _ => unreachable!("validated curator Object kind"),
+    }
+    Ok(())
+}
+
+async fn current_object(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<CurrentObject, CuratorError> {
+    sqlx::query_as(
+        r#"SELECT o.id,o.kind,o.title,o.description,o.protected,o.lifecycle,o.revision,o.provenance,
+                  t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at
+           FROM objects o LEFT JOIN tasks t ON t.object_id=o.id WHERE o.id=$1 FOR UPDATE OF o"#,
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(CuratorError::NotFound)
+}
+
+fn current_object_json(o: &CurrentObject) -> Value {
+    json!({"id":o.id,"kind":o.kind,"title":o.title,"description":o.description,"protected":o.protected,"lifecycle":o.lifecycle,"revision":o.revision,"provenance":o.provenance,"status":o.status,"priority":o.priority,"owner_object_id":o.owner_object_id,"agent_eligible":o.agent_eligible,"due_at":o.due_at})
+}
+
+async fn update_object(
+    tx: &mut Transaction<'_, Postgres>,
+    current: &CurrentObject,
+    item: &UpdateObject,
+    provenance: &Value,
+) -> Result<(), CuratorError> {
+    let result = sqlx::query(
+        r#"UPDATE objects SET title=COALESCE($3,title),description=COALESCE($4,description),provenance=$5,
+                  revision=revision+1,updated_by_type='system',updated_by_id='context-curator',updated_at=now()
+           WHERE id=$1 AND revision=$2 AND lifecycle='active' AND protected=false"#,
+    ).bind(item.object_id).bind(item.expected_revision).bind(&item.title).bind(&item.description).bind(provenance).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(CuratorError::Conflict);
+    }
+    if current.kind == "task" {
+        let task = item.task.as_ref().expect("validated");
+        let owner = if task.clear_owner {
+            None
+        } else {
+            task.owner_object_id.or(current.owner_object_id)
+        };
+        if let Some(owner_id) = owner {
+            ensure_user(tx, owner_id).await?;
+        }
+        let due = if task.clear_due_at {
+            None
+        } else {
+            task.due_at.or(current.due_at)
+        };
+        sqlx::query(
+            r#"UPDATE tasks SET status=COALESCE($2,status),priority=COALESCE($3,priority),owner_object_id=$4,
+                  agent_eligible=COALESCE($5,agent_eligible),due_at=$6,updated_at=now() WHERE object_id=$1"#,
+        ).bind(item.object_id).bind(&task.status).bind(&task.priority).bind(owner).bind(task.agent_eligible).bind(due).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_active_object(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<(), CuratorError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND lifecycle='active')",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(CuratorError::NotFound)
+    }
+}
+
+async fn ensure_user(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(), CuratorError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM objects o JOIN users u ON u.object_id=o.id WHERE o.id=$1 AND o.lifecycle='active')",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(CuratorError::Invalid(
+            "Task owner_object_id must name an active canonical User".into(),
+        ))
+    }
+}
+
+async fn current_connection(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<CurrentConnection, CuratorError> {
+    sqlx::query_as("SELECT id,source_object_id,kind,target_object_id,description,protected,revision,provenance,archived_at FROM connections WHERE id=$1 FOR UPDATE")
+        .bind(id).fetch_optional(&mut **tx).await?.ok_or(CuratorError::NotFound)
+}
+
+fn connection_json(c: &CurrentConnection) -> Value {
+    json!({"id":c.id,"source_object_id":c.source_object_id,"kind":c.kind,"target_object_id":c.target_object_id,"description":c.description,"protected":c.protected,"revision":c.revision,"provenance":c.provenance,"archived_at":c.archived_at})
+}
+
+async fn object_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<Value, CuratorError> {
+    Ok(current_object_json(&current_object(tx, id).await?))
+}
+async fn connection_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<Value, CuratorError> {
+    Ok(connection_json(&current_connection(tx, id).await?))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_change(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    sequence: i32,
+    entity_type: &str,
+    entity_id: Uuid,
+    action: &str,
+    before: Option<&Value>,
+    after: &Value,
+    after_revision: i64,
+) -> Result<(), CuratorError> {
+    sqlx::query("INSERT INTO curator_run_changes (id,curator_run_id,sequence,entity_type,entity_id,action,before_state,after_state,after_revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        .bind(Uuid::new_v4()).bind(run_id).bind(sequence).bind(entity_type).bind(entity_id).bind(action).bind(before).bind(after).bind(after_revision).execute(&mut **tx).await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_event(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+    object_id: Uuid,
+    action: &str,
+    from_revision: Option<i64>,
+    to_revision: i64,
+    changes: Value,
+) -> Result<(), CuratorError> {
+    sqlx::query(
+        r#"INSERT INTO object_events (id,entity_type,entity_id,object_id,action,actor_type,actor_id,idempotency_key,from_revision,to_revision,changes)
+           VALUES ($1,$2,$3,$4,$5,'system','context-curator',$6,$7,$8,$9)"#,
+    ).bind(Uuid::new_v4()).bind(entity_type).bind(entity_id).bind(object_id).bind(action)
+        .bind(format!("curator:{run_id}:{action}:{entity_type}:{entity_id}"))
+        .bind(from_revision).bind(to_revision).bind(changes).execute(&mut **tx).await?;
+    Ok(())
+}
+
+async fn record_failure(pool: &PgPool, run_id: Uuid, message: &str) -> Result<(), CuratorError> {
+    sqlx::query(
+        r#"UPDATE curator_runs SET status='failed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
+                  available_at=now()+LEAST(attempts,10)*interval '30 seconds',error_message=$2 WHERE id=$1 AND status <> 'completed' AND status <> 'reversed'"#,
+    ).bind(run_id).bind(message.chars().take(2000).collect::<String>()).execute(pool).await?;
+    Ok(())
+}
+
+fn value_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, CuratorError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| CuratorError::Invalid(format!("change journal is missing {key}")))
+}
+async fn archive_created_connection(
+    tx: &mut Transaction<'_, Postgres>,
+    change: &ChangeRow,
+) -> Result<(), CuratorError> {
+    let result = sqlx::query("UPDATE connections SET archived_at=now(),revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
+        .bind(change.entity_id).bind(change.after_revision).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(CuratorError::Conflict);
+    }
+    Ok(())
+}
+
+async fn archive_created_object(
+    tx: &mut Transaction<'_, Postgres>,
+    change: &ChangeRow,
+) -> Result<(), CuratorError> {
+    let active_edges: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1))").bind(change.entity_id).fetch_one(&mut **tx).await?;
+    if active_edges {
+        return Err(CuratorError::Conflict);
+    }
+    let result = sqlx::query("UPDATE objects SET lifecycle='archived',archived_at=now(),revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+        .bind(change.entity_id).bind(change.after_revision).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(CuratorError::Conflict);
+    }
+    Ok(())
+}
+
+async fn restore_connection(
+    tx: &mut Transaction<'_, Postgres>,
+    change: &ChangeRow,
+) -> Result<(), CuratorError> {
+    let before = change
+        .before_state
+        .as_ref()
+        .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
+    let result = sqlx::query("UPDATE connections SET kind=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
+        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"kind")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(CuratorError::Conflict);
+    }
+    Ok(())
+}
+
+async fn restore_object(
+    tx: &mut Transaction<'_, Postgres>,
+    change: &ChangeRow,
+) -> Result<(), CuratorError> {
+    let before = change
+        .before_state
+        .as_ref()
+        .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
+    let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type='system',updated_by_id='context-curator-undo',updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+        .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(CuratorError::Conflict);
+    }
+    if value_str(before, "kind")? == "task" {
+        let owner = before
+            .get("owner_object_id")
+            .and_then(Value::as_str)
+            .map(Uuid::parse_str)
+            .transpose()
+            .map_err(|_| CuratorError::Invalid("invalid owner in journal".into()))?;
+        let due = before
+            .get("due_at")
+            .and_then(Value::as_str)
+            .map(|v| OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339))
+            .transpose()
+            .map_err(|_| CuratorError::Invalid("invalid due_at in journal".into()))?;
+        sqlx::query("UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,agent_eligible=$5,due_at=$6,updated_at=now() WHERE object_id=$1")
+            .bind(change.entity_id).bind(value_str(before,"status")?).bind(value_str(before,"priority")?).bind(owner).bind(before.get("agent_eligible").and_then(Value::as_bool).unwrap_or(false)).bind(due).execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, FromRow, Serialize)]
+struct WorkerMessage {
+    id: Uuid,
+    provider_message_id: String,
+    sender_user_object_id: Uuid,
+    sender_title: String,
+    sender_kind: String,
+    content: String,
+    #[serde(with = "time::serde::rfc3339")]
+    source_created_at: OffsetDateTime,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelResponse {
+    choices: Vec<ModelChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelChoice {
+    message: ModelMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelMessage {
+    content: String,
+}
+
+pub async fn run_worker(
+    pool: PgPool,
+    embeddings: Option<crate::embeddings::EmbeddingClient>,
+    config: CuratorModelConfig,
+) {
+    let worker_id = format!("context-curator-{}", Uuid::new_v4());
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::error!(%error, "failed to initialize Context Curator model client");
+            return;
+        }
+    };
+    let mut interval = tokio::time::interval(config.poll_interval);
+    loop {
+        interval.tick().await;
+        let run = match claim_run(&pool, &worker_id, &config).await {
+            Ok(Some(run)) => run,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::error!(%error, "Context Curator queue claim failed");
+                continue;
+            }
+        };
+        let outcome = async {
+            let (messages, candidates) = worker_context(&pool, embeddings.as_ref(), &run).await?;
+            let plan = request_plan(&client, &config, &run, &messages, &candidates).await?;
+            reconcile_owned(
+                &pool,
+                run.id,
+                &config.model,
+                &config.prompt_version,
+                plan,
+                Some(&worker_id),
+            )
+            .await
+        }
+        .await;
+        match outcome {
+            Ok(_) => tracing::info!(run_id=%run.id, "Context Curator run committed"),
+            Err(error) => {
+                tracing::warn!(run_id=%run.id, %error, "Context Curator run failed; it may be retried");
+                if let Err(record_error) = record_failure(&pool, run.id, &error.to_string()).await {
+                    tracing::error!(run_id=%run.id, %record_error, "failed to persist Context Curator failure");
+                }
+            }
+        }
+    }
+}
+
+async fn claim_run(
+    pool: &PgPool,
+    worker_id: &str,
+    config: &CuratorModelConfig,
+) -> Result<Option<CuratorRun>, CuratorError> {
+    let mut tx = pool.begin().await?;
+    let run: Option<CuratorRun> = sqlx::query_as(
+        r#"WITH candidate AS (
+               SELECT id FROM curator_runs
+               WHERE attempts < 3
+                 AND (
+                   (status IN ('queued','failed') AND available_at <= now())
+                   OR (status='running' AND lease_started_at < now() - interval '10 minutes')
+                 )
+               ORDER BY available_at,created_at,id
+               FOR UPDATE SKIP LOCKED
+               LIMIT 1
+           )
+           UPDATE curator_runs r
+           SET status='running',started_at=COALESCE(r.started_at,now()),completed_at=NULL,
+               lease_started_at=now(),worker_id=$1,attempts=r.attempts+1,
+               model=$2,prompt_version=$3,error_message=NULL
+           FROM candidate c WHERE r.id=c.id
+           RETURNING r.id,r.chat_object_id,r.first_message_id,r.last_message_id,r.trigger,r.status,
+                     r.message_count,r.idempotency_key,r.attempts,r.worker_id,r.model,r.prompt_version,
+                     r.proposed_plan,r.committed_plan,r.result,r.created_at,r.started_at,r.completed_at,
+                     r.reversed_at,r.error_message"#,
+    )
+    .bind(worker_id)
+    .bind(&config.model)
+    .bind(&config.prompt_version)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(run)
+}
+
+async fn worker_context(
+    pool: &PgPool,
+    embeddings: Option<&crate::embeddings::EmbeddingClient>,
+    run: &CuratorRun,
+) -> Result<(Vec<WorkerMessage>, crate::search::SearchPacket), CuratorError> {
+    let messages: Vec<WorkerMessage> = sqlx::query_as(
+        r#"SELECT m.id,m.provider_message_id,m.sender_user_object_id,o.title AS sender_title,
+                  u.user_kind AS sender_kind,m.content,m.source_created_at
+           FROM chat_messages m
+           JOIN objects o ON o.id=m.sender_user_object_id
+           JOIN users u ON u.object_id=m.sender_user_object_id
+           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
+             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingested_sequence"#,
+    )
+    .bind(run.chat_object_id)
+    .bind(run.first_message_id)
+    .bind(run.last_message_id)
+    .fetch_all(pool)
+    .await?;
+    if messages.len() != run.message_count as usize {
+        return Err(CuratorError::Invalid(
+            "curator run message window no longer matches its recorded count".into(),
+        ));
+    }
+    let query = messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(1000)
+        .collect::<String>();
+    let mut candidates = crate::search::search(pool, embeddings, &query, None, 20, false)
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("candidate retrieval failed: {error}")))?;
+    let candidate_ids = candidates
+        .objects
+        .iter()
+        .map(|object| object.id)
+        .collect::<Vec<_>>();
+    let mut connections = crate::db::context_connections(pool, &candidate_ids)
+        .await
+        .map_err(|error| {
+            CuratorError::Invalid(format!("candidate graph retrieval failed: {error}"))
+        })?;
+    for object in &mut candidates.objects {
+        object.connections = connections.remove(&object.id).unwrap_or_default();
+    }
+    Ok((messages, candidates))
+}
+
+async fn request_plan(
+    client: &reqwest::Client,
+    config: &CuratorModelConfig,
+    run: &CuratorRun,
+    messages: &[WorkerMessage],
+    candidates: &crate::search::SearchPacket,
+) -> Result<ReconciliationPlan, CuratorError> {
+    let system = r#"You are the Centaur OS Context Curator. Return only one JSON object matching this shape:
+{"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
+Every run creates exactly one primary event Memory with kind=memory, memory={primary_event:true,happened_at:RFC3339}. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Allowed new Object kinds: task, entity, memory. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. Descriptions must be short, concrete, simple explanations of what the Object or connection is. Do not use connection counts for reconciliation."#;
+    let input = json!({
+        "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
+        "messages": messages,
+        "candidate_objects": candidates,
+    });
+    let response = client
+        .post(&config.endpoint)
+        .bearer_auth(&config.api_token)
+        .json(&json!({
+            "model": config.model,
+            "messages": [
+                {"role":"system","content":system},
+                {"role":"user","content":serde_json::to_string(&input).map_err(|e|CuratorError::Invalid(e.to_string()))?}
+            ],
+            "response_format":{"type":"json_object"},
+            "temperature":0
+        }))
+        .send()
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("curator model request failed: {error}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(CuratorError::Invalid(format!(
+            "curator model returned HTTP {status}"
+        )));
+    }
+    let response: ModelResponse = response.json().await.map_err(|error| {
+        CuratorError::Invalid(format!("invalid curator model response: {error}"))
+    })?;
+    let content = response
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| CuratorError::Invalid("curator model returned no choices".into()))?
+        .message
+        .content;
+    serde_json::from_str(&content).map_err(|error| {
+        CuratorError::Invalid(format!(
+            "curator model returned an invalid reconciliation plan: {error}"
+        ))
+    })
+}
+
+#[derive(Debug)]
+enum CuratorApiError {
+    Unauthorized,
+    Curator(CuratorError),
+}
+impl From<CuratorError> for CuratorApiError {
+    fn from(value: CuratorError) -> Self {
+        Self::Curator(value)
+    }
+}
+impl IntoResponse for CuratorApiError {
+    fn into_response(self) -> Response {
+        let (status, code, message) = match self {
+            Self::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "Authentication failed.".to_owned(),
+            ),
+            Self::Curator(CuratorError::NotFound) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Record not found.".to_owned(),
+            ),
+            Self::Curator(CuratorError::Conflict) => (
+                StatusCode::CONFLICT,
+                "revision_conflict",
+                "The curator run or a target record changed after it was read.".to_owned(),
+            ),
+            Self::Curator(CuratorError::Invalid(message)) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_error",
+                message,
+            ),
+            Self::Curator(CuratorError::Sqlx(error)) => {
+                tracing::error!(%error,"curator database request failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The curator request could not be completed.".to_owned(),
+                )
+            }
+        };
+        (
+            status,
+            Json(json!({"error":{"code":code,"message":message}})),
+        )
+            .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_requires_one_primary_memory() {
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+        assert!(validate_plan(&mut plan).is_err());
+    }
+
+    #[test]
+    fn unconfirmed_task_is_rejected() {
+        let mut task = TaskFields {
+            confirmed: false,
+            status: "todo".into(),
+            priority: "medium".into(),
+            owner_object_id: None,
+            agent_eligible: false,
+            due_at: None,
+        };
+        assert!(validate_task_fields(&mut task).is_err());
+    }
+}

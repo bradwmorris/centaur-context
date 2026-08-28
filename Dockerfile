@@ -23,6 +23,8 @@ COPY --from=web-build /build/web/dist /app/web
 USER 10001:10001
 ENV STATIC_DIR=/app/web \
     HUMAN_ADDR=0.0.0.0:8080 \
-    AGENT_ADDR=0.0.0.0:8081
-EXPOSE 8080 8081
+    AGENT_ADDR=0.0.0.0:8081 \
+    INGEST_ADDR=0.0.0.0:8082 \
+    CURATOR_ADDR=0.0.0.0:8083
+EXPOSE 8080 8081 8082 8083
 ENTRYPOINT ["/usr/local/bin/centaur-os"]
