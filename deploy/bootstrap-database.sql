@@ -17,6 +17,7 @@ REVOKE ALL ON DATABASE centaur_os FROM PUBLIC;
 GRANT CONNECT ON DATABASE centaur_os TO centaur_os_app;
 
 \connect centaur_os
+CREATE EXTENSION IF NOT EXISTS vector;
 ALTER SCHEMA public OWNER TO centaur_os_app;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO centaur_os_app;

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::ingest::ApprovedSlackSurfaces;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Config {
     pub database_url: String,
     pub human_addr: SocketAddr,
@@ -15,7 +15,17 @@ pub struct Config {
     pub approved_slack_surfaces: ApprovedSlackSurfaces,
     pub interaction_inactivity: std::time::Duration,
     pub inactivity_poll_interval: std::time::Duration,
+    pub embedding: Option<EmbeddingConfig>,
     pub static_dir: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct EmbeddingConfig {
+    pub endpoint: String,
+    pub api_token: String,
+    pub model: String,
+    pub dimensions: i32,
+    pub poll_interval: std::time::Duration,
 }
 
 impl Config {
@@ -35,6 +45,7 @@ impl Config {
         let approved_slack_surfaces =
             ApprovedSlackSurfaces::parse(&required("APPROVED_SLACK_SURFACES")?)
                 .map_err(anyhow::Error::msg)?;
+        let embedding = embedding_config()?;
 
         Ok(Self {
             database_url,
@@ -50,11 +61,45 @@ impl Config {
                 60,
             )?,
             inactivity_poll_interval: parse_duration_seconds("INACTIVITY_POLL_SECONDS", 30, 5)?,
+            embedding,
             static_dir: env::var("STATIC_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("web/dist")),
         })
     }
+}
+
+fn embedding_config() -> Result<Option<EmbeddingConfig>> {
+    let endpoint = optional("EMBEDDING_API_URL");
+    let token = optional("EMBEDDING_API_TOKEN");
+    let model = optional("EMBEDDING_MODEL");
+    let configured = endpoint.is_some() || token.is_some() || model.is_some();
+    if !configured {
+        return Ok(None);
+    }
+    let endpoint = endpoint
+        .context("EMBEDDING_API_URL is required when any embedding configuration is provided")?;
+    let api_token = token
+        .context("EMBEDDING_API_TOKEN is required when any embedding configuration is provided")?;
+    let model = model
+        .context("EMBEDDING_MODEL is required when any embedding configuration is provided")?;
+    if model.len() > 300 {
+        bail!("EMBEDDING_MODEL must be at most 300 characters");
+    }
+    let dimensions = env::var("EMBEDDING_DIMENSIONS")
+        .context("EMBEDDING_DIMENSIONS is required when embeddings are configured")?
+        .parse::<i32>()
+        .context("EMBEDDING_DIMENSIONS must be an integer")?;
+    if !(1..=2000).contains(&dimensions) {
+        bail!("EMBEDDING_DIMENSIONS must be between 1 and 2000 for pgvector HNSW indexing");
+    }
+    Ok(Some(EmbeddingConfig {
+        endpoint,
+        api_token,
+        model,
+        dimensions,
+        poll_interval: parse_duration_seconds("EMBEDDING_POLL_SECONDS", 5, 1)?,
+    }))
 }
 
 fn parse_duration_seconds(name: &str, default: u64, minimum: u64) -> Result<std::time::Duration> {
@@ -78,6 +123,13 @@ fn required(name: &str) -> Result<String> {
             }
             Ok(value)
         })
+}
+
+fn optional(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_addr(name: &str, default: &str) -> Result<SocketAddr> {

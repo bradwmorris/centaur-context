@@ -67,6 +67,35 @@ APPROVED_SLACK_SURFACES=<workspace_id>:<channel_id>[,...]
 INTERACTION_INACTIVITY_SECONDS=600
 ```
 
+## Context Builder and search
+
+Centaur OS always indexes the canonical Object title and description with
+PostgreSQL full-text search. The read-only Context Builder combines those
+matches with semantic matches when an embedding provider is configured, then
+adds immediately connected Objects and concise Connection explanations. It
+returns no more than ten Objects. Connection count is a small importance signal
+only in Context Builder ranking; plain Object search does not use it.
+
+Object embeddings are rebuildable search data, not canonical business data.
+Writes to an Object automatically queue its current title and description for
+asynchronous embedding. Search falls back to full text if embeddings are
+disabled, incomplete, stale, or temporarily unavailable.
+
+Centaur OS has no default model provider. To enable any OpenAI-compatible
+embedding endpoint, provide all four values:
+
+```text
+EMBEDDING_API_URL=https://provider.example/v1/embeddings
+EMBEDDING_API_TOKEN=<provider credential>
+EMBEDDING_MODEL=<provider model name>
+EMBEDDING_DIMENSIONS=<integer from 1 through 2000>
+```
+
+`EMBEDDING_POLL_SECONDS` optionally controls the single background worker and
+defaults to five seconds. The configured dimensions receive a pgvector HNSW
+cosine index. Operators using an in-cluster or private-network provider must
+adapt the supplied NetworkPolicy to that exact destination.
+
 ## Standard agent tool
 
 The public tool package is deliberately kept with the API contract it calls:
@@ -79,10 +108,13 @@ tools/centaur_os/
   test_client.py
 ```
 
-It supports constrained Object, Connection, and Task operations. It has no SQL
-client, generic request command, deletion command, or application business
-logic. The sandbox receives an iron-proxy placeholder; it never receives the
-real Centaur OS API credential.
+It supports exactly three read operations: `get-context`, `search-objects`, and
+`read-object`. It has no write, SQL, generic request, or deletion command and no
+application business logic. The agent listener exposes only those read routes;
+the restriction is therefore enforced even if a sandbox bypasses the CLI. The
+sandbox receives an iron-proxy placeholder and never receives the real Centaur
+OS API credential. Human management writes remain available only on the human
+listener.
 
 For local verification:
 
@@ -136,7 +168,8 @@ To run the real schema contract, set `TEST_DATABASE_URL` to a disposable
 database whose name contains `centaur_os_test`. The test validates the
 canonical object/subtype contract, idempotent creation, optimistic revision
 conflicts, Connections, Tasks, Slack transcript replay, continuation windows,
-inactivity queueing, and audit events.
+inactivity queueing, full-text and vector retrieval, one-hop context expansion,
+the ten-Object cap, rebuildable embedding jobs, and audit events.
 
 ## Deployment gate
 

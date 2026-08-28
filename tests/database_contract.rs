@@ -8,6 +8,7 @@ use centaur_os::{
         SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
         queue_inactive_interactions,
     },
+    search,
 };
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -41,7 +42,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     };
     db::migrate(&pool).await.unwrap();
     sqlx::query(
-        "TRUNCATE object_events, curator_runs, chat_messages, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
+        "TRUNCATE object_events, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
     )
         .execute(&pool)
         .await
@@ -220,6 +221,132 @@ async fn canonical_ontology_and_revision_conflicts() {
         Err(DbError::Conflict)
     ));
 
+    let context = search::search(&pool, None, "shared context engine", None, 10, true)
+        .await
+        .unwrap();
+    assert_eq!(context.retrieval, "full_text");
+    assert!(context.objects.len() <= 10);
+    assert!(context.objects.iter().any(|item| item.id == second.id));
+    assert!(
+        context
+            .objects
+            .iter()
+            .find(|item| item.id == second.id)
+            .is_some_and(|item| !item.connections.is_empty())
+    );
+    let memory_only_context =
+        search::search(&pool, None, "shared context", Some("memory"), 10, true)
+            .await
+            .unwrap();
+    assert!(
+        memory_only_context
+            .objects
+            .iter()
+            .all(|item| item.kind == "memory"),
+        "one-hop expansion must preserve an explicit kind filter"
+    );
+    let plain_search = search::search(&pool, None, "shared context", None, 10, false)
+        .await
+        .unwrap();
+    assert!(
+        plain_search
+            .objects
+            .iter()
+            .all(|item| item.connections.is_empty())
+    );
+    assert!(
+        plain_search
+            .objects
+            .iter()
+            .all(|item| !item.relevance.rationale.contains("active connection"))
+    );
+
+    db::ensure_embedding_index(&pool, 3).await.unwrap();
+    let source_hash: String = sqlx::query_scalar(
+        "SELECT object_embedding_source_hash(kind,title,description) FROM objects WHERE id=$1",
+    )
+    .bind(second.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO object_embeddings (object_id,model,dimensions,source_hash,embedding) VALUES ($1,'test-model',3,$2,'[1,0,0]'::vector)",
+    )
+    .bind(second.id)
+    .bind(source_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let semantic =
+        db::semantic_candidates(&pool, &[1.0, 0.0, 0.0], "test-model", 3, None, 10, false)
+            .await
+            .unwrap();
+    assert_eq!(semantic[0].object.id, second.id);
+
+    db::update_object(
+        &pool,
+        &actor(),
+        second.id,
+        second.revision,
+        ObjectChanges {
+            description: Some("The canonical product now has newer source text.".to_owned()),
+            ..Default::default()
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        db::semantic_candidates(&pool, &[1.0, 0.0, 0.0], "test-model", 3, None, 10, false,)
+            .await
+            .unwrap()
+            .is_empty(),
+        "an embedding must stop participating as soon as its Object text changes"
+    );
+
+    assert!(
+        db::queue_missing_embeddings(&pool, "worker-test-model")
+            .await
+            .unwrap()
+            > 0
+    );
+
+    let claimed = db::claim_embedding_job(&pool)
+        .await
+        .unwrap()
+        .expect("migration and Object writes must queue embedding work");
+    db::complete_embedding_job(&pool, &claimed, "worker-test-model", 3, &[0.0, 1.0, 0.0])
+        .await
+        .unwrap();
+    let stored_worker_embedding: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM object_embeddings WHERE object_id=$1 AND model='worker-test-model')",
+    )
+    .bind(claimed.object_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored_worker_embedding);
+
+    for index in 0..12 {
+        db::create_object(
+            &pool,
+            &actor(),
+            NewObject {
+                kind: "memory".to_owned(),
+                title: format!("Ranking eval {index}"),
+                description: "A distinct Object used to prove the context packet limit.".to_owned(),
+                provenance: json!({"source_type": "human"}),
+            },
+            &format!("ranking-eval-{index}"),
+        )
+        .await
+        .unwrap();
+    }
+    let capped_context = search::search(&pool, None, "ranking eval", None, 50, true)
+        .await
+        .unwrap();
+    assert_eq!(capped_context.objects.len(), 10);
+
     let task = db::create_task(
         &pool,
         &actor(),
@@ -242,12 +369,12 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(task.priority, "high");
 
     let table_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs')",
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs','object_embeddings','object_embedding_jobs')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(table_count, 11);
+    assert_eq!(table_count, 13);
     let blank_descriptions: i64 =
         sqlx::query_scalar("SELECT count(*) FROM objects WHERE btrim(description) = ''")
             .fetch_one(&pool)

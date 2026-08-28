@@ -14,6 +14,7 @@ fn state() -> AppState {
         pool: PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .unwrap(),
+        embeddings: None,
     }
 }
 
@@ -61,6 +62,25 @@ async fn agent_listener_accepts_scoped_request() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn agent_listener_does_not_expose_write_routes() {
+    let response = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/objects")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

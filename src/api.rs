@@ -28,11 +28,14 @@ use crate::{
         ActorContext, CONNECTION_KINDS, OBJECT_KINDS, TASK_PRIORITIES, TASK_STATUSES,
         ValidationError, allowed, optional_text, provenance, required_text,
     },
+    embeddings::EmbeddingClient,
+    search,
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    pub embeddings: Option<EmbeddingClient>,
 }
 
 #[derive(Clone)]
@@ -50,7 +53,17 @@ pub fn human_router(state: AppState, static_dir: PathBuf) -> Router {
 }
 
 pub fn agent_router(state: AppState, token: String) -> Router {
-    service_router(state)
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready))
+        .nest(
+            "/api/v1",
+            Router::new()
+                .route("/context", get(get_context))
+                .route("/search/objects", get(search_objects))
+                .route("/objects/{id}", get(read_context_object)),
+        )
+        .with_state(state)
         .layer(middleware::from_fn_with_state(
             AgentAuth {
                 token: Arc::new(token),
@@ -69,6 +82,8 @@ fn service_router(state: AppState) -> Router {
             Router::new()
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/objects/{id}", get(read_object).patch(update_object))
+                .route("/context", get(get_context))
+                .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
                 .route("/objects/{id}/events", get(list_events))
                 .route("/connections", post(create_connection))
@@ -142,6 +157,65 @@ async fn health() -> Json<Value> {
 async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     db::ready(&state.pool).await?;
     Ok(Json(json!({"ok": true, "ready": true})))
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    q: String,
+    kind: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn get_context(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let query_text = required_text(query.q, "q", 1000)?;
+    let kind = query
+        .kind
+        .map(|value| allowed(value, "kind", OBJECT_KINDS))
+        .transpose()?;
+    let limit = query.limit.unwrap_or(10).clamp(1, 10);
+    let packet = search::search(
+        &state.pool,
+        state.embeddings.as_ref(),
+        &query_text,
+        kind.as_deref(),
+        limit,
+        true,
+    )
+    .await?;
+    Ok(Json(json!({"data": packet})))
+}
+
+async fn search_objects(
+    State(state): State<AppState>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let query_text = required_text(query.q, "q", 1000)?;
+    let kind = query
+        .kind
+        .map(|value| allowed(value, "kind", OBJECT_KINDS))
+        .transpose()?;
+    let packet = search::search(
+        &state.pool,
+        state.embeddings.as_ref(),
+        &query_text,
+        kind.as_deref(),
+        bounded_limit(query.limit),
+        false,
+    )
+    .await?;
+    Ok(Json(json!({"data": packet})))
+}
+
+async fn read_context_object(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": search::read_object(&state.pool, id).await?}),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

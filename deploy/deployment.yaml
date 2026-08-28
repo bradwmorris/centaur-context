@@ -54,6 +54,30 @@ spec:
                   key: APPROVED_SLACK_SURFACES
             - name: INTERACTION_INACTIVITY_SECONDS
               value: "600"
+            - name: EMBEDDING_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: EMBEDDING_API_URL
+                  optional: true
+            - name: EMBEDDING_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: EMBEDDING_API_TOKEN
+                  optional: true
+            - name: EMBEDDING_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: EMBEDDING_MODEL
+                  optional: true
+            - name: EMBEDDING_DIMENSIONS
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-os-env
+                  key: EMBEDDING_DIMENSIONS
+                  optional: true
           resources:
             requests:
               cpu: 50m

@@ -28,13 +28,15 @@ def test_search_objects_sends_scoped_agent_context() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return json_response({"data": [{"id": "object-1", "title": "Shared memory"}]})
+        return json_response(
+            {"data": {"query": "shared", "retrieval": "full_text", "objects": []}}
+        )
 
     result = make_client(handler).search_objects("shared", kind="memory", limit=500)
 
-    assert result == [{"id": "object-1", "title": "Shared memory"}]
+    assert result == {"query": "shared", "retrieval": "full_text", "objects": []}
     request = requests[0]
-    assert request.url.path == "/api/v1/objects"
+    assert request.url.path == "/api/v1/search/objects"
     assert request.url.params["q"] == "shared"
     assert request.url.params["kind"] == "memory"
     assert request.url.params["limit"] == "100"
@@ -43,27 +45,21 @@ def test_search_objects_sends_scoped_agent_context() -> None:
     assert request.headers["x-centaur-thread-key"] == "slack:team:channel:thread"
 
 
-def test_create_object_sends_idempotency_and_exact_payload() -> None:
+def test_get_context_caps_the_packet_at_ten_objects() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return json_response({"data": {"id": "object-1", "revision": 1}}, 201)
+        return json_response(
+            {"data": {"query": "shared", "retrieval": "full_text", "objects": []}}
+        )
 
-    result = make_client(handler).create_object(
-        "memory",
-        "Use the Centaur OS tool",
-        "Keep Centaur reusable.",
-        {"source_type": "agent", "source_ref": "phase-4"},
-        "phase4-create-1",
-    )
+    result = make_client(handler).get_context("shared", limit=500)
 
-    assert result == {"id": "object-1", "revision": 1}
-    assert requests[0].headers["idempotency-key"] == "phase4-create-1"
-    assert requests[0].read() == (
-        b'{"kind":"memory","title":"Use the Centaur OS tool","description":"Keep Centaur reusable.",'
-        b'"provenance":{"source_type":"agent","source_ref":"phase-4"}}'
-    )
+    assert result["query"] == "shared"
+    assert requests[0].url.path == "/api/v1/context"
+    assert requests[0].url.params["limit"] == "10"
+    assert requests[0].method == "GET"
 
 
 def test_resolves_principal_from_console_permissions() -> None:
@@ -82,19 +78,9 @@ def test_resolves_principal_from_console_permissions() -> None:
         thread_key="thread-1",
         transport=httpx.MockTransport(handler),
     )
-    client.list_tasks()
+    client.search_objects("context")
 
     assert hosts == ["centaur-console.test", "centaur-os.test"]
-
-
-def test_update_rejects_fields_outside_the_contract() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("request should not be sent")
-
-    with pytest.raises(ValueError, match="unsupported object changes: raw_sql"):
-        make_client(handler).update_object(
-            "object-1", 1, {"raw_sql": "drop table objects"}, "update-1"
-        )
 
 
 def test_search_rejects_an_empty_query_before_request() -> None:
@@ -129,30 +115,7 @@ def test_api_error_preserves_safe_message() -> None:
         )
 
     with pytest.raises(RuntimeError, match="The record changed"):
-        make_client(handler).update_task(
-            "task-1", 1, {"status": "done"}, "task-update-1"
-        )
-
-
-def test_create_connection_uses_only_explained_relationship_fields() -> None:
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return json_response({"data": {"id": "connection-1"}}, 201)
-
-    result = make_client(handler).create_connection(
-        "source-1",
-        "related_to",
-        "target-1",
-        "The source provides evidence.",
-        {"source_type": "agent"},
-        "connection-1",
-    )
-
-    assert result == {"id": "connection-1"}
-    assert requests[0].url.path == "/api/v1/connections"
-    assert requests[0].headers["idempotency-key"] == "connection-1"
+        make_client(handler).read_object("object-1")
 
 
 def test_cli_api_failure_exits_cleanly(

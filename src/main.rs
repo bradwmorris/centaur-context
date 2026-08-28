@@ -27,6 +27,16 @@ async fn main() -> Result<()> {
     db::migrate(&pool)
         .await
         .context("run centaur_os migrations")?;
+    let embedding_client = config
+        .embedding
+        .as_ref()
+        .map(centaur_os::embeddings::EmbeddingClient::new)
+        .transpose()?;
+    if let Some(client) = embedding_client.as_ref() {
+        centaur_os::embeddings::prepare(&pool, client).await?;
+    } else {
+        info!("Object embeddings disabled; full-text search remains available");
+    }
 
     let human_listener = TcpListener::bind(config.human_addr)
         .await
@@ -37,7 +47,10 @@ async fn main() -> Result<()> {
     let ingest_listener = TcpListener::bind(config.ingest_addr)
         .await
         .context("bind chat ingestion listener")?;
-    let state = AppState { pool };
+    let state = AppState {
+        pool,
+        embeddings: embedding_client.clone(),
+    };
     let human = api::human_router(state.clone(), config.static_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
     let ingest = centaur_os::ingest::router(
@@ -64,6 +77,18 @@ async fn main() -> Result<()> {
             }
         }
     };
+    let embedding_pool = state.pool.clone();
+    let embedding_poll_interval = config
+        .embedding
+        .as_ref()
+        .map(|embedding| embedding.poll_interval);
+    let embedding_worker = async move {
+        if let (Some(client), Some(poll_interval)) = (embedding_client, embedding_poll_interval) {
+            centaur_os::embeddings::run_worker(embedding_pool, client, poll_interval).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
 
     info!(address = %config.human_addr, "human UI listener ready");
     info!(address = %config.agent_addr, "agent API listener ready");
@@ -74,6 +99,7 @@ async fn main() -> Result<()> {
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
         result = axum::serve(ingest_listener, ingest) => result.context("chat ingestion server stopped")?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
+        _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
         _ = shutdown_signal() => info!("shutdown signal received"),
     }
     Ok(())

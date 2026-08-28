@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
 use thiserror::Error;
@@ -19,7 +19,7 @@ pub enum DbError {
     Sqlx(#[from] sqlx::Error),
 }
 
-#[derive(Clone, Debug, FromRow, Serialize)]
+#[derive(Clone, Debug, Deserialize, FromRow, Serialize)]
 pub struct Object {
     pub id: Uuid,
     pub kind: String,
@@ -116,6 +116,125 @@ pub struct ChatMessage {
     pub ingested_sequence: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub ingested_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchCandidate {
+    pub object: Object,
+    pub relevance: f64,
+    pub connection_count: i64,
+}
+
+#[derive(Clone, Debug, FromRow)]
+struct SearchCandidateRow {
+    id: Uuid,
+    kind: String,
+    title: String,
+    description: String,
+    protected: bool,
+    lifecycle: String,
+    revision: i64,
+    created_by_type: String,
+    created_by_id: String,
+    updated_by_type: String,
+    updated_by_id: String,
+    provenance: Value,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+    archived_at: Option<OffsetDateTime>,
+    relevance: f64,
+    connection_count: i64,
+}
+
+impl From<SearchCandidateRow> for SearchCandidate {
+    fn from(row: SearchCandidateRow) -> Self {
+        Self {
+            object: Object {
+                id: row.id,
+                kind: row.kind,
+                title: row.title,
+                description: row.description,
+                protected: row.protected,
+                lifecycle: row.lifecycle,
+                revision: row.revision,
+                created_by_type: row.created_by_type,
+                created_by_id: row.created_by_id,
+                updated_by_type: row.updated_by_type,
+                updated_by_id: row.updated_by_id,
+                provenance: row.provenance,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                archived_at: row.archived_at,
+            },
+            relevance: row.relevance,
+            connection_count: row.connection_count,
+        }
+    }
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct NeighborCandidate {
+    pub seed_object_id: Uuid,
+    pub connection_kind: String,
+    pub connection_description: String,
+    pub connection_count: i64,
+    pub id: Uuid,
+    pub kind: String,
+    pub title: String,
+    pub description: String,
+    pub protected: bool,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub created_by_type: String,
+    pub created_by_id: String,
+    pub updated_by_type: String,
+    pub updated_by_id: String,
+    pub provenance: Value,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub archived_at: Option<OffsetDateTime>,
+}
+
+impl NeighborCandidate {
+    pub fn object(&self) -> Object {
+        Object {
+            id: self.id,
+            kind: self.kind.clone(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            protected: self.protected,
+            lifecycle: self.lifecycle.clone(),
+            revision: self.revision,
+            created_by_type: self.created_by_type.clone(),
+            created_by_id: self.created_by_id.clone(),
+            updated_by_type: self.updated_by_type.clone(),
+            updated_by_id: self.updated_by_id.clone(),
+            provenance: self.provenance.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            archived_at: self.archived_at,
+        }
+    }
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ContextConnection {
+    pub id: Uuid,
+    pub direction: String,
+    pub kind: String,
+    pub description: String,
+    pub other_object_id: Uuid,
+    pub other_object_kind: String,
+    pub other_object_title: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct EmbeddingJob {
+    pub object_id: Uuid,
+    pub source_hash: String,
+    pub kind: String,
+    pub title: String,
+    pub description: String,
 }
 
 #[derive(Clone, Debug)]
@@ -231,11 +350,9 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
     }
     if let Some(search) = filter.query {
         query
-            .push(" AND (strpos(lower(title), lower(")
-            .push_bind(search.clone())
-            .push(")) > 0 OR strpos(lower(description), lower(")
+            .push(" AND search_document @@ websearch_to_tsquery('english', ")
             .push_bind(search)
-            .push(")) > 0)");
+            .push(")");
     }
     query
         .push(" ORDER BY updated_at DESC, id LIMIT ")
@@ -747,6 +864,342 @@ pub async fn list_chat_messages(
     .bind(chat_object_id)
     .fetch_all(pool)
     .await?)
+}
+
+pub async fn full_text_candidates(
+    pool: &PgPool,
+    query_text: &str,
+    kind: Option<&str>,
+    limit: i64,
+    with_connection_count: bool,
+) -> Result<Vec<SearchCandidate>, DbError> {
+    let mut query = QueryBuilder::<Postgres>::new(
+        r#"WITH search_query AS (
+               SELECT websearch_to_tsquery('english', regexp_replace("#,
+    );
+    query.push_bind(query_text).push(
+        r#", '\s+', ' OR ', 'g')) AS value
+           )
+           SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
+                  o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
+                  o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at,
+                  ts_rank_cd(o.search_document, search_query.value)::float8 AS relevance,"#,
+    );
+    if with_connection_count {
+        query.push(
+            r#"(SELECT count(*) FROM connections c
+                WHERE c.archived_at IS NULL
+                  AND (c.source_object_id=o.id OR c.target_object_id=o.id))::bigint
+                AS connection_count"#,
+        );
+    } else {
+        query.push("0::bigint AS connection_count");
+    }
+    query.push(
+        r#"
+           FROM objects o CROSS JOIN search_query
+           WHERE o.lifecycle='active' AND o.search_document @@ search_query.value"#,
+    );
+    if let Some(kind) = kind {
+        query.push(" AND o.kind=").push_bind(kind);
+    }
+    query
+        .push(" ORDER BY relevance DESC, o.updated_at DESC, o.id LIMIT ")
+        .push_bind(limit);
+    Ok(query
+        .build_query_as::<SearchCandidateRow>()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+pub async fn semantic_candidates(
+    pool: &PgPool,
+    vector: &[f32],
+    model: &str,
+    dimensions: i32,
+    kind: Option<&str>,
+    limit: i64,
+    with_connection_count: bool,
+) -> Result<Vec<SearchCandidate>, DbError> {
+    let vector = vector_literal(vector);
+    let mut query = QueryBuilder::<Postgres>::new(
+        r#"SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
+                  o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
+                  o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at,
+                  (1 - (e.embedding::vector("#,
+    );
+    query
+        .push(dimensions)
+        .push(") <=> ")
+        .push_bind(vector.clone())
+        .push("::vector(")
+        .push(dimensions)
+        .push(r#")))::float8 AS relevance,"#);
+    if with_connection_count {
+        query.push(
+            r#"(SELECT count(*) FROM connections c
+                WHERE c.archived_at IS NULL
+                  AND (c.source_object_id=o.id OR c.target_object_id=o.id))::bigint
+                AS connection_count"#,
+        );
+    } else {
+        query.push("0::bigint AS connection_count");
+    }
+    query
+        .push(
+            r#"
+           FROM object_embeddings e
+           JOIN objects o ON o.id=e.object_id
+           WHERE o.lifecycle='active'
+             AND e.source_hash=object_embedding_source_hash(o.kind,o.title,o.description)
+             AND e.model="#,
+        )
+        .push_bind(model)
+        .push(" AND e.dimensions=")
+        .push_bind(dimensions);
+    if let Some(kind) = kind {
+        query.push(" AND o.kind=").push_bind(kind);
+    }
+    query
+        .push(" ORDER BY e.embedding::vector(")
+        .push(dimensions)
+        .push(") <=> ")
+        .push_bind(vector)
+        .push("::vector(")
+        .push(dimensions)
+        .push(") LIMIT ")
+        .push_bind(limit);
+    Ok(query
+        .build_query_as::<SearchCandidateRow>()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect())
+}
+
+pub async fn one_hop_neighbors(
+    pool: &PgPool,
+    seed_ids: &[Uuid],
+    kind: Option<&str>,
+    limit: i64,
+) -> Result<Vec<NeighborCandidate>, DbError> {
+    if seed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_as(
+        r#"WITH neighbor_edges AS (
+               SELECT seed.id AS seed_object_id, c.kind AS connection_kind,
+                      c.description AS connection_description,
+                      CASE WHEN c.source_object_id=seed.id
+                           THEN c.target_object_id ELSE c.source_object_id END AS neighbor_id
+               FROM unnest($1::uuid[]) AS seed(id)
+               JOIN connections c
+                 ON c.archived_at IS NULL
+                AND (c.source_object_id=seed.id OR c.target_object_id=seed.id)
+           )
+           SELECT n.seed_object_id, n.connection_kind, n.connection_description,
+                  (SELECT count(*) FROM connections degree
+                   WHERE degree.archived_at IS NULL
+                     AND (degree.source_object_id=o.id OR degree.target_object_id=o.id))::bigint
+                     AS connection_count,
+                  o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
+                  o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
+                  o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at
+           FROM neighbor_edges n
+           JOIN objects o ON o.id=n.neighbor_id AND o.lifecycle='active'
+           WHERE NOT (o.id = ANY($1::uuid[]))
+             AND ($3::text IS NULL OR o.kind=$3)
+           ORDER BY o.updated_at DESC, o.id
+           LIMIT $2"#,
+    )
+    .bind(seed_ids)
+    .bind(limit)
+    .bind(kind)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn context_connections(
+    pool: &PgPool,
+    object_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Vec<ContextConnection>>, DbError> {
+    if object_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    #[derive(FromRow)]
+    struct Row {
+        owner_object_id: Uuid,
+        id: Uuid,
+        direction: String,
+        kind: String,
+        description: String,
+        other_object_id: Uuid,
+        other_object_kind: String,
+        other_object_title: String,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"SELECT owner.id AS owner_object_id, c.id,
+                  CASE WHEN c.source_object_id=owner.id THEN 'outgoing' ELSE 'incoming' END AS direction,
+                  c.kind, c.description, other.id AS other_object_id,
+                  other.kind AS other_object_kind, other.title AS other_object_title
+           FROM unnest($1::uuid[]) AS owner(id)
+           JOIN LATERAL (
+               SELECT candidate.* FROM connections candidate
+               WHERE candidate.archived_at IS NULL
+                 AND (candidate.source_object_id=owner.id OR candidate.target_object_id=owner.id)
+               ORDER BY candidate.updated_at DESC, candidate.id
+               LIMIT 5
+           ) c ON true
+           JOIN objects other
+             ON other.id=CASE WHEN c.source_object_id=owner.id
+                              THEN c.target_object_id ELSE c.source_object_id END
+            AND other.lifecycle='active'
+           ORDER BY owner.id, c.updated_at DESC, c.id"#,
+    )
+    .bind(object_ids)
+    .fetch_all(pool)
+    .await?;
+    let mut grouped = std::collections::HashMap::new();
+    for row in rows {
+        grouped
+            .entry(row.owner_object_id)
+            .or_insert_with(Vec::new)
+            .push(ContextConnection {
+                id: row.id,
+                direction: row.direction,
+                kind: row.kind,
+                description: row.description,
+                other_object_id: row.other_object_id,
+                other_object_kind: row.other_object_kind,
+                other_object_title: row.other_object_title,
+            });
+    }
+    Ok(grouped)
+}
+
+pub async fn ensure_embedding_index(pool: &PgPool, dimensions: i32) -> Result<(), DbError> {
+    if !(1..=2000).contains(&dimensions) {
+        return Err(DbError::Sqlx(sqlx::Error::Configuration(
+            "embedding dimensions must be between 1 and 2000".into(),
+        )));
+    }
+    let statement = format!(
+        "CREATE INDEX IF NOT EXISTS object_embeddings_hnsw_{dimensions}_idx \
+         ON object_embeddings USING hnsw ((embedding::vector({dimensions})) vector_cosine_ops) \
+         WHERE dimensions={dimensions}"
+    );
+    sqlx::query(&statement).execute(pool).await?;
+    Ok(())
+}
+
+pub async fn queue_missing_embeddings(pool: &PgPool, model: &str) -> Result<u64, DbError> {
+    Ok(sqlx::query(
+        r#"INSERT INTO object_embedding_jobs (object_id,source_hash)
+           SELECT o.id, object_embedding_source_hash(o.kind,o.title,o.description)
+           FROM objects o
+           LEFT JOIN object_embeddings e
+             ON e.object_id=o.id AND e.model=$1
+            AND e.source_hash=object_embedding_source_hash(o.kind,o.title,o.description)
+           WHERE e.object_id IS NULL
+           ON CONFLICT (object_id) DO UPDATE
+           SET source_hash=EXCLUDED.source_hash, status='pending', attempts=0,
+               available_at=now(), started_at=NULL, last_error=NULL, updated_at=now()"#,
+    )
+    .bind(model)
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+pub async fn claim_embedding_job(pool: &PgPool) -> Result<Option<EmbeddingJob>, DbError> {
+    Ok(sqlx::query_as(
+        r#"WITH recovered AS (
+               UPDATE object_embedding_jobs
+               SET status='failed', started_at=NULL, available_at=now(),
+                   last_error='worker lease expired', updated_at=now()
+               WHERE status='running' AND started_at < now() - interval '5 minutes'
+           ), claimed AS (
+               UPDATE object_embedding_jobs j
+               SET status='running', attempts=attempts+1, started_at=now(), updated_at=now()
+               WHERE j.object_id=(
+                   SELECT object_id FROM object_embedding_jobs
+                   WHERE status IN ('pending','failed') AND attempts < 5 AND available_at <= now()
+                   ORDER BY available_at, updated_at, object_id
+                   LIMIT 1 FOR UPDATE SKIP LOCKED
+               )
+               RETURNING j.object_id, j.source_hash
+           )
+           SELECT claimed.object_id, claimed.source_hash, o.kind, o.title, o.description
+           FROM claimed JOIN objects o ON o.id=claimed.object_id"#,
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn complete_embedding_job(
+    pool: &PgPool,
+    job: &EmbeddingJob,
+    model: &str,
+    dimensions: i32,
+    vector: &[f32],
+) -> Result<(), DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"INSERT INTO object_embeddings
+           (object_id, model, dimensions, source_hash, embedding, embedded_at)
+           VALUES ($1,$2,$3,$4,$5::vector,now())
+           ON CONFLICT (object_id,model) DO UPDATE
+           SET dimensions=EXCLUDED.dimensions, source_hash=EXCLUDED.source_hash,
+               embedding=EXCLUDED.embedding, embedded_at=now()"#,
+    )
+    .bind(job.object_id)
+    .bind(model)
+    .bind(dimensions)
+    .bind(&job.source_hash)
+    .bind(vector_literal(vector))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM object_embedding_jobs WHERE object_id=$1 AND source_hash=$2 AND status='running'",
+    )
+    .bind(job.object_id)
+    .bind(&job.source_hash)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn fail_embedding_job(
+    pool: &PgPool,
+    object_id: Uuid,
+    error: &str,
+) -> Result<(), DbError> {
+    sqlx::query(
+        r#"UPDATE object_embedding_jobs
+           SET status='failed', started_at=NULL,
+               available_at=now() + make_interval(secs => LEAST(3600, 30 * (2 ^ LEAST(attempts, 7)))),
+               last_error=left($2,1000), updated_at=now()
+           WHERE object_id=$1 AND status='running'"#,
+    )
+    .bind(object_id)
+    .bind(error)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn vector_literal(vector: &[f32]) -> String {
+    let values = vector
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{values}]")
 }
 
 async fn idempotent_entity(

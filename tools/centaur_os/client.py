@@ -13,21 +13,6 @@ DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 
-OBJECT_UPDATE_FIELDS = {"title", "description", "provenance", "protected", "archive"}
-TASK_UPDATE_FIELDS = {
-    "title",
-    "description",
-    "provenance",
-    "status",
-    "priority",
-    "owner_object_id",
-    "clear_owner",
-    "agent_eligible",
-    "due_at",
-    "clear_due_at",
-}
-
-
 def _clean(value: str | None) -> str:
     return (value or "").strip()
 
@@ -154,126 +139,29 @@ class CentaurOsClient:
         except ValueError as exc:
             raise RuntimeError("Centaur OS returned invalid JSON") from exc
 
-    def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """Search shared records by title or description."""
+    def get_context(self, query: str, kind: str | None = None, limit: int = 10) -> dict[str, Any]:
+        """Build a concise context packet of at most ten canonical Objects."""
+        query = _clean(query)
+        if not query:
+            raise ValueError("query is required")
+        params: dict[str, Any] = {"q": query, "limit": min(_bounded_limit(limit), 10)}
+        if _clean(kind):
+            params["kind"] = _clean(kind)
+        return self._request("GET", "/api/v1/context", params=params)
+
+    def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> dict[str, Any]:
+        """Search canonical Objects without Context Builder importance boosting."""
         query = _clean(query)
         if not query:
             raise ValueError("query is required")
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(kind):
             params["kind"] = _clean(kind)
-        return self._request("GET", "/api/v1/objects", params=params)
+        return self._request("GET", "/api/v1/search/objects", params=params)
 
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""
         return self._request("GET", f"/api/v1/objects/{quote(id, safe='')}")
-
-    def create_object(
-        self,
-        kind: str,
-        title: str,
-        description: str,
-        provenance: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Create one non-Task Object supported by the Centaur OS API."""
-        return self._request(
-            "POST",
-            "/api/v1/objects",
-            json={
-                "kind": kind,
-                "title": title,
-                "description": description,
-                "provenance": provenance,
-            },
-            idempotency_key=idempotency_key,
-        )
-
-    def update_object(
-        self,
-        id: str,
-        expected_revision: int,
-        changes: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Update selected record fields with optimistic revision protection."""
-        unknown = set(changes) - OBJECT_UPDATE_FIELDS
-        if unknown:
-            raise ValueError(f"unsupported object changes: {', '.join(sorted(unknown))}")
-        payload = {"expected_revision": int(expected_revision), **changes}
-        return self._request(
-            "PATCH",
-            f"/api/v1/objects/{quote(id, safe='')}",
-            json=payload,
-            idempotency_key=idempotency_key,
-        )
-
-    def list_connections(self, id: str) -> list[dict[str, Any]]:
-        """List incoming and outgoing relationships for one record."""
-        return self._request(
-            "GET", f"/api/v1/objects/{quote(id, safe='')}/connections"
-        )
-
-    def create_connection(
-        self,
-        source_id: str,
-        kind: str,
-        target_id: str,
-        description: str,
-        provenance: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Create one explained relationship between two records."""
-        return self._request(
-            "POST",
-            "/api/v1/connections",
-            json={
-                "source_object_id": source_id,
-                "kind": kind,
-                "target_object_id": target_id,
-                "description": description,
-                "provenance": provenance,
-            },
-            idempotency_key=idempotency_key,
-        )
-
-    def list_tasks(
-        self,
-        status: str | None = None,
-        agent_eligible: bool | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """List shared tasks with optional status and eligibility filters."""
-        params: dict[str, Any] = {"limit": _bounded_limit(limit)}
-        if _clean(status):
-            params["status"] = _clean(status)
-        if agent_eligible is not None:
-            params["agent_eligible"] = agent_eligible
-        return self._request("GET", "/api/v1/tasks", params=params)
-
-    def read_task(self, id: str) -> dict[str, Any]:
-        """Read one shared task by ID."""
-        return self._request("GET", f"/api/v1/tasks/{quote(id, safe='')}")
-
-    def update_task(
-        self,
-        id: str,
-        expected_revision: int,
-        changes: dict[str, Any],
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Update selected task fields with optimistic revision protection."""
-        unknown = set(changes) - TASK_UPDATE_FIELDS
-        if unknown:
-            raise ValueError(f"unsupported task changes: {', '.join(sorted(unknown))}")
-        payload = {"expected_revision": int(expected_revision), **changes}
-        return self._request(
-            "PATCH",
-            f"/api/v1/tasks/{quote(id, safe='')}",
-            json=payload,
-            idempotency_key=idempotency_key,
-        )
-
 
 def _client() -> CentaurOsClient:
     return CentaurOsClient()
