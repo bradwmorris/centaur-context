@@ -1543,9 +1543,21 @@ async fn request_plan(
     messages: &[WorkerMessage],
     candidates: &crate::search::SearchPacket,
 ) -> Result<ReconciliationPlan, CuratorError> {
-    let system = r#"You are the Centaur OS Context Curator. Return only one JSON object matching this shape:
+    let system = r#"You are the Centaur OS Context Curator. Return only one JSON object with exactly these four arrays:
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
-Every run creates exactly one primary event Memory with kind=memory, memory={primary_event:true,happened_at:RFC3339}. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Allowed new Object kinds: task, entity, memory. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. Descriptions must be short, concrete, simple explanations of what the Object or connection is. Do not use connection counts for reconciliation."#;
+
+Every create_objects entry MUST contain all of these fields:
+{"client_id":"unique-local-name","kind":"memory|task|entity","title":"...","description":"...","supporting_message_ids":["UUID"],"task":null,"memory":null}.
+client_id is a short unique name used only to reference that new Object from create_connections. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"todo|doing|blocked|review|done","priority":"low|medium|high|urgent","owner_object_id":null,"agent_eligible":false,"due_at":null}.
+
+Every update_objects entry MUST contain all of these fields:
+{"object_id":"UUID","expected_revision":1,"title":null,"description":null,"supporting_message_ids":["UUID"],"task":null}.
+Every create_connections entry MUST contain all of these fields:
+{"source":{"client_id":"created-object-client-id"},"kind":"derived_from","target":{"object_id":"existing-object-UUID"},"description":"...","supporting_message_ids":["UUID"]}.
+An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
+{"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
+
+Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. Descriptions must be short, concrete, simple explanations of what the Object or connection is. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
