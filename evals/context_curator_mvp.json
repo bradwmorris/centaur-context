@@ -78,6 +78,34 @@
           "supporting_message_ids": ["00000000-0000-0000-0000-000000000014"]
         }]
       }
+    },
+    {
+      "name": "title-only generated description is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [{
+          "client_id": "memory-weak-title",
+          "kind": "memory",
+          "title": "Interaction completed",
+          "description": "Interaction completed",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000015"],
+          "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+        }]
+      }
+    },
+    {
+      "name": "model commentary description is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [{
+          "client_id": "memory-model-commentary",
+          "kind": "memory",
+          "title": "Launch decision",
+          "description": "As an AI, I have generated a summary of the launch decision.",
+          "supporting_message_ids": ["00000000-0000-0000-0000-000000000016"],
+          "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+        }]
+      }
     }
   ]
 }

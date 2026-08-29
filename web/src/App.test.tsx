@@ -171,6 +171,35 @@ describe("canonical Object identity across the application", () => {
     expect(screen.getByRole("img", { name: "Canonical user, Human, source author" })).toBeVisible();
   });
 
+  it("shows canonical description previews in all six primary lists", async () => {
+    window.history.replaceState({}, "", "/objects");
+    render(<App />);
+    await screen.findByText("Canonical task description");
+    for (const [section, description] of [
+      ["Tasks", "Canonical task description"],
+      ["Chats", "Canonical chat description"],
+      ["Users", "Canonical user description"],
+      ["Entities", "Canonical entity description"],
+      ["Memories", "Canonical memory description"],
+    ] as const) {
+      await userEvent.click(screen.getByRole("button", { name: section }));
+      expect(await screen.findByText(description)).toHaveAccessibleName(
+        new RegExp(`Description preview: ${description}`),
+      );
+    }
+  });
+
+  it("gives human description forms concrete type-specific guidance", async () => {
+    window.history.replaceState({}, "", "/entities");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "New entity" }));
+    expect(screen.getByLabelText("Entity description")).toHaveAttribute(
+      "aria-describedby",
+      "new-object-description-help",
+    );
+    expect(screen.getByText(/Describe this specific entity directly/)).toBeVisible();
+  });
+
   it("renders an explicit missing-target state for an unknown deep link", async () => {
     window.history.replaceState({}, "", "/objects/99999999-9999-4999-8999-999999999999");
     render(<App />);

@@ -45,6 +45,8 @@ pub enum ValidationError {
     ProvenanceObject,
     #[error("source and target objects must be different")]
     SelfConnection,
+    #[error("description must {0}")]
+    WeakDescription(&'static str),
 }
 
 pub fn required_text(
@@ -70,6 +72,83 @@ pub fn optional_text(
     value
         .map(|value| required_text(value, field, max))
         .transpose()
+}
+
+pub fn object_description(title: &str, value: String) -> Result<String, ValidationError> {
+    let value = required_text(value, "description", 1000)?;
+    validate_object_description(title, &value)?;
+    Ok(value)
+}
+
+pub fn validate_object_description(title: &str, description: &str) -> Result<(), ValidationError> {
+    let comparable_title = comparable_text(title);
+    let comparable_description = comparable_text(description);
+    if !comparable_title.is_empty() && comparable_description == comparable_title {
+        return Err(ValidationError::WeakDescription(
+            "add concrete context instead of repeating the title",
+        ));
+    }
+    if matches!(
+        comparable_description.as_str(),
+        "tbd"
+            | "todo"
+            | "placeholder"
+            | "description"
+            | "no description"
+            | "none"
+            | "n a"
+            | "na"
+            | "unknown"
+            | "lorem ipsum"
+            | "this is about the project"
+            | "this is about this project"
+    ) {
+        return Err(ValidationError::WeakDescription(
+            "replace placeholder or vague text with a specific statement",
+        ));
+    }
+    let lower = description.trim().to_lowercase();
+    if ["user:", "human:", "assistant:", "agent:"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return Err(ValidationError::WeakDescription(
+            "summarize the represented Object instead of copying a transcript fragment",
+        ));
+    }
+    let starts_with_process_commentary = [
+        "as an ai",
+        "i was asked to",
+        "i have generated",
+        "here is a description",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix));
+    let contains_generation_commentary = ["the model generated", "generated description"]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if starts_with_process_commentary || contains_generation_commentary {
+        return Err(ValidationError::WeakDescription(
+            "describe the Object directly without process or model commentary",
+        ));
+    }
+    Ok(())
+}
+
+fn comparable_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character.to_lowercase().collect::<String>()
+            } else {
+                " ".to_owned()
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn allowed(
@@ -181,5 +260,53 @@ mod tests {
         );
         assert!(required_text("   ".to_owned(), "title", 10).is_err());
         assert!(required_text("too long".to_owned(), "title", 3).is_err());
+    }
+
+    #[test]
+    fn object_descriptions_reject_mechanical_weaknesses() {
+        for description in [
+            "Quarterly plan",
+            "TBD",
+            "This is about the project.",
+            "User: please update the launch plan",
+            "As an AI, I have generated this description.",
+        ] {
+            assert!(
+                object_description("Quarterly plan", description.to_owned()).is_err(),
+                "weak description was accepted: {description}"
+            );
+        }
+        assert!(object_description("Long", "x".repeat(1001)).is_err());
+    }
+
+    #[test]
+    fn object_descriptions_accept_concrete_examples_for_every_kind() {
+        for (title, description) in [
+            (
+                "Publish launch notes",
+                "Prepare and publish the approved launch notes for customers.",
+            ),
+            (
+                "Launch review",
+                "A Slack conversation where the release team approved the launch checklist.",
+            ),
+            (
+                "Taylor Morgan",
+                "A human product lead responsible for the customer migration program.",
+            ),
+            (
+                "Northwind",
+                "A customer organization participating in the August migration pilot.",
+            ),
+            (
+                "Migration approved",
+                "The product team approved the customer migration during the August review.",
+            ),
+        ] {
+            assert_eq!(
+                object_description(title, format!("  {description}  ")).unwrap(),
+                description
+            );
+        }
     }
 }

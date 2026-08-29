@@ -87,6 +87,39 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
 }
 
 #[tokio::test]
+async fn human_api_rejects_a_weak_object_description_before_database_access() {
+    let response = human_router(state(), PathBuf::from("web/dist"))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/objects")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "weak-object-description")
+                .body(Body::from(
+                    r#"{
+                        "kind":"entity",
+                        "title":"Northwind",
+                        "description":"Northwind"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], "validation_error");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("add concrete context")
+    );
+}
+
+#[tokio::test]
 async fn agent_listener_rejects_missing_token() {
     let response = agent_router(state(), "a".repeat(32))
         .oneshot(

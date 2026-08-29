@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
+import { DescriptionSnippet } from "./DescriptionSnippet";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
@@ -13,6 +14,13 @@ const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entit
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories"]);
 type CreateSection = keyof typeof sectionSingular;
+const descriptionExamples: Record<ObjectKind, string> = {
+  task: "Prepare and publish the approved launch notes for customers.",
+  chat: "A Slack conversation where the release team approved the launch checklist.",
+  user: "A human product lead responsible for the customer migration program.",
+  entity: "A customer organization participating in the August migration pilot.",
+  memory: "The product team approved the customer migration during the August review.",
+};
 
 export default function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
@@ -115,7 +123,7 @@ export default function App() {
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
                   <ObjectId id={canonicalObjectId(item)} rowPill />
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /><p>{itemDescription(item)}</p></span>
+                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /><DescriptionSnippet description={itemDescription(item)} /></span>
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}
@@ -160,12 +168,13 @@ function NavButton({ active, compact, icon, label, onClick }: { active: boolean;
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [kind, setKind] = useState<"chat" | "entity" | "memory">(fixedKind ?? "memory");
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null);
     const data = new FormData(event.currentTarget);
     try {
       onCreated(await api.createObject({
-        kind: fixedKind ?? String(data.get("kind")), title: String(data.get("title")), description: String(data.get("description")),
+        kind, title: String(data.get("title")), description: String(data.get("description")),
         provenance: { source_type: "human", note: "Created in Centaur OS" },
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
@@ -173,9 +182,10 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="description" rows={5} required placeholder="Explain what this is in simple language…" aria-label={`${name} description`} />
+    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
+    <DescriptionHelp id="new-object-description-help" kind={kind} />
     {error && <p className="form-error">{error}</p>}
-    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" defaultValue="memory"><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
+    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
 }
 
@@ -189,7 +199,8 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="description" rows={5} required placeholder="Explain what this task is…" aria-label="Task description" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
+    <DescriptionHelp id="new-task-description-help" kind="task" />
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_eligible" /> Agent eligible</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
@@ -225,7 +236,8 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required aria-label="Object description" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder="Explain what this is…" />
+        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
+        <DescriptionHelp id="object-description-help" kind={item.kind} />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
@@ -342,7 +354,8 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder="Explain what this task is…" />
+        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
+        <DescriptionHelp id="task-description-help" kind="task" />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
@@ -447,6 +460,7 @@ function CreateModal({ title, onClose, children }: { title: string; onClose: () 
   </div>;
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
+function DescriptionHelp({ id, kind }: { id: string; kind: ObjectKind }) { return <p className="description-help" id={id}>Describe this specific {kind} directly. Example: “{descriptionExamples[kind]}”</p>; }
 function Property({ label, children }: { label: string; children: React.ReactNode }) { return <div className="property"><span>{label}</span><div>{children}</div></div>; }
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) { return <section className="detail-section"><header><h3>{title}</h3>{action}</header>{children}</section>; }
 function DetailLoading({ error }: { error: string | null }) { return <div className="blank-state"><span>◇</span><h2>{error ? "Could not load" : "Loading"}</h2><p>{error ?? "Reading the shared record…"}</p></div>; }

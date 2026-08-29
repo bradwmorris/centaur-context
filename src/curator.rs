@@ -487,6 +487,11 @@ async fn reconcile_owned(
             ));
         }
         validate_task_patch(&current.kind, item.task.as_ref())?;
+        crate::domain::validate_object_description(
+            item.title.as_deref().unwrap_or(&current.title),
+            item.description.as_deref().unwrap_or(&current.description),
+        )
+        .map_err(invalid)?;
         let before = current_object_json(&current);
         let provenance = curator_provenance(
             run_id,
@@ -766,7 +771,7 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         item.title =
             required_text(std::mem::take(&mut item.title), "title", 300).map_err(invalid)?;
         item.description =
-            required_text(std::mem::take(&mut item.description), "description", 1000)
+            crate::domain::object_description(&item.title, std::mem::take(&mut item.description))
                 .map_err(invalid)?;
         match item.kind.as_str() {
             "task" => {
@@ -810,6 +815,9 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         item.title = optional_text(item.title.take(), "title", 300).map_err(invalid)?;
         item.description =
             optional_text(item.description.take(), "description", 1000).map_err(invalid)?;
+        if let (Some(title), Some(description)) = (&item.title, &item.description) {
+            crate::domain::validate_object_description(title, description).map_err(invalid)?;
+        }
         if let Some(task) = &mut item.task {
             if !task.confirmed {
                 return Err(CuratorError::Invalid(
@@ -1422,7 +1430,19 @@ pub async fn run_worker(
         };
         let outcome = async {
             let (messages, candidates) = worker_context(&pool, embeddings.as_ref(), &run).await?;
-            let plan = request_plan(&client, &config, &run, &messages, &candidates).await?;
+            let mut plan =
+                request_plan(&client, &config, &run, &messages, &candidates, None).await?;
+            if let Err(error) = validate_plan(&mut plan) {
+                plan = request_plan(
+                    &client,
+                    &config,
+                    &run,
+                    &messages,
+                    &candidates,
+                    Some(&error.to_string()),
+                )
+                .await?;
+            }
             reconcile_owned(
                 &pool,
                 run.id,
@@ -1542,6 +1562,7 @@ async fn request_plan(
     run: &CuratorRun,
     messages: &[WorkerMessage],
     candidates: &crate::search::SearchPacket,
+    validation_feedback: Option<&str>,
 ) -> Result<ReconciliationPlan, CuratorError> {
     let system = r#"You are the Centaur OS Context Curator. Return only one JSON object with exactly these four arrays:
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
@@ -1557,11 +1578,12 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. Descriptions must be short, concrete, simple explanations of what the Object or connection is. Do not use connection counts for reconciliation."#;
+Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must name the specific subject and state the concrete fact, event, responsibility, identity, or outcome in one or two plain-language sentences. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
         "candidate_objects": candidates,
+        "validation_feedback": validation_feedback,
     });
     let response = client
         .post(&config.endpoint)
