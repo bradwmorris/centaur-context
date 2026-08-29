@@ -124,8 +124,7 @@ export default function App() {
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
                   <ObjectId id={canonicalObjectId(item)} rowPill />
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /></span>
-                  <p>{itemDescription(item)}</p>
+                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /><p>{itemDescription(item)}</p></span>
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}

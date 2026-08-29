@@ -77,7 +77,7 @@ button { color: inherit; }
 .list-group-head > span:last-child { color: #5f6168; }
 .status-ring { width: 13px; height: 13px; border: 1.5px solid #8a8c93; border-radius: 50%; }
 .record-list { min-height: 0; padding: 0 12px; }
-.record { position: relative; width: 100%; min-height: 53px; display: grid; grid-template-columns: 24px max-content minmax(260px, 1.5fr) minmax(160px, 1fr) 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; margin-bottom: 2px; }
+.record { position: relative; width: 100%; min-height: 53px; display: grid; grid-template-columns: 24px max-content minmax(0, 1fr) 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; margin-bottom: 2px; }
 .record:hover { background: #17181b; }
 .record > :not(.record-open) { position: relative; z-index: 1; pointer-events: none; }
 .record > .object-identity, .record > .record-source { pointer-events: auto; }
@@ -91,6 +91,7 @@ button { color: inherit; }
 .record-title, .record-badges, .record-source, .object-context { min-width: 0; display: flex; align-items: center; gap: 5px; }
 .record-title { overflow: hidden; }
 .record-title > strong { flex: 0 1 auto; }
+.record-title > p { flex: 1 1 160px; }
 .record-badges { flex: 0 0 auto; flex-wrap: nowrap; }
 .record-source { justify-content: center; }
 .object-context { flex-wrap: nowrap; }
@@ -263,7 +264,7 @@ button { color: inherit; }
   .nav-button { justify-content: center; padding: 0; font-size: 0; }
   .nav-button > span { width: auto; font-size: 15px; }
   .nav-foot { justify-content: center; padding: 9px 0; font-size: 0; }
-  .record { grid-template-columns: 24px max-content minmax(180px, 1fr) 58px; }
+  .record { grid-template-columns: 24px max-content minmax(0, 1fr) 58px; }
   .record p { display: none; }
   .record-primary { padding-left: 32px; padding-right: 32px; }
 }
