@@ -3,15 +3,16 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, agent_router, human_router},
+    api::{AppState, agent_router, human_router, note_write_router},
     config::{EmbeddingConfig, EmbeddingInputMode, TextSearchConfig},
     curator::{
         self, CreateConnection as CuratorConnection, CreateObject as CuratorObject, MemoryFields,
         ObjectRef, ReconciliationPlan, TaskFields,
     },
     db::{
-        self, ConnectionChanges, DbError, NewConnection, NewObject, NewTask, ObjectChanges,
-        ObjectListFilter, TaskChanges,
+        self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
+        NewSourceContent, NewTask, NoteListFilter, ObjectChanges, ObjectListFilter,
+        SourceListFilter, TaskChanges,
     },
     domain::ActorContext,
     embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
@@ -55,7 +56,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     };
     db::migrate(&pool).await.unwrap();
     sqlx::query(
-        "TRUNCATE eval_trace_entries, eval_objects, evals, object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
+        "TRUNCATE eval_trace_entries, eval_objects, evals, object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, source_contents, sources, notes, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
     )
         .execute(&pool)
         .await
@@ -687,13 +688,243 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     assert!(protected_task.protected);
 
+    let article_text = format!(
+        "Neutrino demand is the synthetic research finding. {} final-citation-marker",
+        "Synthetic evidence sentence. ".repeat(1_200)
+    );
+    let article = db::create_source(
+        &pool,
+        &actor(),
+        NewSource {
+            title: "Synthetic semiconductor demand report".to_owned(),
+            description: "A synthetic article fixture describing semiconductor demand without copyrighted material.".to_owned(),
+            provenance: json!({"source_type":"human"}),
+            source_kind: "article".to_owned(),
+            canonical_uri: Some("https://example.test/research/demand".to_owned()),
+            byline: Some("Fixture Research Team".to_owned()),
+            publisher: Some("Fixture Research".to_owned()),
+            published_at: None,
+            accessed_at: None,
+            language: Some("en".to_owned()),
+            media_type: Some("text/html".to_owned()),
+            artifact_reference: Some("artifact:synthetic-article".to_owned()),
+            content_hash: Some("a".repeat(64)),
+        },
+        "create-synthetic-article",
+    ).await.unwrap();
+    let article_content = db::append_source_content(
+        &pool,
+        &actor(),
+        article.object_id,
+        NewSourceContent {
+            expected_revision: article.revision,
+            content_kind: "article_text".to_owned(),
+            normalized_text: article_text.clone(),
+            language: Some("en".to_owned()),
+            extraction_method: Some("synthetic_fixture".to_owned()),
+            extraction_version: Some("1".to_owned()),
+            artifact_reference: Some("artifact:synthetic-article".to_owned()),
+            locators: json!({"section":"full"}),
+        },
+        "append-synthetic-article",
+    )
+    .await
+    .unwrap();
+    assert_eq!(article_content.version, 1);
+    assert_eq!(article_content.size_bytes, article_text.len() as i64);
+    assert_eq!(article_content.content_hash.len(), 64);
+    let first_window = db::get_source_content_window(&pool, article.object_id, None, 0, 200)
+        .await
+        .unwrap();
+    assert_eq!(first_window.text.chars().count(), 200);
+    assert_eq!(first_window.next_offset, Some(200));
+    let final_offset = article_text.chars().count() as i64 - 21;
+    let final_window =
+        db::get_source_content_window(&pool, article.object_id, Some(1), final_offset, 100)
+            .await
+            .unwrap();
+    assert!(final_window.text.contains("final-citation-marker"));
+    assert_eq!(final_window.next_offset, None);
+    let article_search = db::list_sources(
+        &pool,
+        SourceListFilter {
+            query: Some("neutrino".to_owned()),
+            source_kind: Some("article".to_owned()),
+            cursor: None,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(article_search.len(), 1);
+    assert!(
+        article_search[0]
+            .excerpt
+            .as_deref()
+            .unwrap()
+            .contains("Neutrino")
+    );
+    let article_v2 = db::append_source_content(
+        &pool,
+        &actor(),
+        article.object_id,
+        NewSourceContent {
+            expected_revision: 2,
+            content_kind: "article_text".to_owned(),
+            normalized_text:
+                "Neutrino demand is revised in this second immutable synthetic version.".to_owned(),
+            language: Some("en".to_owned()),
+            extraction_method: Some("synthetic_fixture".to_owned()),
+            extraction_version: Some("2".to_owned()),
+            artifact_reference: None,
+            locators: json!({"page":1}),
+        },
+        "append-synthetic-article-v2",
+    )
+    .await
+    .unwrap();
+    assert_eq!(article_v2.version, 2);
+    assert_eq!(
+        db::list_source_contents(&pool, article.object_id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        sqlx::query("UPDATE source_contents SET normalized_text='mutated' WHERE id=$1")
+            .bind(article_content.id)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+
+    let transcript = db::create_source(
+        &pool,
+        &actor(),
+        NewSource {
+            title: "Synthetic capital allocation podcast".to_owned(),
+            description:
+                "A synthetic podcast fixture discussing a fictional capital allocation decision."
+                    .to_owned(),
+            provenance: json!({"source_type":"human"}),
+            source_kind: "podcast".to_owned(),
+            canonical_uri: Some("https://example.test/podcast/1".to_owned()),
+            byline: Some("Fixture Host".to_owned()),
+            publisher: Some("Fixture Audio".to_owned()),
+            published_at: None,
+            accessed_at: None,
+            language: Some("en".to_owned()),
+            media_type: Some("audio/mpeg".to_owned()),
+            artifact_reference: Some("artifact:synthetic-audio".to_owned()),
+            content_hash: Some("b".repeat(64)),
+        },
+        "create-synthetic-transcript",
+    )
+    .await
+    .unwrap();
+    db::append_source_content(
+        &pool,
+        &actor(),
+        transcript.object_id,
+        NewSourceContent {
+            expected_revision: 1,
+            content_kind: "transcript".to_owned(),
+            normalized_text: "At twelve seconds the fictional host explains the evidence."
+                .to_owned(),
+            language: Some("en".to_owned()),
+            extraction_method: Some("synthetic_fixture".to_owned()),
+            extraction_version: Some("1".to_owned()),
+            artifact_reference: None,
+            locators: json!({"start_seconds":12,"end_seconds":18}),
+        },
+        "append-synthetic-transcript",
+    )
+    .await
+    .unwrap();
+    let citation = db::create_connection(
+        &pool,
+        &actor(),
+        NewConnection {
+            source_object_id: first.id,
+            kind: "derived_from".to_owned(),
+            target_object_id: article.object_id,
+            description: "This synthetic Memory is derived from the synthetic demand Source."
+                .to_owned(),
+            provenance: json!({"source_type":"human"}),
+            protected: false,
+        },
+        "cite-synthetic-source",
+    )
+    .await
+    .unwrap();
+    assert_eq!(citation.target_object_id, article.object_id);
+    assert!(
+        db::list_events(&pool, article.object_id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.action == "content_version_created")
+    );
+
+    let note_actor = ActorContext {
+        actor_type: "centaur_agent",
+        actor_id: "researcher-agent".to_owned(),
+        centaur_thread_key: Some("slack:T_PUBLIC:C_RESEARCH:thread-1".to_owned()),
+        centaur_execution_id: Some("execution-note-1".to_owned()),
+        is_agent: true,
+    };
+    let note=db::create_note(&pool,&note_actor,NewNote {
+        title:"Synthetic semiconductor research note".to_owned(),
+        description:"A reusable research note summarizing the synthetic semiconductor evidence.".to_owned(),
+        provenance:json!({"source_type":"human"}),
+        content:"# Thesis\nThe synthetic evidence supports a fictional demand thesis.\n\n- Verify margins\n- Review capacity".to_owned(),
+        content_format:"markdown".to_owned(),
+    },"agent-note-retry-1").await.unwrap();
+    let retry = db::create_note(
+        &pool,
+        &note_actor,
+        NewNote {
+            title: "Ignored retry".to_owned(),
+            description: "This retry payload must not replace the original Note.".to_owned(),
+            provenance: json!({}),
+            content: "Ignored".to_owned(),
+            content_format: "plain_text".to_owned(),
+        },
+        "agent-note-retry-1",
+    )
+    .await
+    .unwrap();
+    assert_eq!(note.object_id, retry.object_id);
+    assert_eq!(retry.content_format, "markdown");
+    let note_search = db::list_notes(
+        &pool,
+        NoteListFilter {
+            query: Some("fictional demand".to_owned()),
+            cursor: None,
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(note_search.len(), 1);
+    assert_eq!(note_search[0].object_id, note.object_id);
+    let note_events = db::list_events(&pool, note.object_id).await.unwrap();
+    assert_eq!(note_events.len(), 1);
+    assert_eq!(note_events[0].actor_type, "centaur_agent");
+    assert_eq!(note_events[0].actor_id, "researcher-agent");
+    assert_eq!(
+        note_events[0].centaur_thread_key.as_deref(),
+        Some("slack:T_PUBLIC:C_RESEARCH:thread-1")
+    );
+
     let table_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs','curator_run_changes','object_embeddings','object_embedding_jobs','evals','eval_trace_entries','eval_objects')",
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','sources','source_contents','notes','object_events','chat_messages','curator_runs','curator_run_changes','object_embeddings','object_embedding_jobs','evals','eval_trace_entries','eval_objects')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(table_count, 17);
+    assert_eq!(table_count, 20);
     let blank_descriptions: i64 =
         sqlx::query_scalar("SELECT count(*) FROM objects WHERE btrim(description) = ''")
             .fetch_one(&pool)
@@ -725,6 +956,25 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert!(
         delete_subtype_tx.commit().await.is_err(),
         "a canonical subtype must not be removable while its Object remains"
+    );
+
+    assert!(
+        sqlx::query("DELETE FROM sources WHERE object_id=$1")
+            .bind(article.object_id)
+            .execute(&pool)
+            .await
+            .is_err(),
+        "a Source subtype with immutable content must not be removable"
+    );
+    let mut delete_note_tx = pool.begin().await.unwrap();
+    sqlx::query("DELETE FROM notes WHERE object_id=$1")
+        .bind(note.object_id)
+        .execute(&mut *delete_note_tx)
+        .await
+        .unwrap();
+    assert!(
+        delete_note_tx.commit().await.is_err(),
+        "a Note subtype must not be removable while its Object remains"
     );
 
     let timestamp = |value: &str| OffsetDateTime::parse(value, &Rfc3339).unwrap();
@@ -1037,6 +1287,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 primary_event: true,
                 happened_at: timestamp("2026-05-27T00:00:02Z"),
             }),
+            source: None,
         }],
         update_objects: vec![],
         create_connections: vec![],
@@ -1074,6 +1325,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 primary_event: true,
                 happened_at: timestamp("2026-05-27T00:00:02Z"),
             }),
+            source: None,
         }],
         update_objects: vec![],
         create_connections: vec![CuratorConnection {
@@ -1206,6 +1458,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 primary_event: true,
                 happened_at: timestamp("2026-05-28T00:00:01Z"),
             }),
+            source: None,
         }],
         update_objects: vec![centaur_context::curator::UpdateObject {
             object_id,
@@ -1387,6 +1640,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                     primary_event: true,
                     happened_at: timestamp("2026-05-29T00:00:02Z"),
                 }),
+                source: None,
             },
             CuratorObject {
                 client_id: "dm-task".to_owned(),
@@ -1404,6 +1658,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                     due_at: Some(timestamp("2026-05-30T00:00:00Z")),
                 }),
                 memory: None,
+                source: None,
             },
         ],
         update_objects: vec![],
@@ -1657,6 +1912,150 @@ async fn canonical_ontology_and_revision_conflicts() {
         .unwrap();
     assert_eq!(search_without_chat.status(), StatusCode::OK);
 
+    let source_search = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/search/sources?q=neutrino&limit=1")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header("x-centaur-thread-key", "any:valid:thread:key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(source_search.status(), StatusCode::OK);
+    let source_search_json: serde_json::Value = serde_json::from_slice(
+        &source_search
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        source_search_json["data"]["items"][0]["object_id"],
+        article.object_id.to_string()
+    );
+    assert!(
+        source_search_json["data"]["items"][0]
+            .get("normalized_text")
+            .is_none()
+    );
+
+    let source_window = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sources/{}/content?version=1&offset=0&limit=80",
+                    article.object_id
+                ))
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header("x-centaur-thread-key", "any:valid:thread:key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(source_window.status(), StatusCode::OK);
+    let source_window_json: serde_json::Value = serde_json::from_slice(
+        &source_window
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(
+        source_window_json["data"]["text"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        80
+    );
+    assert_eq!(source_window_json["data"]["next_offset"], 80);
+
+    let missing_version = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/sources/{}/content?version=99",
+                    article.object_id
+                ))
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header("x-centaur-thread-key", "any:valid:thread:key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_version.status(), StatusCode::NOT_FOUND);
+
+    let note_search = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/search/notes?q=fictional")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header("x-centaur-thread-key", "any:valid:thread:key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(note_search.status(), StatusCode::OK);
+
+    let write_router = note_write_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        "w".repeat(32),
+    );
+    let write_body=json!({"title":"Authorized HTTP Note","description":"A bounded Note created through the dedicated agent write surface.","content":"# Synthetic HTTP evidence\nNo copyrighted content.","content_format":"markdown","provenance":{"source_type":"human"}}).to_string();
+    let mut created_note_id = None;
+    for _ in 0..2 {
+        let response = write_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/notes")
+                    .header("authorization", format!("Bearer {}", "w".repeat(32)))
+                    .header("x-centaur-principal-id", "researcher-http")
+                    .header("x-centaur-thread-key", "slack:T:C:http-thread")
+                    .header("x-centaur-execution-id", "http-execution")
+                    .header("idempotency-key", "http-note-retry")
+                    .header("content-type", "application/json")
+                    .body(Body::from(write_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let json: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let id = json["data"]["object_id"].as_str().unwrap().to_owned();
+        if let Some(existing) = &created_note_id {
+            assert_eq!(existing, &id);
+        } else {
+            created_note_id = Some(id);
+        }
+    }
+    let http_note_id = uuid::Uuid::parse_str(created_note_id.as_deref().unwrap()).unwrap();
+    assert_eq!(db::list_events(&pool, http_note_id).await.unwrap().len(), 1);
+
     let dm_object = db::get_object(&pool, dm.chat_object_id).await.unwrap();
     db::update_object(
         &pool,
@@ -1689,7 +2088,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(inactive.status(), StatusCode::BAD_REQUEST);
 
     let baseline_schema = schema::inspect_schema(&pool).await.unwrap();
-    assert_eq!(baseline_schema.tables.len(), 17);
+    assert_eq!(baseline_schema.tables.len(), 20);
     let mut application_tables = sqlx::query_scalar::<_, String>(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('_sqlx_migrations', 'schema_visualizer_tables') ORDER BY tablename",
     )
@@ -1712,7 +2111,9 @@ async fn canonical_ontology_and_revision_conflicts() {
             .find(|table| table.name == "objects")
             .is_some_and(|table| table.classification == "canonical")
     );
-    for subtype in ["tasks", "chats", "users", "entities", "memories"] {
+    for subtype in [
+        "tasks", "chats", "users", "entities", "memories", "sources", "notes",
+    ] {
         assert!(
             baseline_schema
                 .tables

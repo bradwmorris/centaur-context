@@ -1,8 +1,8 @@
 [centaur_context]
 version = "0.2.0"
 api_version = "v1"
-ontology_version = "v1"
-database_schema_version = 8
+ontology_version = "v2"
+database_schema_version = 10
 tool_version = "0.2.0"
 
 [runtime]
@@ -18,5 +18,6 @@ notes = "Centaur must provide iron-proxy principal/thread headers and the docume
 
 [policy]
 public_ingress = false
-interactive_agent_writes = false
+interactive_agent_writes = true
+interactive_agent_write_scope = "note_create_only_with_separate_credential"
 automatic_external_model_access = false

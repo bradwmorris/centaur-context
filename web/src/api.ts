@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Task, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -138,5 +138,40 @@ export const api = {
   },
   updateTask(id: string, body: Record<string, unknown>) {
     return request<Task>(`/api/v1/tasks/${id}`, write("PATCH", body));
+  },
+  sources(query = "") {
+    const params = new URLSearchParams({ limit: "100" });
+    if (query.trim()) params.set("q", query.trim());
+    return request<SourcePage>(`/api/v1/sources?${params}`);
+  },
+  source(id: string) {
+    return request<Source>(`/api/v1/sources/${id}`);
+  },
+  createSource(body: Record<string, unknown>) {
+    return request<Source>("/api/v1/sources", write("POST", body));
+  },
+  updateSource(id: string, body: Record<string, unknown>) {
+    return request<Source>(`/api/v1/sources/${id}`, write("PATCH", body));
+  },
+  sourceContents(id: string) {
+    return request<SourceContentVersion[]>(`/api/v1/sources/${id}/contents`);
+  },
+  createSourceContent(id: string, body: Record<string, unknown>) {
+    return request<SourceContentVersion>(`/api/v1/sources/${id}/contents`, write("POST", body));
+  },
+  sourceContent(id: string, version: number, offset = 0, limit = 8_000) {
+    const params = new URLSearchParams({ version: String(version), offset: String(offset), limit: String(limit) });
+    return request<SourceContentWindow>(`/api/v1/sources/${id}/content?${params}`);
+  },
+  notes(query = "") {
+    const params = new URLSearchParams({ limit: "100" });
+    if (query.trim()) params.set("q", query.trim());
+    return request<NotePage>(`/api/v1/notes?${params}`);
+  },
+  note(id: string) {
+    return request<Note>(`/api/v1/notes/${id}`);
+  },
+  createNote(body: Record<string, unknown>) {
+    return request<Note>("/api/v1/notes", write("POST", body));
   },
 };

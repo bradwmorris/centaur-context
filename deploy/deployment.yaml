@@ -34,6 +34,8 @@ spec:
               containerPort: 8082
             - name: curator
               containerPort: 8083
+            - name: note-write
+              containerPort: 8084
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -45,6 +47,11 @@ spec:
                 secretKeyRef:
                   name: centaur-context-env
                   key: AGENT_API_TOKEN
+            - name: NOTE_WRITE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: NOTE_WRITE_API_TOKEN
             - name: CHAT_INGEST_API_TOKEN
               valueFrom:
                 secretKeyRef:

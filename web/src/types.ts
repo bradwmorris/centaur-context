@@ -1,4 +1,4 @@
-export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory";
+export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note";
 export type TaskStatus = "todo" | "doing" | "blocked" | "review" | "done";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
 export type SchemaViewMode = "map" | "structure" | "rows";
@@ -103,6 +103,89 @@ export interface Task {
   due_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type SourceKind = "article" | "paper" | "podcast" | "video" | "book" | "report" | "document" | "dataset" | "web_page" | "other";
+
+export interface Source {
+  object_id: string;
+  title: string;
+  description: string;
+  lifecycle: "active" | "archived";
+  revision: number;
+  provenance: Record<string, unknown>;
+  protected: boolean;
+  source_kind: SourceKind;
+  canonical_uri: string | null;
+  byline: string | null;
+  publisher: string | null;
+  published_at: string | null;
+  accessed_at: string | null;
+  language: string | null;
+  media_type: string | null;
+  artifact_reference: string | null;
+  content_hash: string | null;
+  current_content_id: string | null;
+  created_at: string;
+  updated_at: string;
+  excerpt?: string | null;
+}
+
+export interface SourcePage {
+  items: Source[];
+  next_cursor: string | null;
+}
+
+export interface Note {
+  object_id: string;
+  title: string;
+  description: string;
+  content: string;
+  content_format: "plain_text" | "markdown";
+  lifecycle: "active" | "archived";
+  revision: number;
+  provenance: Record<string, unknown>;
+  protected: boolean;
+  created_at: string;
+  updated_at: string;
+  excerpt?: string | null;
+}
+
+export interface NoteSummary {
+  object_id: string;
+  title: string;
+  description: string;
+  lifecycle: "active" | "archived";
+  revision: number;
+  content_format: "plain_text" | "markdown";
+  excerpt: string;
+  updated_at: string;
+}
+
+export interface NotePage {
+  items: NoteSummary[];
+  next_cursor: string | null;
+}
+
+export interface SourceContentVersion {
+  id: string;
+  source_object_id: string;
+  version: number;
+  content_kind: string;
+  language: string | null;
+  extraction_method: string | null;
+  extraction_version: string | null;
+  content_hash: string;
+  size_bytes: number;
+  artifact_reference: string | null;
+  locators: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface SourceContentWindow extends SourceContentVersion {
+  text: string;
+  offset: number;
+  next_offset: number | null;
 }
 
 export interface ObjectEvent {

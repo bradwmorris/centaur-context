@@ -21,12 +21,13 @@ use uuid::Uuid;
 
 use crate::{
     db::{
-        self, ConnectionChanges, DbError, NewConnection, NewObject, NewTask, ObjectChanges,
-        TaskChanges,
+        self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
+        NewSourceContent, NewTask, ObjectChanges, SourceChanges, TaskChanges,
     },
     domain::{
-        ActorContext, CONNECTION_KINDS, OBJECT_KINDS, TASK_PRIORITIES, TASK_STATUSES,
-        ValidationError, allowed, optional_text, provenance, required_text,
+        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, OBJECT_KINDS, SOURCE_CONTENT_KINDS,
+        SOURCE_KINDS, TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_text,
+        provenance, required_text,
     },
     embeddings::EmbeddingClient,
     schema, search,
@@ -63,8 +64,28 @@ pub fn agent_router(state: AppState, token: String) -> Router {
             Router::new()
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
-                .route("/objects/{id}", get(read_context_object)),
+                .route("/objects/{id}", get(read_context_object))
+                .route("/search/sources", get(search_sources))
+                .route("/sources/{id}", get(read_source))
+                .route("/sources/{id}/content", get(read_source_content))
+                .route("/search/notes", get(search_notes))
+                .route("/notes/{id}", get(read_note)),
         )
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            AgentAuth {
+                token: Arc::new(token),
+            },
+            agent_auth,
+        ))
+        .layer(TraceLayer::new_for_http())
+}
+
+pub fn note_write_router(state: AppState, token: String) -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready))
+        .nest("/api/v1", Router::new().route("/notes", post(create_note)))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             AgentAuth {
@@ -86,6 +107,15 @@ fn service_router(state: AppState) -> Router {
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/object-visuals", get(list_object_visuals))
                 .route("/objects/{id}", get(read_object).patch(update_object))
+                .route("/sources", get(list_sources).post(create_source))
+                .route("/sources/{id}", get(read_source).patch(update_source))
+                .route(
+                    "/sources/{id}/contents",
+                    get(list_source_contents).post(create_source_content),
+                )
+                .route("/sources/{id}/content", get(read_source_content))
+                .route("/notes", get(list_notes).post(create_note))
+                .route("/notes/{id}", get(read_note))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
@@ -370,6 +400,458 @@ async fn read_context_object(
 }
 
 #[derive(Debug, Deserialize)]
+struct SourceListQuery {
+    q: Option<String>,
+    source_kind: Option<String>,
+    cursor: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+async fn source_page(state: &AppState, query: SourceListQuery) -> Result<Value, ApiError> {
+    let limit = bounded_limit(query.limit);
+    let mut items = db::list_sources(
+        &state.pool,
+        db::SourceListFilter {
+            query: optional_text(query.q, "q", 1000)?,
+            source_kind: query
+                .source_kind
+                .map(|value| allowed(value, "source_kind", SOURCE_KINDS))
+                .transpose()?,
+            cursor: query.cursor,
+            limit: limit + 1,
+        },
+    )
+    .await?;
+    let next_cursor = if items.len() as i64 > limit {
+        items.pop();
+        items.last().map(|item| item.source.object_id)
+    } else {
+        None
+    };
+    Ok(json!({"items":items,"next_cursor":next_cursor}))
+}
+
+async fn list_sources(
+    State(state): State<AppState>,
+    Query(query): Query<SourceListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":source_page(&state,query).await?})))
+}
+
+async fn search_sources(
+    State(state): State<AppState>,
+    Query(mut query): Query<SourceListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    query.q = Some(required_text(query.q.unwrap_or_default(), "q", 1000)?);
+    Ok(Json(json!({"data":source_page(&state,query).await?})))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSourceRequest {
+    title: String,
+    description: String,
+    source_kind: String,
+    canonical_uri: Option<String>,
+    byline: Option<String>,
+    publisher: Option<String>,
+    published_at: Option<String>,
+    accessed_at: Option<String>,
+    language: Option<String>,
+    media_type: Option<String>,
+    artifact_reference: Option<String>,
+    content_hash: Option<String>,
+    provenance: Option<Value>,
+}
+
+fn source_uri(value: Option<String>) -> Result<Option<String>, ApiError> {
+    let value = optional_text(value, "canonical_uri", 2000)?;
+    if value
+        .as_ref()
+        .is_some_and(|uri| !(uri.starts_with("https://") || uri.starts_with("http://")))
+    {
+        return Err(ApiError::BadRequest(
+            "canonical_uri must use HTTP or HTTPS".to_owned(),
+        ));
+    }
+    Ok(value)
+}
+
+fn sha256(value: Option<String>, field: &'static str) -> Result<Option<String>, ApiError> {
+    let value = optional_text(value, field, 64)?;
+    if value.as_ref().is_some_and(|hash| {
+        hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(ApiError::BadRequest(format!(
+            "{field} must be a lowercase SHA-256 hex digest"
+        )));
+    }
+    Ok(value)
+}
+
+async fn create_source(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateSourceRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let source = db::create_source(
+        &state.pool,
+        &actor,
+        NewSource {
+            description: crate::domain::object_description(&title, input.description)?,
+            title,
+            provenance: provenance(input.provenance)?,
+            source_kind: allowed(input.source_kind, "source_kind", SOURCE_KINDS)?,
+            canonical_uri: source_uri(input.canonical_uri)?,
+            byline: optional_text(input.byline, "byline", 500)?,
+            publisher: optional_text(input.publisher, "publisher", 300)?,
+            published_at: parse_due_at(input.published_at)?,
+            accessed_at: parse_due_at(input.accessed_at)?,
+            language: optional_text(input.language, "language", 35)?,
+            media_type: optional_text(input.media_type, "media_type", 255)?,
+            artifact_reference: optional_text(
+                input.artifact_reference,
+                "artifact_reference",
+                1000,
+            )?,
+            content_hash: sha256(input.content_hash, "content_hash")?,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":source}))))
+}
+
+async fn read_source(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":db::get_source(&state.pool,id).await?})))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSourceRequest {
+    expected_revision: i64,
+    title: Option<String>,
+    description: Option<String>,
+    source_kind: Option<String>,
+    canonical_uri: Option<String>,
+    byline: Option<String>,
+    publisher: Option<String>,
+    published_at: Option<String>,
+    accessed_at: Option<String>,
+    language: Option<String>,
+    media_type: Option<String>,
+    artifact_reference: Option<String>,
+    content_hash: Option<String>,
+    #[serde(default)]
+    clear_canonical_uri: bool,
+    #[serde(default)]
+    clear_byline: bool,
+    #[serde(default)]
+    clear_publisher: bool,
+    #[serde(default)]
+    clear_published_at: bool,
+    #[serde(default)]
+    clear_accessed_at: bool,
+    #[serde(default)]
+    clear_language: bool,
+    #[serde(default)]
+    clear_media_type: bool,
+    #[serde(default)]
+    clear_artifact_reference: bool,
+    #[serde(default)]
+    clear_content_hash: bool,
+    provenance: Option<Value>,
+    protected: Option<bool>,
+    #[serde(default)]
+    archive: bool,
+}
+
+fn nullable_change<T>(
+    value: Option<T>,
+    clear: bool,
+    field: &'static str,
+) -> Result<Option<Option<T>>, ApiError> {
+    if clear && value.is_some() {
+        return Err(ApiError::BadRequest(format!(
+            "clear_{field} cannot be combined with {field}"
+        )));
+    }
+    Ok(if clear { Some(None) } else { value.map(Some) })
+}
+
+async fn update_source(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<UpdateSourceRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let key = idempotency_key(&headers, actor.is_agent, &actor)?;
+    let source = db::update_source(
+        &state.pool,
+        &actor,
+        id,
+        input.expected_revision,
+        SourceChanges {
+            title: input
+                .title
+                .map(|v| required_text(v, "title", 300))
+                .transpose()?,
+            description: input
+                .description
+                .map(|v| required_text(v, "description", 1000))
+                .transpose()?,
+            provenance: input.provenance.map(|v| provenance(Some(v))).transpose()?,
+            protected: input.protected,
+            archive: input.archive,
+            source_kind: input
+                .source_kind
+                .map(|v| allowed(v, "source_kind", SOURCE_KINDS))
+                .transpose()?,
+            canonical_uri: nullable_change(
+                source_uri(input.canonical_uri)?,
+                input.clear_canonical_uri,
+                "canonical_uri",
+            )?,
+            byline: nullable_change(
+                optional_text(input.byline, "byline", 500)?,
+                input.clear_byline,
+                "byline",
+            )?,
+            publisher: nullable_change(
+                optional_text(input.publisher, "publisher", 300)?,
+                input.clear_publisher,
+                "publisher",
+            )?,
+            published_at: nullable_change(
+                input
+                    .published_at
+                    .map(|v| parse_due_at(Some(v)))
+                    .transpose()?
+                    .flatten(),
+                input.clear_published_at,
+                "published_at",
+            )?,
+            accessed_at: nullable_change(
+                input
+                    .accessed_at
+                    .map(|v| parse_due_at(Some(v)))
+                    .transpose()?
+                    .flatten(),
+                input.clear_accessed_at,
+                "accessed_at",
+            )?,
+            language: nullable_change(
+                optional_text(input.language, "language", 35)?,
+                input.clear_language,
+                "language",
+            )?,
+            media_type: nullable_change(
+                optional_text(input.media_type, "media_type", 255)?,
+                input.clear_media_type,
+                "media_type",
+            )?,
+            artifact_reference: nullable_change(
+                optional_text(input.artifact_reference, "artifact_reference", 1000)?,
+                input.clear_artifact_reference,
+                "artifact_reference",
+            )?,
+            content_hash: nullable_change(
+                sha256(input.content_hash, "content_hash")?,
+                input.clear_content_hash,
+                "content_hash",
+            )?,
+        },
+        key.as_deref(),
+    )
+    .await?;
+    Ok(Json(json!({"data":source})))
+}
+
+async fn list_source_contents(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::list_source_contents(&state.pool,id).await?}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceContentQuery {
+    version: Option<i64>,
+    offset: Option<i64>,
+    limit: Option<i64>,
+}
+
+async fn read_source_content(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<SourceContentQuery>,
+) -> Result<Json<Value>, ApiError> {
+    if query.version.is_some_and(|v| v < 1) {
+        return Err(ApiError::BadRequest("version must be positive".into()));
+    }
+    let offset = query.offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(ApiError::BadRequest("offset must not be negative".into()));
+    }
+    let limit = query.limit.unwrap_or(8000);
+    if !(1..=20_000).contains(&limit) {
+        return Err(ApiError::BadRequest(
+            "limit must be between 1 and 20000".into(),
+        ));
+    }
+    Ok(Json(
+        json!({"data":db::get_source_content_window(&state.pool,id,query.version,offset,limit).await?}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSourceContentRequest {
+    expected_revision: i64,
+    content_kind: String,
+    normalized_text: String,
+    language: Option<String>,
+    extraction_method: Option<String>,
+    extraction_version: Option<String>,
+    artifact_reference: Option<String>,
+    locators: Option<Value>,
+}
+
+async fn create_source_content(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<CreateSourceContentRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let locators = input.locators.unwrap_or_else(|| json!({}));
+    if !locators.is_object() {
+        return Err(ApiError::BadRequest(
+            "locators must be a JSON object".into(),
+        ));
+    }
+    let content = db::append_source_content(
+        &state.pool,
+        &actor,
+        id,
+        NewSourceContent {
+            expected_revision: input.expected_revision,
+            content_kind: allowed(input.content_kind, "content_kind", SOURCE_CONTENT_KINDS)?,
+            normalized_text: required_text(input.normalized_text, "normalized_text", 10_000_000)?,
+            language: optional_text(input.language, "language", 35)?,
+            extraction_method: optional_text(input.extraction_method, "extraction_method", 200)?,
+            extraction_version: optional_text(input.extraction_version, "extraction_version", 100)?,
+            artifact_reference: optional_text(
+                input.artifact_reference,
+                "artifact_reference",
+                1000,
+            )?,
+            locators,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":content}))))
+}
+
+#[derive(Debug, Deserialize)]
+struct NoteListQuery {
+    q: Option<String>,
+    cursor: Option<Uuid>,
+    limit: Option<i64>,
+}
+
+async fn note_page(state: &AppState, query: NoteListQuery) -> Result<Value, ApiError> {
+    let limit = bounded_limit(query.limit);
+    let mut items = db::list_notes(
+        &state.pool,
+        db::NoteListFilter {
+            query: optional_text(query.q, "q", 1000)?,
+            cursor: query.cursor,
+            limit: limit + 1,
+        },
+    )
+    .await?;
+    let next_cursor = if items.len() as i64 > limit {
+        items.pop();
+        items.last().map(|item| item.object_id)
+    } else {
+        None
+    };
+    Ok(json!({"items":items,"next_cursor":next_cursor}))
+}
+
+async fn list_notes(
+    State(state): State<AppState>,
+    Query(query): Query<NoteListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":note_page(&state,query).await?})))
+}
+
+async fn search_notes(
+    State(state): State<AppState>,
+    Query(mut query): Query<NoteListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    query.q = Some(required_text(query.q.unwrap_or_default(), "q", 1000)?);
+    Ok(Json(json!({"data":note_page(&state,query).await?})))
+}
+
+async fn read_note(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":db::get_note(&state.pool,id).await?})))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateNoteRequest {
+    title: String,
+    description: String,
+    content: String,
+    #[serde(default = "default_note_format")]
+    content_format: String,
+    provenance: Option<Value>,
+}
+
+fn default_note_format() -> String {
+    "markdown".to_owned()
+}
+
+async fn create_note(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateNoteRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let note = db::create_note(
+        &state.pool,
+        &actor,
+        NewNote {
+            description: crate::domain::object_description(&title, input.description)?,
+            title,
+            provenance: provenance(input.provenance)?,
+            content: required_text(input.content, "content", 100_000)?,
+            content_format: allowed(input.content_format, "content_format", NOTE_CONTENT_FORMATS)?,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":note}))))
+}
+
+#[derive(Debug, Deserialize)]
 struct ObjectListQuery {
     q: Option<String>,
     kind: Option<String>,
@@ -419,7 +901,7 @@ async fn create_object(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let kind = allowed(input.kind, "kind", OBJECT_KINDS)?;
-    if matches!(kind.as_str(), "task" | "user") {
+    if matches!(kind.as_str(), "task" | "user" | "source" | "note") {
         return Err(ApiError::BadRequest(format!(
             "use the typed endpoint to create a {kind}"
         )));

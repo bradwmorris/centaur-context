@@ -186,7 +186,7 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
     Ok(value)
 }
 
-pub const OBJECT_KINDS: &[&str] = &["task", "chat", "user", "entity", "memory"];
+pub const OBJECT_KINDS: &[&str] = &["task", "chat", "user", "entity", "memory", "source", "note"];
 pub const CONNECTION_KINDS: &[&str] = &[
     "involves",
     "about",
@@ -197,6 +197,19 @@ pub const CONNECTION_KINDS: &[&str] = &[
 pub const TASK_STATUSES: &[&str] = &["todo", "doing", "blocked", "review", "done"];
 pub const TASK_PRIORITIES: &[&str] = &["low", "medium", "high"];
 pub const USER_KINDS: &[&str] = &["human", "agent"];
+pub const SOURCE_KINDS: &[&str] = &[
+    "article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page",
+    "other",
+];
+pub const SOURCE_CONTENT_KINDS: &[&str] = &[
+    "article_text",
+    "transcript",
+    "paper_text",
+    "document_text",
+    "dataset_description",
+    "other",
+];
+pub const NOTE_CONTENT_FORMATS: &[&str] = &["plain_text", "markdown"];
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProvenanceInput {

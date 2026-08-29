@@ -62,10 +62,10 @@ CREATE INDEX tasks_list_idx ON tasks (status, agent_eligible, updated_at DESC, o
 
 CREATE TABLE object_events (
     id uuid PRIMARY KEY,
-    entity_type text NOT NULL CHECK (entity_type IN ('object', 'connection', 'task')),
+    entity_type text NOT NULL CHECK (entity_type IN ('object', 'connection', 'task', 'source_content')),
     entity_id uuid NOT NULL,
     object_id uuid NOT NULL REFERENCES objects(id) ON DELETE RESTRICT,
-    action text NOT NULL CHECK (action IN ('created', 'updated', 'archived', 'connected', 'task_status_changed')),
+    action text NOT NULL CHECK (action IN ('created', 'updated', 'archived', 'connected', 'task_status_changed', 'content_version_created')),
     actor_type text NOT NULL CHECK (actor_type IN ('human', 'centaur_agent', 'system')),
     actor_id text NOT NULL CHECK (char_length(btrim(actor_id)) > 0),
     centaur_thread_key text,

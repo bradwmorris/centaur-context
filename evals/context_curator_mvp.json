@@ -22,6 +22,96 @@
       }
     },
     {
+      "name": "source evidence remains distinct from its derived memory",
+      "expected_valid": true,
+      "plan": {
+        "create_objects": [
+          {
+            "client_id": "memory-source-insight",
+            "kind": "memory",
+            "title": "Synthetic demand signal identified",
+            "description": "The research review identified a synthetic demand signal in the supplied fixture.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000017"],
+            "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+          },
+          {
+            "client_id": "source-synthetic-report",
+            "kind": "source",
+            "title": "Synthetic demand research report",
+            "description": "A synthetic report supplied explicitly as evidence for the demand research review.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000017"],
+            "source": {
+              "source_kind": "report",
+              "canonical_uri": "https://example.test/synthetic-report",
+              "byline": "Fixture Research Team",
+              "publisher": "Fixture Research",
+              "published_at": null,
+              "accessed_at": null,
+              "language": "en",
+              "media_type": "text/plain",
+              "artifact_reference": "artifact:synthetic-report",
+              "content_hash": null,
+              "content": {
+                "content_kind": "document_text",
+                "normalized_text": "This synthetic report states that fictional demand increased during the test period.",
+                "language": "en",
+                "extraction_method": "explicit_message_evidence",
+                "extraction_version": "1",
+                "artifact_reference": null,
+                "locators": {"page": 1}
+              }
+            }
+          }
+        ],
+        "create_connections": [
+          {
+            "source": {"client_id": "memory-source-insight"},
+            "kind": "derived_from",
+            "target": {"object_id": "00000000-0000-0000-0000-000000000021"},
+            "description": "This Memory was derived from the source research interaction.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000017"]
+          },
+          {
+            "source": {"client_id": "source-synthetic-report"},
+            "kind": "derived_from",
+            "target": {"object_id": "00000000-0000-0000-0000-000000000021"},
+            "description": "This Source was captured from explicit evidence in the research interaction.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000017"]
+          },
+          {
+            "source": {"client_id": "memory-source-insight"},
+            "kind": "derived_from",
+            "target": {"client_id": "source-synthetic-report"},
+            "description": "This synthetic research insight is derived from the synthetic report.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000017"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "source without typed metadata is rejected",
+      "expected_valid": false,
+      "plan": {
+        "create_objects": [
+          {
+            "client_id": "memory-source-missing",
+            "kind": "memory",
+            "title": "Source capture discussed",
+            "description": "The interaction discussed capturing a research source without supplying its metadata.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000018"],
+            "memory": {"primary_event": true, "happened_at": "2026-08-28T00:00:00Z"}
+          },
+          {
+            "client_id": "source-missing",
+            "kind": "source",
+            "title": "Unspecified research source",
+            "description": "A research source with no typed metadata contract.",
+            "supporting_message_ids": ["00000000-0000-0000-0000-000000000018"]
+          }
+        ]
+      }
+    },
+    {
       "name": "ambiguous unconfirmed task is rejected",
       "expected_valid": false,
       "plan": {

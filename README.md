@@ -59,6 +59,20 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `get-context`
 - `search-objects`
 - `read-object`
+- `search-sources` (bounded metadata and content excerpts)
+- `read-source` (metadata without long-form content)
+- `read-source-content` (a bounded window from one content version)
+- `search-notes` (bounded Note excerpts)
+- `read-note` (one Note and its content)
+- `create-note` (requires the separate `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`)
+
+All reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation never falls back to
+that read token: configure the separately scoped
+`CENTAUR_CONTEXT_NOTE_WRITE_TOKEN` and supply an idempotency key for each
+logical Note creation. The write client defaults to the private Note-write
+service `centaur-context-note-write` on port `8084`; its distinct hostname keeps
+credential substitution unambiguous. Override it with
+`CENTAUR_CONTEXT_NOTE_WRITE_URL` when needed.
 
 ## Status
 

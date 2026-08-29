@@ -16,8 +16,22 @@ An Object may have one matching subtype row:
 | User | A human or agent |
 | Entity | A company, project, product, place, or other named thing |
 | Memory | A simple record of what happened |
+| Source | An article, paper, podcast, video, book, report, document, dataset, or web page used as evidence |
+| Note | Useful human- or agent-authored Markdown or plain text |
 
 The Object is canonical. The subtype stores fields specific to that type.
+
+A Source stores only bounded bibliographic and artifact metadata in its subtype.
+Immutable versions of normalized article text or transcripts live separately in
+`source_contents`; the current version is selected without overwriting older
+evidence. Original binary files remain outside PostgreSQL and are referenced by
+an opaque artifact identifier and integrity hash. Source list and agent APIs
+never return complete long-form text accidentally.
+
+A Note keeps its concise identity and summary in the canonical Object row while
+its bounded Markdown or plain-text body lives in the one-to-one `notes`
+subtype. Authorized agents create Notes only through the dedicated authenticated
+Note-write API; general Context agent access remains read-only.
 
 A User may have provider identities such as Slack. Those identities retain the
 provider/workspace key, display name, and an optional HTTP(S) avatar reference.
@@ -33,6 +47,7 @@ These are not Objects:
 - Embeddings
 - Curator Runs
 - Audit events
+- Source content versions
 
 They support the graph but are not first-class business nodes.
 
@@ -47,7 +62,7 @@ short explanation.
 | `about` | One Object is mainly about another |
 | `related_to` | The Objects have a useful general link |
 | `depends_on` | One Object needs another first |
-| `derived_from` | An Object came from a source Chat |
+| `derived_from` | An Object came from a source Chat or evidentiary Source |
 
 ## Rules
 
@@ -55,6 +70,7 @@ short explanation.
 - Every Object has one primary type.
 - Each subtype row belongs to exactly one Object.
 - Each Curator Run creates exactly one primary Memory.
+- Sources represent evidence; Memories represent events or derived insights.
 - A Task is created only from an explicit instruction or commitment.
 - Updates use revisions so newer changes are not overwritten.
 - Every Curator change points back to its source Chat and messages.

@@ -11,7 +11,7 @@ from .client import _client
 
 app = typer.Typer(
     name="centaur-context",
-    help="Read concise shared context from Centaur Context.",
+    help="Read shared context and create explicitly authorized Notes.",
     no_args_is_help=True,
 )
 
@@ -51,6 +51,91 @@ def search_objects(
 def read_object(id: str = typer.Argument(..., help="Object UUID.")) -> None:
     """Read one shared Object."""
     _print(_client().read_object(id))
+
+
+@app.command("search-sources")
+def search_sources(
+    query: str = typer.Argument(
+        ..., help="Text to find in Source metadata or normalized content."
+    ),
+    limit: int = typer.Option(20, min=1, max=100),
+    cursor: str | None = typer.Option(None, help="Opaque cursor from the prior page."),
+) -> None:
+    """Search Sources and return small attributed excerpts."""
+    _print(_client().search_sources(query, limit=limit, cursor=cursor))
+
+
+@app.command("read-source")
+def read_source(
+    source_id: str = typer.Argument(..., help="Canonical Source Object UUID."),
+) -> None:
+    """Read Source metadata without loading its long-form content."""
+    _print(_client().read_source(source_id))
+
+
+@app.command("read-source-content")
+def read_source_content(
+    source_id: str = typer.Argument(..., help="Canonical Source Object UUID."),
+    version: int | None = typer.Option(
+        None, min=1, help="Content version; omit to read the current version."
+    ),
+    offset: int = typer.Option(0, min=0, help="Zero-based character offset."),
+    limit: int = typer.Option(8_000, min=1, max=20_000),
+) -> None:
+    """Read a bounded text window from one Source content version."""
+    _print(
+        _client().read_source_content(
+            source_id, version=version, offset=offset, limit=limit
+        )
+    )
+
+
+@app.command("search-notes")
+def search_notes(
+    query: str = typer.Argument(..., help="Text to find in Note metadata or content."),
+    limit: int = typer.Option(20, min=1, max=100),
+    cursor: str | None = typer.Option(None, help="Opaque cursor from the prior page."),
+) -> None:
+    """Search Notes and return bounded excerpts."""
+    _print(_client().search_notes(query, limit=limit, cursor=cursor))
+
+
+@app.command("read-note")
+def read_note(
+    note_id: str = typer.Argument(..., help="Canonical Note Object UUID."),
+) -> None:
+    """Read one Note and its content."""
+    _print(_client().read_note(note_id))
+
+
+@app.command("create-note")
+def create_note(
+    title: str = typer.Argument(..., help="Short Note title."),
+    description: str = typer.Option(..., help="Concise description of the Note."),
+    content: str = typer.Option(..., help="Markdown or plain-text Note content."),
+    content_format: str = typer.Option("markdown", help="markdown or plain_text."),
+    provenance_json: str = typer.Option(
+        "{}", help="JSON object describing where the Note came from."
+    ),
+    idempotency_key: str = typer.Option(
+        ..., help="Stable retry key, required for safe Note creation."
+    ),
+) -> None:
+    """Create a Note using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
+    try:
+        provenance = json.loads(provenance_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("provenance_json must be valid JSON") from exc
+    _print(
+        _client().create_note(
+            title,
+            description,
+            content,
+            content_format=content_format,
+            provenance=provenance,
+            idempotency_key=idempotency_key,
+        )
+    )
 
 
 def main() -> None:

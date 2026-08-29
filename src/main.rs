@@ -44,6 +44,9 @@ async fn main() -> Result<()> {
     let agent_listener = TcpListener::bind(config.agent_addr)
         .await
         .context("bind agent listener")?;
+    let note_write_listener = TcpListener::bind(config.note_write_addr)
+        .await
+        .context("bind Note-write listener")?;
     let ingest_listener = TcpListener::bind(config.ingest_addr)
         .await
         .context("bind chat ingestion listener")?;
@@ -57,6 +60,7 @@ async fn main() -> Result<()> {
     };
     let human = api::human_router(state.clone(), config.static_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
+    let note_write = api::note_write_router(state.clone(), config.note_write_api_token);
     let ingest = centaur_context::ingest::router(
         state.clone(),
         config.chat_ingest_api_token,
@@ -117,12 +121,14 @@ async fn main() -> Result<()> {
 
     info!(address = %config.human_addr, "human UI listener ready");
     info!(address = %config.agent_addr, "agent API listener ready");
+    info!(address = %config.note_write_addr, "Note-write API listener ready");
     info!(address = %config.ingest_addr, "chat ingestion listener ready");
     info!(address = %config.curator_addr, "context curator listener ready");
 
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
+        result = axum::serve(note_write_listener, note_write) => result.context("Note-write server stopped")?,
         result = axum::serve(ingest_listener, ingest) => result.context("chat ingestion server stopped")?,
         result = axum::serve(curator_listener, curator) => result.context("context curator server stopped")?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
