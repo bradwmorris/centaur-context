@@ -1,23 +1,26 @@
 # RD: Harden the Context Builder and Embedding Contract
 
-**Status:** `backlog`
+**Status:** `complete`
 **Created:** 2026-08-28
+**Completed:** 2026-08-29
+**GitHub Issue:** #8
 
 ## Execution Plan
 
 **Status:** `complete and ready`
 
-**Basis checked:** `migrations/0005_hybrid_object_search.sql`, `src/api.rs`,
-`src/search.rs`, `src/embeddings.rs`, `src/config.rs`, `src/db.rs`, the standard
-Python agent client and CLI, database/API contract tests, the public shared
-context RD, and Chroma's Foundation, Context-1, Context Rot, agentic-memory, and
-open Foundation API/search implementations.
+**Basis checked:** migrations through `0007_user_visual_context.sql`; the API,
+search, embedding, configuration, and database code; authenticated
+principal/thread client headers; database/API tests; the completed attribution
+RD; the public context RD; and the cited retrieval implementations.
 
 **Missing:** none
 
-1. Make `get-context` conversation-aware by accepting and validating the
-   canonical Chat Object ID, then use that Chat and its participants as
-   deterministic context anchors before text retrieval.
+**Sequence:** Execute the description RD first so embeddings and budgets target
+the description contract.
+
+1. Bind agent `get-context` to a canonical Chat and authenticated Centaur thread,
+   then anchor retrieval on that Chat and its participants.
 2. Extend the context packet with bounded essential subtype state and enforce a
    serialized token/character budget in addition to the ten-Object limit.
 3. Version the canonical Object embedding-input format, distinguish document
@@ -29,15 +32,15 @@ open Foundation API/search implementations.
 
 ## What We Are Doing
 
-- [ ] Require or explicitly resolve the current canonical Chat when an
+- [x] Require or explicitly resolve the current canonical Chat when an
   interactive agent asks Centaur OS to build context.
-- [ ] Return the minimum Task, Chat, User, Entity, or Memory subtype state needed
+- [x] Return the minimum Task, Chat, User, Entity, or Memory subtype state needed
   to make each retrieved Object operationally useful.
-- [ ] Bound the complete context packet by both Object count and serialized
+- [x] Bound the complete context packet by both Object count and serialized
   context size.
-- [ ] Make embedding regeneration deterministic across input-template and model
+- [x] Make embedding regeneration deterministic across input-template and model
   changes, including providers with different query/document input modes.
-- [ ] Remove hard-coded English as a universal public-product assumption while
+- [x] Remove hard-coded English as a universal public-product assumption while
   retaining fast, reliable full-text fallback.
 
 ## Contract
@@ -50,27 +53,29 @@ open Foundation API/search implementations.
   subtype state, rebuilds embeddings whenever their semantic input contract
   changes, supports query/document embedding modes, and performs configured
   full-text search when embeddings are missing or unavailable.
-- **Files:** A narrow migration following `0005_hybrid_object_search.sql` if
-  required; `src/api.rs`, `src/search.rs`, `src/embeddings.rs`, `src/config.rs`,
+- **Files:** `0008_context_builder_embedding_contract.sql`; `src/api.rs`,
+  `src/search.rs`, `src/embeddings.rs`, `src/config.rs`,
   `src/db.rs`; `tools/centaur_os`; deployment/example configuration; targeted
   Rust, database, API, and Python-client tests; this RD.
 - **Agent owns:** Schema/API/client changes, context selection and budgeting,
-  embedding-input versioning, provider-neutral request modes, configurable text
-  search, migrations, tests, and local verification.
+  embedding versioning and modes, configurable search, migrations, tests, and
+  local verification.
 - **Requester owns:** Selecting or paying for an embedding provider/model, approving
   hosted configuration or writes, and approving deployment.
-- **Out of scope:** Adding a general Object `body`, embedding raw Slack
-  transcripts, Object chunking, deploying Chroma, changing the canonical
-  ontology, agentic multi-hop search, adding new external integrations, and
-  changing the Context Curator write contract.
+- **Out of scope:** A general Object `body`, raw-transcript embeddings, chunking,
+  Chroma deployment, ontology or Curator write-contract changes, multi-hop
+  search, and new external integrations.
 
 ## Detailed Requirements
 
 ### 1. Canonical Chat input
 
-- `get-context` accepts a canonical `chat_object_id` in addition to the current
-  message/query. Validate that it resolves to one active Chat subtype and that
-  the authenticated interaction is permitted to use it.
+- Agent `get-context` requires a canonical `chat_object_id` in addition to the
+  current message/query. Validate that it resolves to one active Chat subtype.
+- Bind it to the existing request context: keep the bearer token and
+  `X-Centaur-Principal-Id`, and require the stored provider/workspace/channel/
+  thread identity to match normalized `X-Centaur-Thread-Key`. Reject missing or
+  mismatched bindings; do not add another agent authentication system.
 - Always consider the Chat, its canonical participating Users, and directly
   connected active Objects as deterministic candidates. Do not rely on semantic
   similarity to rediscover the conversation already in progress.
@@ -120,19 +125,35 @@ open Foundation API/search implementations.
 
 ## Checks
 
-- [ ] API/client tests cover valid, missing, inactive, wrong-type, and
-  unauthorized Chat Object IDs and preserve Chat-free `search-objects`.
-- [ ] Database/retrieval tests prove Chat/participant anchoring, bounded subtype
+- [x] API/client tests cover valid, missing, inactive, wrong-type, and
+  thread-mismatched Chat Object IDs, required principal/thread headers, and
+  preserve Chat-free `search-objects`.
+- [x] Database/retrieval tests prove Chat/participant anchoring, bounded subtype
   projections, deterministic ordering, and one-hop graph relevance.
-- [ ] Budget tests cover long descriptions, many Connections, subtype state,
+- [x] Budget tests cover long descriptions, many Connections, subtype state,
   Unicode, omitted-result reporting, and the ten-Object maximum.
-- [ ] Embedding tests prove format/model/dimension/mode changes queue rebuilds,
+- [x] Embedding tests prove format/model/dimension/mode changes queue rebuilds,
   stale vectors cannot match, retries remain safe, and full-text fallback works.
-- [ ] Text-search tests cover the neutral default, one configured language,
+- [x] Text-search tests cover the neutral default, one configured language,
   invalid configuration rejection, names/identifiers, and non-English text.
-- [ ] The standard Python client and CLI remain compatible with the authenticated
+- [x] The standard Python client and CLI remain compatible with the authenticated
   read-only API.
-- [ ] The complete repository verification suite and `git diff --check` pass.
+- [x] The complete repository verification suite and `git diff --check` pass.
+
+## Verification Results
+
+- Rust formatting and Clippy with warnings denied passed.
+- The full Rust suite passed: 17 library tests, 10 API/auth tests, the curator
+  evaluation, the disposable-database contract, and documentation tests.
+- Migration `0008` and the full database contract passed from a fresh
+  PostgreSQL/pgvector database named `centaur_os_test_issue_8`.
+- All 33 web tests, TypeScript type-checking, and the production web build
+  passed.
+- All eight standard Python client tests and Python bytecode compilation passed.
+- `git diff --check` passed.
+- The optional package audit reaches its existing private-assumption check and
+  flags the unchanged tracked file `dev/rd/rd-fork-centaur-os-multi-agent-poc.md`;
+  that baseline file is outside this RD and unchanged from `origin/main`.
 
 ## Approval Boundary
 

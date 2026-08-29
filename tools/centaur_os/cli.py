@@ -23,11 +23,18 @@ def _print(value: Any) -> None:
 @app.command("get-context")
 def get_context(
     query: str = typer.Argument(..., help="What the agent needs context for."),
+    chat_object_id: str = typer.Option(
+        ..., "--chat-object-id", help="Canonical Chat Object for the current thread."
+    ),
     kind: str | None = typer.Option(None, help="Optional Object kind filter."),
     limit: int = typer.Option(10, min=1, max=10),
 ) -> None:
     """Build a concise packet of relevant Objects and their connections."""
-    _print(_client().get_context(query, kind=kind, limit=limit))
+    _print(
+        _client().get_context(
+            query, chat_object_id=chat_object_id, kind=kind, limit=limit
+        )
+    )
 
 
 @app.command("search-objects")

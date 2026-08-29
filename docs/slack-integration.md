@@ -10,7 +10,8 @@ Slack provides the conversation. Centaur OS provides the shared context.
    minutes without a new message.
 4. The Curator writes one Memory and any confirmed Tasks, Entities, or
    Connections.
-5. Before a later reply, Centaur requests a context packet of up to 10 Objects.
+5. Before a later reply, Centaur sends the canonical `chat_object_id` returned
+   by ingestion and requests a bounded context packet of up to 10 Objects.
 
 The Slack agent only reads. The Curator is the only automated writer.
 
@@ -75,12 +76,16 @@ Slack permissions or cause the backend to download avatar files.
 Load `tools/centaur_os` through Centaur's overlay mechanism. The tool supports:
 
 ```text
-centaur-os get-context "<question>" --limit 10
+centaur-os get-context "<question>" --chat-object-id <chat-object-id> --limit 10
 centaur-os search-objects "<query>" --limit 10
 centaur-os read-object <object-id>
 ```
 
 It cannot write or access PostgreSQL.
+
+`get-context` fails closed unless the canonical Chat is active and its stored
+`provider:workspace:channel:thread` identity matches
+`X-Centaur-Thread-Key`. General `search-objects` remains independent of a Chat.
 
 ## Check it
 

@@ -18,6 +18,7 @@ fn state() -> AppState {
             .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
             .unwrap(),
         embeddings: None,
+        text_search_config: centaur_os::config::TextSearchConfig::SIMPLE,
     }
 }
 
@@ -71,7 +72,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.1.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v1");
-    assert_eq!(metadata["database_schema_version"], 7);
+    assert_eq!(metadata["database_schema_version"], 8);
     assert_eq!(metadata["tool_version"], "0.1.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -163,6 +164,26 @@ async fn agent_listener_accepts_scoped_request() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn agent_context_requires_a_canonical_chat_before_database_access() {
+    let response = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context?q=shared")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:T1:C1:thread-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["message"], "chat_object_id is required");
 }
 
 #[tokio::test]

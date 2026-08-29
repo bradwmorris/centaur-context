@@ -163,9 +163,9 @@ There is no default or automatic external model provider. Curator processing is 
 
 ### Search, embeddings, and agent context
 
-Canonical Object title and description are always indexed with PostgreSQL full-text search. If configured, an OpenAI-compatible embedding provider adds pgvector semantic retrieval. Reciprocal-rank fusion combines text and vector candidates; the Context Builder can expand one graph hop and returns at most ten Objects with concise Connection explanations. Plain Object search does not use connection-count popularity; Context Builder uses it only as a small importance signal.
+Canonical Object title and description are always indexed with PostgreSQL full-text search using an allowlisted installation-level configuration and a language-neutral default. If configured, an OpenAI-compatible embedding provider adds pgvector semantic retrieval. Reciprocal-rank fusion combines text and vector candidates; the Context Builder requires an authenticated canonical Chat, anchors its participants and direct Connections, includes compact subtype state, and returns at most ten Objects inside a deterministic serialized-size budget. Plain Object search remains Chat-independent and does not use connection-count popularity; Context Builder uses it only as a small importance signal.
 
-Embeddings and embedding jobs are rebuildable derived search data, never canonical business truth. Object writes queue regeneration. If embeddings are absent, stale, incomplete, or failing, retrieval falls back to full text.
+Embeddings and embedding jobs are rebuildable derived search data, never canonical business truth. Their versioned document format, model, dimensions, and query/document mode participate in stale detection. Object writes queue regeneration. If embeddings are absent, stale, incomplete, or failing, retrieval falls back to full text.
 
 The public standard agent tool lives in `tools/centaur_os` because it is part of the public API contract. It provides only:
 

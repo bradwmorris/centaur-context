@@ -179,6 +179,35 @@ pub struct SearchCandidate {
     pub connection_count: i64,
 }
 
+#[derive(Clone, Debug)]
+pub struct ContextAnchorCandidate {
+    pub object: Object,
+    pub priority: i32,
+    pub rationale: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
+pub struct ContextChat {
+    pub object_id: Uuid,
+    pub lifecycle: String,
+    pub provider: Option<String>,
+    pub workspace_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub thread_id: Option<String>,
+}
+
+impl ContextChat {
+    pub fn thread_key(&self) -> Option<String> {
+        Some(format!(
+            "{}:{}:{}:{}",
+            self.provider.as_deref()?,
+            self.workspace_id.as_deref()?,
+            self.channel_id.as_deref()?,
+            self.thread_id.as_deref()?
+        ))
+    }
+}
+
 #[derive(Clone, Debug, FromRow)]
 struct SearchCandidateRow {
     id: Uuid,
@@ -198,6 +227,53 @@ struct SearchCandidateRow {
     archived_at: Option<OffsetDateTime>,
     relevance: f64,
     connection_count: i64,
+}
+
+#[derive(Clone, Debug, FromRow)]
+struct ContextAnchorCandidateRow {
+    id: Uuid,
+    kind: String,
+    title: String,
+    description: String,
+    protected: bool,
+    lifecycle: String,
+    revision: i64,
+    created_by_type: String,
+    created_by_id: String,
+    updated_by_type: String,
+    updated_by_id: String,
+    provenance: Value,
+    created_at: OffsetDateTime,
+    updated_at: OffsetDateTime,
+    archived_at: Option<OffsetDateTime>,
+    priority: i32,
+    rationale: String,
+}
+
+impl From<ContextAnchorCandidateRow> for ContextAnchorCandidate {
+    fn from(row: ContextAnchorCandidateRow) -> Self {
+        Self {
+            object: Object {
+                id: row.id,
+                kind: row.kind,
+                title: row.title,
+                description: row.description,
+                protected: row.protected,
+                lifecycle: row.lifecycle,
+                revision: row.revision,
+                created_by_type: row.created_by_type,
+                created_by_id: row.created_by_id,
+                updated_by_type: row.updated_by_type,
+                updated_by_id: row.updated_by_id,
+                provenance: row.provenance,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                archived_at: row.archived_at,
+            },
+            priority: row.priority,
+            rationale: row.rationale,
+        }
+    }
 }
 
 impl From<SearchCandidateRow> for SearchCandidate {
@@ -286,6 +362,8 @@ pub struct ContextConnection {
 pub struct EmbeddingJob {
     pub object_id: Uuid,
     pub source_hash: String,
+    pub format_version: String,
+    pub input_mode: String,
     pub kind: String,
     pub title: String,
     pub description: String,
@@ -297,6 +375,7 @@ pub struct ObjectListFilter {
     pub kind: Option<String>,
     pub lifecycle: Option<String>,
     pub limit: i64,
+    pub text_search_config: crate::config::TextSearchConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -404,8 +483,21 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
         query.push(" AND lifecycle = ").push_bind(lifecycle);
     }
     if let Some(search) = filter.query {
+        query.push(" AND ");
+        if filter.text_search_config == crate::config::TextSearchConfig::SIMPLE {
+            query.push("search_document");
+        } else {
+            query
+                .push("(setweight(to_tsvector(")
+                .push_bind(filter.text_search_config.as_str())
+                .push("::regconfig, coalesce(title,'')), 'A') || setweight(to_tsvector(")
+                .push_bind(filter.text_search_config.as_str())
+                .push("::regconfig, coalesce(description,'')), 'B'))");
+        }
         query
-            .push(" AND search_document @@ websearch_to_tsquery('english', ")
+            .push(" @@ websearch_to_tsquery(")
+            .push_bind(filter.text_search_config.as_str())
+            .push("::regconfig, ")
             .push_bind(search)
             .push(")");
     }
@@ -1074,25 +1166,143 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
         .collect())
 }
 
+pub async fn get_context_chat(pool: &PgPool, id: Uuid) -> Result<ContextChat, DbError> {
+    sqlx::query_as(
+        r#"SELECT o.id AS object_id,o.lifecycle,ch.provider,ch.workspace_id,
+                  ch.channel_id,ch.thread_id
+           FROM chats ch JOIN objects o ON o.id=ch.object_id
+           WHERE o.id=$1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
+pub async fn context_anchor_candidates(
+    pool: &PgPool,
+    chat_object_id: Uuid,
+) -> Result<Vec<ContextAnchorCandidate>, DbError> {
+    let rows: Vec<ContextAnchorCandidateRow> = sqlx::query_as(
+        r#"WITH candidates AS (
+               SELECT $1::uuid AS object_id,0::integer AS priority,
+                      'The authenticated Chat for the current thread.'::text AS rationale
+               UNION ALL
+               SELECT CASE WHEN c.source_object_id=$1 THEN c.target_object_id
+                           ELSE c.source_object_id END AS object_id,
+                      CASE WHEN other.kind='user' AND c.kind='involves'
+                           THEN 1 ELSE 2 END AS priority,
+                      CASE WHEN other.kind='user' AND c.kind='involves'
+                           THEN 'A canonical participant in the current Chat.'
+                           ELSE 'Directly connected to the current Chat by ' || c.kind || ': ' || c.description
+                      END AS rationale
+               FROM connections c
+               JOIN objects other ON other.id=CASE
+                   WHEN c.source_object_id=$1 THEN c.target_object_id
+                   ELSE c.source_object_id END
+               WHERE c.archived_at IS NULL
+                 AND (c.source_object_id=$1 OR c.target_object_id=$1)
+                 AND other.lifecycle='active'
+           ), chosen AS (
+               SELECT DISTINCT ON (object_id) object_id,priority,rationale
+               FROM candidates
+               ORDER BY object_id,priority,rationale
+           )
+           SELECT o.id,o.kind,o.title,o.description,o.protected,o.lifecycle,o.revision,
+                  o.created_by_type,o.created_by_id,o.updated_by_type,o.updated_by_id,
+                  o.provenance,o.created_at,o.updated_at,o.archived_at,
+                  chosen.priority,chosen.rationale
+           FROM chosen JOIN objects o ON o.id=chosen.object_id
+           WHERE o.lifecycle='active'
+           ORDER BY chosen.priority,o.id
+           LIMIT 100"#,
+    )
+    .bind(chat_object_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+pub async fn context_subtypes(
+    pool: &PgPool,
+    object_ids: &[Uuid],
+    current_chat_id: Option<Uuid>,
+) -> Result<std::collections::HashMap<Uuid, Value>, DbError> {
+    if object_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    #[derive(FromRow)]
+    struct Row {
+        object_id: Uuid,
+        subtype: Value,
+    }
+    let rows: Vec<Row> = sqlx::query_as(
+        r#"SELECT o.id AS object_id,
+                  CASE o.kind
+                    WHEN 'task' THEN jsonb_strip_nulls(jsonb_build_object(
+                        'kind','task','status',t.status,'priority',t.priority,
+                        'owner_object_id',t.owner_object_id,'owner_title',owner.title,
+                        'agent_eligible',t.agent_eligible,'due_at',t.due_at))
+                    WHEN 'chat' THEN jsonb_strip_nulls(jsonb_build_object(
+                        'kind','chat','provider',ch.provider,'surface_kind',ch.surface_kind,
+                        'channel_name',ch.channel_name,'current_thread',o.id=$2))
+                    WHEN 'user' THEN jsonb_strip_nulls(jsonb_build_object(
+                        'kind','user','user_kind',u.user_kind,
+                        'display_name',identity.display_name))
+                    WHEN 'entity' THEN jsonb_build_object(
+                        'kind','entity','entity_kind','general')
+                    WHEN 'memory' THEN jsonb_build_object(
+                        'kind','memory','happened_at',m.happened_at)
+                  END AS subtype
+           FROM objects o
+           LEFT JOIN tasks t ON t.object_id=o.id
+           LEFT JOIN objects owner ON owner.id=t.owner_object_id
+           LEFT JOIN chats ch ON ch.object_id=o.id
+           LEFT JOIN users u ON u.object_id=o.id
+           LEFT JOIN memories m ON m.object_id=o.id
+           LEFT JOIN LATERAL (
+               SELECT e.display_name FROM external_identities e
+               WHERE e.user_object_id=o.id AND e.display_name IS NOT NULL
+               ORDER BY e.updated_at DESC,e.id LIMIT 1
+           ) identity ON true
+           WHERE o.id=ANY($1::uuid[])"#,
+    )
+    .bind(object_ids)
+    .bind(current_chat_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.object_id, row.subtype))
+        .collect())
+}
+
 pub async fn full_text_candidates(
     pool: &PgPool,
+    text_search_config: crate::config::TextSearchConfig,
     query_text: &str,
     kind: Option<&str>,
     limit: i64,
     with_connection_count: bool,
 ) -> Result<Vec<SearchCandidate>, DbError> {
-    let mut query = QueryBuilder::<Postgres>::new(
-        r#"WITH search_query AS (
-               SELECT websearch_to_tsquery('english', regexp_replace("#,
-    );
-    query.push_bind(query_text).push(
-        r#", '\s+', ' OR ', 'g')) AS value
-           )
-           SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
-                  o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
-                  o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at,
-                  ts_rank_cd(o.search_document, search_query.value)::float8 AS relevance,"#,
-    );
+    let mut query =
+        QueryBuilder::<Postgres>::new("WITH search_query AS (SELECT websearch_to_tsquery(");
+    query
+        .push_bind(text_search_config.as_str())
+        .push("::regconfig, regexp_replace(")
+        .push_bind(query_text)
+        .push(", '\\s+', ' OR ', 'g')) AS value) SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle, o.revision, o.created_by_type, o.created_by_id, o.updated_by_type, o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at, ts_rank_cd(");
+    if text_search_config == crate::config::TextSearchConfig::SIMPLE {
+        query.push("o.search_document");
+    } else {
+        query
+            .push("setweight(to_tsvector(")
+            .push_bind(text_search_config.as_str())
+            .push("::regconfig, coalesce(o.title,'')), 'A') || setweight(to_tsvector(")
+            .push_bind(text_search_config.as_str())
+            .push("::regconfig, coalesce(o.description,'')), 'B')");
+    }
+    query.push(", search_query.value)::float8 AS relevance,");
     if with_connection_count {
         query.push(
             r#"(SELECT count(*) FROM connections c
@@ -1103,11 +1313,18 @@ pub async fn full_text_candidates(
     } else {
         query.push("0::bigint AS connection_count");
     }
-    query.push(
-        r#"
-           FROM objects o CROSS JOIN search_query
-           WHERE o.lifecycle='active' AND o.search_document @@ search_query.value"#,
-    );
+    query.push(" FROM objects o CROSS JOIN search_query WHERE o.lifecycle='active' AND ");
+    if text_search_config == crate::config::TextSearchConfig::SIMPLE {
+        query.push("o.search_document");
+    } else {
+        query
+            .push("(setweight(to_tsvector(")
+            .push_bind(text_search_config.as_str())
+            .push("::regconfig, coalesce(o.title,'')), 'A') || setweight(to_tsvector(")
+            .push_bind(text_search_config.as_str())
+            .push("::regconfig, coalesce(o.description,'')), 'B'))");
+    }
+    query.push(" @@ search_query.value");
     if let Some(kind) = kind {
         query.push(" AND o.kind=").push_bind(kind);
     }
@@ -1123,11 +1340,14 @@ pub async fn full_text_candidates(
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn semantic_candidates(
     pool: &PgPool,
     vector: &[f32],
     model: &str,
     dimensions: i32,
+    format_version: &str,
+    input_mode: &str,
     kind: Option<&str>,
     limit: i64,
     with_connection_count: bool,
@@ -1162,12 +1382,16 @@ pub async fn semantic_candidates(
            FROM object_embeddings e
            JOIN objects o ON o.id=e.object_id
            WHERE o.lifecycle='active'
-             AND e.source_hash=object_embedding_source_hash(o.kind,o.title,o.description)
+             AND e.source_hash=object_embedding_source_hash(e.format_version,o.kind,o.title,o.description)
              AND e.model="#,
         )
         .push_bind(model)
         .push(" AND e.dimensions=")
-        .push_bind(dimensions);
+        .push_bind(dimensions)
+        .push(" AND e.format_version=")
+        .push_bind(format_version)
+        .push(" AND e.input_mode=")
+        .push_bind(input_mode);
     if let Some(kind) = kind {
         query.push(" AND o.kind=").push_bind(kind);
     }
@@ -1304,20 +1528,33 @@ pub async fn ensure_embedding_index(pool: &PgPool, dimensions: i32) -> Result<()
     Ok(())
 }
 
-pub async fn queue_missing_embeddings(pool: &PgPool, model: &str) -> Result<u64, DbError> {
+pub async fn queue_missing_embeddings(
+    pool: &PgPool,
+    model: &str,
+    dimensions: i32,
+    format_version: &str,
+    input_mode: &str,
+) -> Result<u64, DbError> {
     Ok(sqlx::query(
-        r#"INSERT INTO object_embedding_jobs (object_id,source_hash)
-           SELECT o.id, object_embedding_source_hash(o.kind,o.title,o.description)
+        r#"INSERT INTO object_embedding_jobs
+             (object_id,source_hash,format_version,input_mode)
+           SELECT o.id, object_embedding_source_hash($2,o.kind,o.title,o.description),$2,$3
            FROM objects o
            LEFT JOIN object_embeddings e
              ON e.object_id=o.id AND e.model=$1
-            AND e.source_hash=object_embedding_source_hash(o.kind,o.title,o.description)
+            AND e.dimensions=$4
+            AND e.format_version=$2 AND e.input_mode=$3
+            AND e.source_hash=object_embedding_source_hash($2,o.kind,o.title,o.description)
            WHERE e.object_id IS NULL
            ON CONFLICT (object_id) DO UPDATE
-           SET source_hash=EXCLUDED.source_hash, status='pending', attempts=0,
+           SET source_hash=EXCLUDED.source_hash,format_version=EXCLUDED.format_version,
+               input_mode=EXCLUDED.input_mode,status='pending', attempts=0,
                available_at=now(), started_at=NULL, last_error=NULL, updated_at=now()"#,
     )
     .bind(model)
+    .bind(format_version)
+    .bind(input_mode)
+    .bind(dimensions)
     .execute(pool)
     .await?
     .rows_affected())
@@ -1339,9 +1576,10 @@ pub async fn claim_embedding_job(pool: &PgPool) -> Result<Option<EmbeddingJob>, 
                    ORDER BY available_at, updated_at, object_id
                    LIMIT 1 FOR UPDATE SKIP LOCKED
                )
-               RETURNING j.object_id, j.source_hash
+               RETURNING j.object_id,j.source_hash,j.format_version,j.input_mode
            )
-           SELECT claimed.object_id, claimed.source_hash, o.kind, o.title, o.description
+           SELECT claimed.object_id,claimed.source_hash,claimed.format_version,
+                  claimed.input_mode,o.kind,o.title,o.description
            FROM claimed JOIN objects o ON o.id=claimed.object_id"#,
     )
     .fetch_optional(pool)
@@ -1353,20 +1591,25 @@ pub async fn complete_embedding_job(
     job: &EmbeddingJob,
     model: &str,
     dimensions: i32,
+    format_version: &str,
+    input_mode: &str,
     vector: &[f32],
 ) -> Result<(), DbError> {
     let mut tx = pool.begin().await?;
     sqlx::query(
         r#"INSERT INTO object_embeddings
-           (object_id, model, dimensions, source_hash, embedding, embedded_at)
-           VALUES ($1,$2,$3,$4,$5::vector,now())
+           (object_id,model,dimensions,format_version,input_mode,source_hash,embedding,embedded_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7::vector,now())
            ON CONFLICT (object_id,model) DO UPDATE
-           SET dimensions=EXCLUDED.dimensions, source_hash=EXCLUDED.source_hash,
-               embedding=EXCLUDED.embedding, embedded_at=now()"#,
+           SET dimensions=EXCLUDED.dimensions,format_version=EXCLUDED.format_version,
+               input_mode=EXCLUDED.input_mode,source_hash=EXCLUDED.source_hash,
+               embedding=EXCLUDED.embedding,embedded_at=now()"#,
     )
     .bind(job.object_id)
     .bind(model)
     .bind(dimensions)
+    .bind(format_version)
+    .bind(input_mode)
     .bind(&job.source_hash)
     .bind(vector_literal(vector))
     .execute(&mut *tx)
