@@ -231,16 +231,21 @@ describe("canonical Object identity across the application", () => {
     expect(screen.getByText("Record not found")).toBeVisible();
   });
 
-  it("shows mixed execution sources and truthful subscription charging in Evals", async () => {
+  it("uses one simple search and compact single-row Eval records", async () => {
     window.history.replaceState({}, "", "/evals");
     render(<App />);
     expect(await screen.findByText("Slack interaction for Canonical chat")).toBeVisible();
-    expect(screen.getByText(/GPT-5.6 Sol · codex harness · chatgpt subscription/i)).toBeVisible();
-    expect(screen.getByText(/GPT-4.1 mini · direct api · api key/i)).toBeVisible();
     expect(screen.getByText(/Included subscription usage; per-trace USD unavailable/)).toBeVisible();
     expect(screen.getByText(/Metered API estimate \$0\.001200 USD/)).toBeVisible();
     expect(screen.queryByText("$0")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Eval filters")).toBeVisible();
+    expect(screen.queryByLabelText("Eval filters")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: `Open Eval ID ${ids.eval}` })).toHaveTextContent(`ID: ${ids.eval.slice(0, 5)}`);
+    const search = screen.getByRole("textbox", { name: "Search evals" });
+    await userEvent.type(search, "GPT-4.1 mini");
+    expect(screen.getByText("Slack interaction for Canonical chat")).toBeVisible();
+    await userEvent.clear(search);
+    await userEvent.type(search, "no matching eval");
+    expect(screen.getByText("No evals match this search.")).toBeVisible();
   });
 
   it("renders ordered trace, Object navigation, and human review controls", async () => {
@@ -252,6 +257,8 @@ describe("canonical Object identity across the application", () => {
     expect(screen.getByText(/included subscription usage; per-trace USD unavailable/)).toBeVisible();
     expect(screen.getByText(/estimated \$0\.001200 USD \(fixture-v1\)/)).toBeVisible();
     expect(screen.getByRole("link", { name: `Open Object ID ${ids.memory}` })).toHaveAttribute("href", `/objects/${ids.memory}`);
+    expect(screen.queryByText("Canonical memory")).not.toBeInTheDocument();
+    expect(screen.getAllByText("model attempt")[0].closest("article")?.children).toHaveLength(4);
     expect(screen.getByRole("combobox", { name: "Verdict" })).toHaveValue("mixed");
     expect(screen.getByRole("textbox", { name: "Review notes" })).toHaveValue("Useful result with one correction.");
   });

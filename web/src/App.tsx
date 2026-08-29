@@ -411,55 +411,52 @@ function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; object
 
 function EvalsList() {
   const [items, setItems] = useState<EvalSummary[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const filterKey = JSON.stringify(filters);
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void api.evals(filters).then((data) => { if (active) { setItems(data); setError(null); } })
+    void api.evals().then((data) => { if (active) { setItems(data); setError(null); } })
       .catch((cause) => { if (active) setError(message(cause)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  // A stable serialized key prevents a fetch loop while retaining every filter.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey]);
-  const setFilter = (name: string, value: string) => setFilters((current) => {
-    const next = { ...current };
-    if (value) next[name] = value; else delete next[name];
-    return next;
-  });
+  }, []);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleItems = useMemo(() => normalizedQuery ? items.filter((item) => evalSearchText(item).includes(normalizedQuery)) : items, [items, normalizedQuery]);
   return <section className="list-view eval-list" aria-label="eval records">
     <header className="list-view-head"><h1>Evals</h1></header>
-    <div className="eval-filters" aria-label="Eval filters">
-      <FilterSelect label="Kind" value={filters.kind} options={["slack_interaction", "human_mutation", "system_mutation", "legacy_import"]} onChange={(value) => setFilter("kind", value)} />
-      <FilterSelect label="Status" value={filters.status} options={["open", "running", "completed", "failed", "reversed"]} onChange={(value) => setFilter("status", value)} />
-      <FilterSelect label="Verdict" value={filters.verdict} options={["unreviewed", "pass", "mixed", "fail"]} onChange={(value) => setFilter("verdict", value)} />
-      <FilterSelect label="Execution" value={filters.execution_type} options={["codex_harness", "direct_api", "embedding", "other"]} onChange={(value) => setFilter("execution_type", value)} />
-      <FilterSelect label="Auth" value={filters.auth_mode} options={["chatgpt_subscription", "api_key", "not_applicable", "unknown"]} onChange={(value) => setFilter("auth_mode", value)} />
-      <FilterSelect label="Billing" value={filters.billing_mode} options={["subscription_allowance", "chatgpt_credits", "metered_api", "not_applicable", "unknown"]} onChange={(value) => setFilter("billing_mode", value)} />
-      {(["component", "provider", "model", "object_id"] as const).map((name) => <label className="eval-filter" key={name}><span>{name.replace("_", " ")}</span><input value={filters[name] ?? ""} onChange={(event) => setFilter(name, event.target.value.trim())} /></label>)}
-      <label className="eval-filter"><span>From</span><input type="date" onChange={(event) => setFilter("from", event.target.value ? `${event.target.value}T00:00:00Z` : "")} /></label>
-      <label className="eval-filter"><span>To</span><input type="date" onChange={(event) => setFilter("to", event.target.value ? `${event.target.value}T23:59:59Z` : "")} /></label>
+    <div className="list-toolbar">
+      <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label="Search evals" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search evals" /></label>
+      <span>{visibleItems.length} {visibleItems.length === 1 ? "record" : "records"}</span>
     </div>
     {error && <div className="error-banner">{error}</div>}
-    <div className="list-group-head"><span className="status-ring" /><strong>Newest first</strong><span>{items.length}</span></div>
+    <div className="list-group-head"><span className="status-ring" /><strong>All evals</strong><span>{visibleItems.length}</span></div>
     <div className="record-list eval-records">
-      {items.map((item) => <article className="eval-record" key={item.id}>
+      {visibleItems.map((item) => <div className="record eval-record" key={item.id}>
         <button className="record-open" onClick={() => navigate(detailPath("evals", item.id))} aria-label={`Open eval ${item.summary}`} />
-        <div className="eval-record-main"><div><strong>{item.summary}</strong><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span><StateBadge state={item.status} /></div><small>{item.kind.replaceAll("_", " ")} · {item.actor_type}:{item.actor_id}{item.chat_object_id ? ` · Chat ${shortId(item.chat_object_id)}` : ""}</small></div>
-        <div className="usage-badges">{item.usage_sources.map((source, index) => <span className="usage-badge" key={`${source.component}-${source.model_id}-${index}`}>{usageLabel(source)}</span>)}{item.usage_sources.length === 0 && <span className="usage-badge">Non-model · not applicable</span>}</div>
-        <div className="eval-metrics"><span>{item.total_tokens.toLocaleString()} tokens</span><span>{chargeLabel(item)}</span><span>{item.affected_object_count} Objects</span><time>{relative(item.created_at)}</time></div>
-      </article>)}
-      {!loading && items.length === 0 && <div className="empty-list">No evals match these filters.</div>}
+        <span className="eval-row-mark" aria-hidden="true">≋</span>
+        <EvalId id={item.id} />
+        <span className="record-title"><strong>{item.summary}</strong><span className="record-badges"><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span><StateBadge state={item.status} /></span><DescriptionSnippet description={evalRowDescription(item)} /></span>
+        <time>{relative(item.created_at)}</time>
+      </div>)}
+      {!loading && visibleItems.length === 0 && <div className="empty-list">No evals match this search.</div>}
       {loading && <div className="empty-list">Loading evals…</div>}
     </div>
   </section>;
 }
 
-function FilterSelect({ label, value, options, onChange }: { label: string; value?: string; options: string[]; onChange: (value: string) => void }) {
-  return <label className="eval-filter"><span>{label}</span><select value={value ?? ""} onChange={(event) => onChange(event.target.value)}><option value="">All</option>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+function EvalId({ id }: { id: string }) {
+  const path = detailPath("evals", id);
+  return <span className="object-identity row-pill eval-id"><a className="object-id-pill" href={path} onClick={(event) => { event.preventDefault(); navigate(path); }} title={id} aria-label={`Open Eval ID ${id}`}>ID: {id.slice(0, 5)}</a></span>;
+}
+
+function evalSearchText(item: EvalSummary) {
+  return [item.id, item.summary, item.kind, item.status, item.verdict, item.actor_type, item.actor_id, item.chat_object_id, item.curator_run_id, ...item.usage_sources.flatMap((source) => [source.component, source.provider, source.model_id, source.display_tier, source.execution_type, source.auth_mode, source.billing_mode])].filter(Boolean).join(" ").toLocaleLowerCase();
+}
+
+function evalRowDescription(item: EvalSummary) {
+  return `${item.kind.replaceAll("_", " ")} · ${item.actor_type}:${item.actor_id} · ${item.total_tokens.toLocaleString()} tokens · ${item.affected_object_count} Objects · ${chargeLabel(item)}`;
 }
 
 function EvalDetailView({ id }: { id: string }) {
@@ -489,10 +486,10 @@ function EvalDetailView({ id }: { id: string }) {
       {item.chat_object_id && <Property label="Chat"><ObjectId id={item.chat_object_id} /></Property>}{item.curator_run_id && <Property label="Curator Run"><a href={detailPath("curator", item.curator_run_id)}>{item.curator_run_id}</a></Property>}
     </div></section>
     {item.error_summary && <p className="run-error">{item.error_summary}</p>}{error && <p className="form-error">{error}</p>}
-    <form className="eval-annotation" onSubmit={save}><Field label="Verdict"><select name="verdict" defaultValue={item.verdict} key={`${item.id}-${item.annotation_revision}-verdict`}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Review notes"><textarea name="notes" maxLength={4000} rows={4} defaultValue={item.notes ?? ""} key={`${item.id}-${item.annotation_revision}-notes`} /></Field><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save review"}</button>{item.annotated_by && <small>Last reviewed by {item.annotated_by}</small>}</form>
+    <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={item.verdict} key={`${item.id}-${item.annotation_revision}-verdict`}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={item.notes ?? ""} key={`${item.id}-${item.annotation_revision}-notes`} placeholder="Optional note" /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button>{item.annotated_by && <small>Reviewed by {item.annotated_by}</small>}</form>
     <Section title="Usage and charge provenance"><div className="usage-detail">{item.usage_sources.map((source, index) => <span className="usage-badge" key={index}>{usageLabel(source)}</span>)}<p>{chargeLabel(item)}</p></div></Section>
-    <Section title="Ordered trace"><div className="trace-list">{detail.trace.map((entry) => <article className={entry.entry_type === "failure" ? "trace-entry failure" : "trace-entry"} key={entry.id}><span>{entry.sequence}</span><div><strong>{entry.entry_type.replaceAll("_", " ")}</strong>{entry.model_id && <small>{entry.provider} · {entry.model_id} · {entry.execution_type} · {entry.auth_mode} · {entry.billing_mode}</small>}{entry.usage_status !== "not_applicable" && <small>{entry.usage_status} · {(entry.total_tokens ?? 0).toLocaleString()} tokens · {traceChargeLabel(entry)}{entry.usage_missing_reason ? ` · ${entry.usage_missing_reason}` : ""}</small>}<code>{JSON.stringify(entry.facts)}</code></div></article>)}</div></Section>
-    <Section title="Related Objects"><div className="eval-objects">{detail.objects.map((object) => <div key={`${object.object_id}-${object.role}`}><ObjectTypeBadge kind={object.kind} /><strong>{object.title}</strong><span>{object.role}</span><ObjectId id={object.object_id} /></div>)}</div></Section>
+    <Section title="Ordered trace"><div className="trace-list">{detail.trace.map((entry) => <article className={entry.entry_type === "failure" ? "trace-entry failure" : "trace-entry"} key={entry.id}><span>{entry.sequence}</span><strong>{entry.entry_type.replaceAll("_", " ")}</strong><small title={traceDescription(entry)}>{traceDescription(entry)}</small><code title={JSON.stringify(entry.facts)}>{JSON.stringify(entry.facts)}</code></article>)}</div></Section>
+    <Section title="Related Objects"><div className="eval-objects">{detail.objects.map((object) => <ObjectId id={object.object_id} linkPill key={`${object.object_id}-${object.role}`} />)}</div></Section>
   </div></div>;
 }
 
@@ -520,6 +517,12 @@ function traceChargeLabel(entry: EvalTraceEntry) {
   }
   if (entry.estimated_micro_usd !== null) return `estimated $${(entry.estimated_micro_usd / 1_000_000).toFixed(6)} USD${entry.rate_card_version ? ` (${entry.rate_card_version})` : ""}`;
   return "charge unavailable";
+}
+
+function traceDescription(entry: EvalTraceEntry) {
+  const model = entry.model_id ? `${entry.provider ?? "Unknown provider"} · ${entry.model_id} · ${entry.execution_type ?? "unknown execution"}` : null;
+  const usage = entry.usage_status === "not_applicable" ? null : `${entry.usage_status} · ${(entry.total_tokens ?? 0).toLocaleString()} tokens · ${traceChargeLabel(entry)}${entry.usage_missing_reason ? ` · ${entry.usage_missing_reason}` : ""}`;
+  return [model, usage].filter(Boolean).join(" · ") || "No model usage";
 }
 
 function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
