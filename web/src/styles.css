@@ -89,12 +89,13 @@ button { color: inherit; }
 .record > .kind { justify-self: start; }
 .record time { color: #5e6067; font-size: 10px; text-align: right; }
 .record strong { min-width: 0; color: #dedee0; font-size: 12px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.record p { min-width: 0; color: #666870; font-size: 11px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.description-snippet { min-width: 0; color: #666870; font-size: 11px; line-height: 1.35; margin: 0; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+.description-snippet[data-empty="true"] { color: #55575e; font-style: italic; }
 .empty-list { color: #64666d; text-align: center; padding: 60px 10px; font-size: 12px; }
 .record-title, .record-badges, .record-source, .object-context { min-width: 0; display: flex; align-items: center; gap: 5px; }
 .record-title { overflow: hidden; }
 .record-title > strong { flex: 0 1 auto; }
-.record-title > p { flex: 1 1 160px; }
+.record-title > .description-snippet { flex: 1 1 160px; }
 .record-badges { flex: 0 0 auto; flex-wrap: nowrap; }
 .record-source { justify-content: center; }
 .object-context { flex-wrap: nowrap; }
@@ -258,6 +259,8 @@ button { color: inherit; }
 .create-title { padding: 5px 0 8px; font-size: 20px; font-weight: 540; letter-spacing: -.015em; }
 .create-body { min-height: 104px; padding: 0; color: #aaaab0; line-height: 1.5; resize: none; }
 .create-title::placeholder, .create-body::placeholder { color: #575960; }
+.description-help { margin: 4px 0 0; color: #666870; font-size: 10px; line-height: 1.4; }
+.detail-form > .description-help { margin-bottom: 2px; }
 .create-footer { min-height: 48px; margin-top: 8px; padding: 11px; border-radius: 7px; background: #111214; display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .create-footer .field { display: flex; align-items: center; gap: 7px; }
 .create-footer .field select, .property-chip { height: 29px; border: 0; border-radius: 6px; background: #1b1c1f; color: #a2a4ab; padding: 0 9px; font-size: 11px; outline: 0; }
@@ -276,7 +279,8 @@ button { color: inherit; }
   .nav-button > span { width: auto; font-size: 15px; }
   .nav-foot { justify-content: center; padding: 9px 0; font-size: 0; }
   .record { grid-template-columns: 24px max-content minmax(0, 1fr) 58px; }
-  .record p { display: none; }
+  .record-title { flex-wrap: wrap; padding: 6px 0; }
+  .record-title > .description-snippet { flex-basis: 100%; }
   .record-primary { padding-left: 32px; padding-right: 32px; }
 }
 
@@ -285,6 +289,7 @@ button { color: inherit; }
   .workspace { margin: 0; }
   .record { grid-template-columns: 20px max-content minmax(0, 1fr) 36px; gap: 5px; padding-right: 7px; }
   .record-title { padding: 5px 0; }
+  .description-snippet { -webkit-line-clamp: 1; }
   .connection-flow { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr); gap: 3px; }
   .connection-endpoint > .visual-badge, .connection-endpoint > .object-identity, .connection-endpoint > .object-context { display: none; }
   .message-kind, .event > .object-context, .event > .supporting-identity { display: none; }

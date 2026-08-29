@@ -94,6 +94,34 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
 
+    let weak_create = db::create_object(
+        &pool,
+        &actor(),
+        NewObject {
+            kind: "entity".to_owned(),
+            title: "Unclear record".to_owned(),
+            description: "TBD".to_owned(),
+            provenance: json!({"source_type": "human"}),
+        },
+        "reject-weak-create",
+    )
+    .await;
+    assert!(matches!(weak_create, Err(DbError::Validation(_))));
+    let weak_update = db::update_object(
+        &pool,
+        &actor(),
+        second.id,
+        second.revision,
+        ObjectChanges {
+            description: Some(second.title.clone()),
+            ..Default::default()
+        },
+        None,
+    )
+    .await;
+    assert!(matches!(weak_update, Err(DbError::Validation(_))));
+    assert_eq!(db::get_object(&pool, second.id).await.unwrap().revision, 1);
+
     for (kind, table, key) in [("chat", "chats", "create-chat")] {
         let object = db::create_object(
             &pool,

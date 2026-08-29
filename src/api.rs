@@ -298,13 +298,15 @@ async fn create_object(
             "use the typed endpoint to create a {kind}"
         )));
     }
+    let title = required_text(input.title, "title", 300)?;
+    let description = crate::domain::object_description(&title, input.description)?;
     let object = db::create_object(
         &state.pool,
         &actor,
         NewObject {
             kind,
-            title: required_text(input.title, "title", 300)?,
-            description: required_text(input.description, "description", 1000)?,
+            title,
+            description,
             provenance: provenance(input.provenance)?,
         },
         &key,
@@ -549,12 +551,14 @@ async fn create_task(
     Json(input): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let description = crate::domain::object_description(&title, input.description)?;
     let task = db::create_task(
         &state.pool,
         &actor,
         NewTask {
-            title: required_text(input.title, "title", 300)?,
-            description: required_text(input.description, "description", 1000)?,
+            title,
+            description,
             provenance: provenance(input.provenance)?,
             status: allowed(input.status, "status", TASK_STATUSES)?,
             priority: allowed(input.priority, "priority", TASK_PRIORITIES)?,

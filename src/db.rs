@@ -5,7 +5,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{ActorContext, ValidationError};
+use crate::domain::{ActorContext, ValidationError, validate_object_description};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -432,6 +432,7 @@ pub async fn create_object(
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
         return get_object(pool, id).await;
     }
+    validate_object_description(&input.title, &input.description)?;
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     let object: Object = sqlx::query_as(
@@ -504,6 +505,7 @@ pub async fn update_object(
     let description = changes
         .description
         .unwrap_or_else(|| current.description.clone());
+    validate_object_description(&title, &description)?;
     let provenance = changes
         .provenance
         .unwrap_or_else(|| current.provenance.clone());
@@ -777,6 +779,7 @@ pub async fn create_task(
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
         return get_task(pool, id).await;
     }
+    validate_object_description(&input.title, &input.description)?;
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -838,6 +841,7 @@ pub async fn update_task(
     let description = changes
         .description
         .unwrap_or_else(|| current.description.clone());
+    validate_object_description(&title, &description)?;
     let provenance = changes
         .provenance
         .unwrap_or_else(|| current.provenance.clone());

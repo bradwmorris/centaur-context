@@ -410,6 +410,7 @@ async fn get_or_create_chat(
         ("dm", _) => "A direct-message conversation with a Centaur agent on Slack.".to_owned(),
         _ => unreachable!(),
     };
+    crate::domain::validate_object_description(&title, &description)?;
     sqlx::query(
         r#"INSERT INTO objects
            (id,kind,title,description,created_by_type,created_by_id,
@@ -501,6 +502,7 @@ async fn get_or_create_user(
     } else {
         format!("A Centaur agent on Slack named {}.", sender.display_name)
     };
+    crate::domain::validate_object_description(&sender.display_name, &description)?;
     sqlx::query(
         r#"INSERT INTO objects
            (id,kind,title,description,created_by_type,created_by_id,
