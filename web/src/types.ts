@@ -38,7 +38,7 @@ export interface Connection {
 }
 
 export interface Task {
-  id: string;
+  object_id: string;
   title: string;
   description: string;
   lifecycle: "active" | "archived";
@@ -58,6 +58,7 @@ export interface ObjectEvent {
   id: string;
   entity_type: string;
   entity_id: string;
+  object_id: string;
   action: string;
   actor_type: string;
   actor_id: string;
@@ -81,7 +82,7 @@ export interface ChatMessage {
 }
 
 export interface User {
-  id: string;
+  object_id: string;
   title: string;
   description: string;
   lifecycle: "active" | "archived";

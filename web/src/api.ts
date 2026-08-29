@@ -68,6 +68,9 @@ export const api = {
   connections(id: string) {
     return request<Connection[]>(`/api/v1/objects/${id}/connections`);
   },
+  connection(id: string) {
+    return request<Connection>(`/api/v1/connections/${id}`);
+  },
   createConnection(body: Record<string, unknown>) {
     return request<Connection>("/api/v1/connections", write("POST", body));
   },

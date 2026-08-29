@@ -65,7 +65,7 @@ pub struct Connection {
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 pub struct Task {
-    pub id: Uuid,
+    pub object_id: Uuid,
     pub title: String,
     pub description: String,
     pub lifecycle: String,
@@ -121,7 +121,7 @@ pub struct ChatMessage {
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 pub struct User {
-    pub id: Uuid,
+    pub object_id: Uuid,
     pub title: String,
     pub description: String,
     pub lifecycle: String,
@@ -543,6 +543,14 @@ pub async fn list_connections(pool: &PgPool, object_id: Uuid) -> Result<Vec<Conn
     .await?)
 }
 
+pub async fn get_connection(pool: &PgPool, id: Uuid) -> Result<Connection, DbError> {
+    sqlx::query_as("SELECT * FROM connections WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
 pub async fn create_connection(
     pool: &PgPool,
     actor: &ActorContext,
@@ -706,7 +714,7 @@ pub async fn archive_connection(
 
 pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Task>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE true"#,
     );
@@ -726,7 +734,7 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
 
 pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
@@ -901,7 +909,7 @@ pub async fn list_chat_messages(
 
 pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError> {
     Ok(sqlx::query_as(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
                   u.user_kind,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id
            WHERE o.lifecycle='active' ORDER BY o.updated_at DESC,o.id LIMIT $1"#,
@@ -913,7 +921,7 @@ pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError>
 
 pub async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
                   u.user_kind,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id WHERE o.id=$1"#,
     )

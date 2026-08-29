@@ -1,8 +1,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
+import { ConnectionId, ObjectId } from "./ObjectIdentity";
+import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
+import type { Section } from "./routing";
 import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, SharedObject, Task, TaskStatus, User } from "./types";
-
-type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "curator";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
@@ -22,12 +23,12 @@ const createSections = new Set<Section>(["objects", "tasks", "chats", "entities"
 type CreateSection = keyof typeof sectionSingular;
 
 export default function App() {
-  const [section, setSection] = useState<Section>("objects");
+  const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
+  const { section, selectedId, connectionId } = route;
   const [collapsed, setCollapsed] = useState(false);
   const [objects, setObjects] = useState<SharedObject[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [curatorRuns, setCuratorRuns] = useState<CuratorRun[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -41,16 +42,19 @@ export default function App() {
       setObjects(nextObjects);
       setTasks(nextTasks);
       setCuratorRuns(nextCuratorRuns);
-      const current = itemsForSection(section, nextObjects, nextTasks, nextCuratorRuns);
-      if (selectedId && !current.some((item) => item.id === selectedId)) {
-        setSelectedId(null);
-      }
     } catch (cause) {
       setError(message(cause));
     } finally {
       setLoading(false);
     }
-  }, [query, section, selectedId]);
+  }, [query]);
+
+  useEffect(() => {
+    const syncRoute = () => setRoute(parseRoute(window.location.pathname));
+    window.addEventListener("popstate", syncRoute);
+    if (window.location.pathname === "/") navigate(sectionPath("objects"), true);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 150);
@@ -58,14 +62,13 @@ export default function App() {
   }, [load]);
 
   const selectSection = (next: Section) => {
-    setSection(next);
     setCreateOpen(false);
-    setSelectedId(null);
     setQuery("");
+    navigate(sectionPath(next));
   };
 
   const currentItems = itemsForSection(section, objects, tasks, curatorRuns);
-  const selectedItem = currentItems.find((item) => item.id === selectedId);
+  const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
 
   return (
@@ -95,14 +98,14 @@ export default function App() {
       <section className="main-panel">
         <header className="topbar">
           <div className="page-path">
-            <button className="path-root" onClick={() => setSelectedId(null)}>{sectionLabel}</button>
-            {selectedItem && <><span>›</span><strong>{itemTitle(selectedItem, objects)}</strong></>}
+            <button className="path-root" onClick={() => navigate(sectionPath(section))}>{sectionLabel}</button>
+            {(selectedId || connectionId) && <><span>›</span><strong>{connectionId ? `Connection ${shortId(connectionId)}` : selectedItem ? itemTitle(selectedItem, objects) : shortId(selectedId ?? "")}</strong></>}
           </div>
         </header>
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {!selectedId ? <section className="list-view" aria-label={`${section} records`}>
+          {!selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div><div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}>+</button>}</div><p>{sectionDescriptions[section]}</p></div>
             </header>
@@ -113,26 +116,27 @@ export default function App() {
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
               {currentItems.map((item) => (
-                <button key={item.id} className="record" onClick={() => setSelectedId(item.id)}>
+                <div key={itemRouteId(item)} className="record">
+                  <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="row-grip">···</span>
                   <span className={`kind ${itemBadge(item)}`}>{itemBadge(item)}</span>
                   <strong>{itemTitle(item, objects)}</strong>
                   <p>{itemDescription(item)}</p>
-                  {"agent_eligible" in item && item.agent_eligible ? <span className="agent-pill">Agent</span> : <span />}
+                  <ObjectId id={canonicalObjectId(item)} compact />
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
-                </button>
+                </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {section === "tasks" ? <TaskDetail id={selectedId} objects={objects} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId} objects={objects} onChanged={load} /> : <ObjectDetail id={selectedId} objects={objects} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} onChanged={load} />}
           </section>}
         </div>
       </section>
 
       {createOpen && isCreateSection(section) && (section === "tasks"
-        ? <NewTask onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(item.id, load, setCreateOpen, setSelectedId)} />
-        : <NewObject fixedKind={fixedCreateKind(section)} label={sectionSingular[section]} onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(item.id, load, setCreateOpen, setSelectedId)} />)}
+        ? <NewTask onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
+        : <NewObject fixedKind={fixedCreateKind(section)} label={sectionSingular[section]} onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.id, load, setCreateOpen)} />)}
     </main>
   );
 }
@@ -146,6 +150,9 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
   const kind = sectionKinds[section];
   return objects.filter((item) => item.kind === kind);
 }
+
+function itemRouteId(item: ListItem) { return "trigger" in item ? item.id : canonicalObjectId(item); }
+function canonicalObjectId(item: ListItem) { return "trigger" in item ? item.chat_object_id : "object_id" in item ? item.object_id : item.id; }
 
 function itemBadge(item: ListItem) { return "kind" in item ? item.kind : "trigger" in item ? item.status : item.status; }
 function itemTitle(item: ListItem, objects: SharedObject[]) { return "title" in item ? item.title : `Chat · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}`; }
@@ -218,6 +225,7 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
         <section className="properties-block" aria-label="Object properties">
           <h2>Properties</h2>
           <div className="properties-grid">
+            <Property label="Object ID"><ObjectId id={item.id} label={false} /></Property>
             <Property label="Type"><span className={`kind ${item.kind}`}>{item.kind}</span></Property>
             <Property label="Revision">{item.revision}</Property>
             <Property label="Created by"><span className="property-value-wrap">{item.created_by_type}:{item.created_by_id}</span></Property>
@@ -234,7 +242,7 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
       {item.kind === "chat" && <ChatTranscript id={item.id} />}
       <Provenance value={item.provenance} />
       <Connections object={item} objects={objects} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p><ObjectId id={event.object_id} compact />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} />}</div><time>{relative(event.created_at)}</time></div>)}</div></Section>
     </div>
   </div>;
 }
@@ -252,7 +260,7 @@ function UserIdentityPanel({ id }: { id: string }) {
   }, [id]);
   return <Section title="Identity">
     {error && <p className="form-error">{error}</p>}
-    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="User kind"><span className={`kind ${user.user_kind}`}>{user.user_kind}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><span>{identity.provider}</span><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
+    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /></Property><Property label="User kind"><span className={`kind ${user.user_kind}`}>{user.user_kind}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><span>{identity.provider}</span><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={identity.user_object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
   </Section>;
 }
 
@@ -272,6 +280,7 @@ function ChatTranscript({ id }: { id: string }) {
       {messages.map((item) => <article className="chat-message" key={item.id}>
         <header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header>
         <p>{item.content}</p>
+        <footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer>
       </article>)}
       {!error && messages.length === 0 && <p className="muted">No messages have been ingested.</p>}
     </div>
@@ -291,7 +300,7 @@ function Connections({ object, objects, connections, onCreated }: { object: Shar
   };
   return <Section title="Relationships" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
     {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-    <div className="connections">{connections.map((connection) => { const outgoing = connection.source_object_id === object.id; const other = outgoing ? connection.target_object_id : connection.source_object_id; const messageIds = stringList(connection.provenance.supporting_message_ids); return <div className="connection" key={connection.id}><span>{outgoing ? "Outgoing" : "Incoming"}</span><strong>{connection.kind.replace("_", " ")} · {titles.get(other) ?? shortId(other)}</strong><button className="protect-action" type="button" onClick={() => void toggleProtected(connection)}>{connection.protected ? "Unprotect" : "Protect"}</button><p>{connection.description}</p>{messageIds.length > 0 && <small>Messages · {messageIds.map(shortId).join(", ")}</small>}</div>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
+    <div className="connections">{connections.map((connection) => { const outgoing = connection.source_object_id === object.id; const other = outgoing ? connection.target_object_id : connection.source_object_id; const messageIds = stringList(connection.provenance.supporting_message_ids); return <div className="connection" key={connection.id}><span>{outgoing ? "Outgoing" : "Incoming"}</span><strong>{connection.kind.replace("_", " ")} · {titles.get(other) ?? shortId(other)}</strong><button className="protect-action" type="button" onClick={() => void toggleProtected(connection)}>{connection.protected ? "Unprotect" : "Protect"}</button><p>{connection.description}</p><div className="connection-identities"><ConnectionId id={connection.id} /><ObjectId id={connection.source_object_id} compact /><span aria-hidden="true">→</span><ObjectId id={connection.target_object_id} compact /></div>{messageIds.length > 0 && <small>Messages · {messageIds.map(shortId).join(", ")}</small>}</div>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
   </Section>;
 }
 
@@ -316,27 +325,28 @@ function TaskDetail({ id, objects, onChanged }: { id: string; objects: SharedObj
   return <div className="record-page">
     <div className="record-primary">
       <form className="detail-form" onSubmit={save}>
-        <input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.id}-${task.revision}-title`} />
+        <input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} />
         <section className="properties-block" aria-label="Task properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
-            <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.id}-${task.revision}-eligible`} /> Eligible</label></Property>
-            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.id}-${task.revision}-protected`} /> Keep this record curator-safe</label></Property>
-            <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
-            <Property label="Owner">{task.owner_object_id ?? "Unassigned"}</Property>
+            <Property label="Object ID"><ObjectId id={task.object_id} label={false} /></Property>
+            <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
+            <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.object_id}-${task.revision}-eligible`} /> Eligible</label></Property>
+            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.object_id}-${task.revision}-protected`} /> Keep this record curator-safe</label></Property>
+            <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
+            <Property label="Owner">{task.owner_object_id ? <ObjectId id={task.owner_object_id} /> : "Unassigned"}</Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
             <Property label="Revision">{task.revision}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.id}-${task.revision}-description`} rows={9} placeholder="Explain what this task is…" />
+        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={9} placeholder="Explain what this task is…" />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
       <Provenance value={task.provenance} />
       <Connections object={object} objects={objects} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p><ObjectId id={event.object_id} compact /></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
     </div>
   </div>;
 }
@@ -366,7 +376,7 @@ function CuratorDetail({ id, objects, onChanged }: { id: string; objects: Shared
     <section className="properties-block" aria-label="Curator Run properties"><h2>Properties</h2><div className="properties-grid">
       <Property label="Status"><span className={`kind ${run.status}`}>{run.status}</span></Property>
       <Property label="Trigger">{run.trigger.replace("_", " ")}</Property>
-      <Property label="Chat">{chatTitle}</Property>
+      <Property label="Chat"><span>{chatTitle}</span><ObjectId id={run.chat_object_id} /></Property>
       <Property label="Messages">{run.message_count}</Property>
       <Property label="Attempts">{run.attempts}</Property>
       <Property label="Model">{run.model ?? "Not assigned"}</Property>
@@ -377,22 +387,51 @@ function CuratorDetail({ id, objects, onChanged }: { id: string; objects: Shared
     {error && <p className="form-error">{error}</p>}
     {run.status === "completed" && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Undoing…" : "Undo whole run"}</button>}
     {run.status === "reversed" && <p className="undo-note">This run was undone. Messages and audit history were preserved.</p>}
-    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <article className="chat-message" key={item.id}><header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header><p>{item.content}</p></article>)}</div></Section>
-    <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
+    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <article className="chat-message" key={item.id}><header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header><p>{item.content}</p><footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer></article>)}</div></Section>
+    <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <ObjectId id={change.entity_id} compact /> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
+  </div></div>;
+}
+
+function ConnectionDetail({ id, objects }: { id: string; objects: SharedObject[] }) {
+  const [connection, setConnection] = useState<Connection | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.connection(id)
+      .then((item) => { if (active) setConnection(item); })
+      .catch((cause) => { if (active) setError(message(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  if (!connection) return <DetailLoading error={error} />;
+  const sourceTitle = objects.find((item) => item.id === connection.source_object_id)?.title;
+  const targetTitle = objects.find((item) => item.id === connection.target_object_id)?.title;
+  return <div className="record-page"><div className="record-primary">
+    <h1 className="detail-title">{connection.kind.replaceAll("_", " ")}</h1>
+    <p className="detail-description">{connection.description}</p>
+    <section className="properties-block" aria-label="Connection properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Connection ID"><ConnectionId id={connection.id} label={false} /></Property>
+      <Property label="Source Object">{sourceTitle && <strong>{sourceTitle}</strong>}<ObjectId id={connection.source_object_id} /></Property>
+      <Property label="Direction"><span aria-label="Source to target">→</span></Property>
+      <Property label="Target Object">{targetTitle && <strong>{targetTitle}</strong>}<ObjectId id={connection.target_object_id} /></Property>
+      <Property label="Revision">{connection.revision}</Property>
+      <Property label="Protected">{connection.protected ? "Yes" : "No"}</Property>
+      <Property label="Updated">{relative(connection.updated_at)}</Property>
+    </div></section>
+    <Provenance value={connection.provenance} />
   </div></div>;
 }
 
 function Provenance({ value }: { value: Record<string, unknown> }) {
   const messageIds = stringList(value.supporting_message_ids);
+  const sourceChatId = textValue(value.chat_object_id);
   const fields = [
     ["Source", textValue(value.source_type, "Unspecified")],
     ["Source reference", textValue(value.source_ref)],
     ["Curator Run", textValue(value.curator_run_id)],
-    ["Source Chat", textValue(value.chat_object_id)],
     ["Model", textValue(value.model)],
     ["Prompt", textValue(value.prompt_version)],
   ].filter(([, fieldValue]) => Boolean(fieldValue));
-  return <Section title="Provenance"><div className="properties-block compact-properties"><div className="properties-grid">{fields.map(([label, fieldValue]) => <Property label={label} key={label}><span className="property-value-wrap">{fieldValue}</span></Property>)}{messageIds.length > 0 && <Property label="Supporting messages"><span className="property-value-wrap">{messageIds.join(", ")}</span></Property>}</div></div></Section>;
+  return <Section title="Provenance"><div className="properties-block compact-properties"><div className="properties-grid">{fields.map(([label, fieldValue]) => <Property label={label} key={label}><span className="property-value-wrap">{fieldValue}</span></Property>)}{sourceChatId && <Property label="Source Chat"><ObjectId id={sourceChatId} /></Property>}{messageIds.length > 0 && <Property label="Supporting messages"><span className="property-value-wrap">{messageIds.join(", ")}</span></Property>}</div></div></Section>;
 }
 
 function CreateModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -415,7 +454,7 @@ function DetailLoading({ error }: { error: string | null }) { return <div classN
 function relative(value: string) { const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000); if (seconds < 60) return "now"; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return `${Math.floor(seconds / 86400)}d ago`; }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : "Something went wrong."; }
 function conflictMessage(cause: unknown) { return cause instanceof ApiError && cause.status === 409 ? "This record changed elsewhere. Refresh before saving again." : message(cause); }
-function finishCreate(id: string, load: () => Promise<void>, setCreateOpen: (open: boolean) => void, setSelectedId: (id: string) => void) { setCreateOpen(false); setSelectedId(id); void load(); }
+function finishCreate(section: Section, id: string, load: () => Promise<void>, setCreateOpen: (open: boolean) => void) { setCreateOpen(false); navigate(detailPath(section, id)); void load(); }
 function shortId(value: string) { return value.length > 12 ? `${value.slice(0, 8)}…` : value; }
 function textValue(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value : fallback; }
 function stringList(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
