@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { connectionPath, interceptNavigation, objectPath } from "./routing";
 
-export function ObjectId({ id, compact = false, copy = true, label = true, rowPill = false }: { id: string; compact?: boolean; copy?: boolean; label?: boolean; rowPill?: boolean }) {
+export function ObjectId({ id, compact = false, copy = true, label = true, rowPill = false, navigate = false }: { id: string; compact?: boolean; copy?: boolean; label?: boolean; rowPill?: boolean; navigate?: boolean }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const path = objectPath(id);
   const copyId = async () => {
@@ -24,6 +24,7 @@ export function ObjectId({ id, compact = false, copy = true, label = true, rowPi
         aria-label={`Copy Object ID ${id}`}
         title={`Copy full Object ID ${id}`}
       >ID: {id.slice(0, 5)}</button>
+      {navigate && <a className="object-id-open" href={path} onClick={(event) => interceptNavigation(event, path)} title="Open canonical Object" aria-label={`Open Object ID ${id}`}>↗</a>}
       <span className="sr-only" aria-live="polite">{copyState === "copied" ? `Copied Object ID ${id}` : copyState === "error" ? `Could not copy Object ID ${id}` : ""}</span>
     </span>;
   }

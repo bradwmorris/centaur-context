@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
-import { AttributionList, AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
 import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
@@ -214,29 +214,25 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
   return <div className="record-page">
     <div className="record-primary">
       <form className="detail-form" onSubmit={save}>
-        <input className="title-input" name="title" aria-label="Object title" defaultValue={item.title} key={`${item.id}-${item.revision}-title`} />
+        <div className="detail-heading"><SourceBadge provider={visuals.get(item.id)?.source_provider} /><ObjectId id={item.id} rowPill navigate /><input className="title-input" name="title" aria-label="Object title" defaultValue={item.title} key={`${item.id}-${item.revision}-title`} /><ObjectTypeBadge kind={item.kind} /><AttributionStack users={visuals.get(item.id)?.users ?? []} /></div>
         <section className="properties-block" aria-label="Object properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Property label="Object ID"><ObjectId id={item.id} label={false} /><ObjectContext visual={visuals.get(item.id)} /></Property>
-            <Property label="Type"><ObjectTypeBadge kind={item.kind} /></Property>
             <Property label="Revision">{item.revision}</Property>
             <Property label="Created by"><span className="property-value-wrap">{item.created_by_type}:{item.created_by_id}</span></Property>
-            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={item.protected} key={`${item.id}-${item.revision}-protected`} /> Keep this record curator-safe</label></Property>
-            <Property label="Source"><SourceBadge provider={visuals.get(item.id)?.source_provider} />{!visuals.get(item.id)?.source_provider && textValue(item.provenance.source_type, "Unspecified")}</Property>
-            <Property label="Attributed users"><AttributionList users={visuals.get(item.id)?.users ?? []} /></Property>
+            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={item.protected} key={`${item.id}-${item.revision}-protected`} /> Curator-safe</label></Property>
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required aria-label="Object description" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={9} placeholder="Explain what this is…" />
+        <textarea className="body-input" name="description" required aria-label="Object description" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder="Explain what this is…" />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} />}
-      <Provenance value={item.provenance} />
       <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
       <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} />}</div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Provenance value={item.provenance} />
     </div>
   </div>;
 }
@@ -331,30 +327,27 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
   return <div className="record-page">
     <div className="record-primary">
       <form className="detail-form" onSubmit={save}>
-        <input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} />
+        <div className="detail-heading"><SourceBadge provider={visuals.get(task.object_id)?.source_provider} /><ObjectId id={task.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} /><ObjectTypeBadge kind="task" /><TaskStatusBadge status={task.status} /><AttributionStack users={visuals.get(task.object_id)?.users ?? []} /></div>
         <section className="properties-block" aria-label="Task properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Property label="Object ID"><ObjectId id={task.object_id} label={false} /><ObjectContext visual={visuals.get(task.object_id)} /></Property>
-            <Property label="Type"><ObjectTypeBadge kind="task" /></Property>
-            <Field label="Status"><span className="field-with-badge"><TaskStatusBadge status={task.status} /><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></span></Field>
+            <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
             <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.object_id}-${task.revision}-eligible`} /> Eligible</label></Property>
-            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.object_id}-${task.revision}-protected`} /> Keep this record curator-safe</label></Property>
+            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.object_id}-${task.revision}-protected`} /> Curator-safe</label></Property>
             <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
             <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
-            <Property label="Attributed users"><AttributionList users={visuals.get(task.object_id)?.users ?? []} /></Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
             <Property label="Revision">{task.revision}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={9} placeholder="Explain what this task is…" />
+        <textarea className="body-input" name="description" required aria-label="Task description" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder="Explain what this task is…" />
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
-      <Provenance value={task.provenance} />
       <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
       <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} /></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Provenance value={task.provenance} />
     </div>
   </div>;
 }
@@ -436,7 +429,7 @@ function Provenance({ value }: { value: Record<string, unknown> }) {
     ["Model", textValue(value.model)],
     ["Prompt", textValue(value.prompt_version)],
   ].filter(([, fieldValue]) => Boolean(fieldValue));
-  return <Section title="Provenance"><div className="properties-block compact-properties"><div className="properties-grid">{fields.map(([label, fieldValue]) => <Property label={label} key={label}><span className="property-value-wrap">{fieldValue}</span></Property>)}{sourceChatId && <Property label="Source Chat"><ObjectId id={sourceChatId} /></Property>}{messageIds.length > 0 && <Property label="Supporting messages"><span className="property-value-wrap">{messageIds.join(", ")}</span></Property>}</div></div></Section>;
+  return <details className="provenance"><summary><span>Provenance</span><span className="provenance-chevron" aria-hidden="true">›</span></summary><div className="properties-block compact-properties"><div className="properties-grid">{fields.map(([label, fieldValue]) => <Property label={label} key={label}><span className="property-value-wrap">{fieldValue}</span></Property>)}{sourceChatId && <Property label="Source Chat"><ObjectId id={sourceChatId} /></Property>}{messageIds.length > 0 && <Property label="Supporting messages"><span className="property-value-wrap">{messageIds.join(", ")}</span></Property>}</div></div></details>;
 }
 
 function CreateModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {

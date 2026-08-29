@@ -129,6 +129,18 @@ describe("canonical Object identity across the application", () => {
     }
   });
 
+  it("keeps detail identity in the header and provenance collapsed at the bottom", async () => {
+    window.history.replaceState({}, "", `/memories/${ids.memory}`);
+    render(<App />);
+    const title = await screen.findByRole("textbox", { name: "Object title" });
+    expect(title.parentElement).toHaveClass("detail-heading");
+    expect(title.parentElement).toHaveTextContent("Memory");
+    expect(title.parentElement).toHaveTextContent(`ID: ${ids.memory.slice(0, 5)}`);
+    const provenance = screen.getByText("Provenance").closest("details");
+    expect(provenance).not.toHaveAttribute("open");
+    expect(provenance?.previousElementSibling).toHaveTextContent("Activity");
+  });
+
   it("routes Curator object and Connection changes to the correct record types", async () => {
     window.history.replaceState({}, "", `/curator-runs/${ids.run}`);
     render(<App />);
