@@ -80,13 +80,13 @@ export default function App() {
         <div className="nav-head">
           <div className="brand">
             <span className="brand-mark">C</span>
-            {!collapsed && <span>Centaur OS</span>}
+            {!collapsed && <span>Centaur Context</span>}
           </div>
           <button className="collapse-button" onClick={() => setCollapsed((value) => !value)} aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}>
             {collapsed ? "›" : "‹"}
           </button>
         </div>
-        <nav aria-label="Centaur OS">
+        <nav aria-label="Centaur Context">
           <NavButton active={section === "objects"} compact={collapsed} icon="◇" label="Objects" onClick={() => selectSection("objects")} />
           <NavButton active={section === "tasks"} compact={collapsed} icon="✓" label="Tasks" onClick={() => selectSection("tasks")} />
           <NavButton active={section === "chats"} compact={collapsed} icon="◌" label="Chats" onClick={() => selectSection("chats")} />
@@ -175,7 +175,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
     try {
       onCreated(await api.createObject({
         kind, title: String(data.get("title")), description: String(data.get("description")),
-        provenance: { source_type: "human", note: "Created in Centaur OS" },
+        provenance: { source_type: "human", note: "Created in Centaur Context" },
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
@@ -194,7 +194,7 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_eligible: data.get("agent_eligible") === "on", provenance: { source_type: "human", note: "Created in Centaur OS" } })); }
+    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_eligible: data.get("agent_eligible") === "on", provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
     catch (cause) { setError(message(cause)); setBusy(false); }
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>

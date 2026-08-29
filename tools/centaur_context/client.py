@@ -1,4 +1,4 @@
-"""Standard authenticated agent client for the Centaur OS Rust API."""
+"""Standard authenticated agent client for the Centaur Context Rust API."""
 
 from __future__ import annotations
 
@@ -8,13 +8,28 @@ from urllib.parse import quote
 
 import httpx
 
-DEFAULT_CENTAUR_OS_URL = "http://centaur-os.centaur.svc.cluster.local:8081"
+DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:8081"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
-TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
+TOKEN_NAME = "CENTAUR_CONTEXT_API_TOKEN"
+LEGACY_TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 
 def _clean(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _compatible_value(canonical: str, legacy: str, *, source: str) -> str:
+    canonical_value = _clean(canonical)
+    legacy_value = _clean(legacy)
+    if canonical_value and legacy_value and canonical_value != legacy_value:
+        raise RuntimeError(f"conflicting canonical and legacy {source} values")
+    return canonical_value or legacy_value
+
+
+def _compatible_env(canonical_name: str, legacy_name: str) -> str:
+    return _compatible_value(
+        os.getenv(canonical_name, ""), os.getenv(legacy_name, ""), source="environment"
+    )
 
 
 def _bounded_limit(value: int) -> int:
@@ -31,11 +46,11 @@ def _tool_secret(name: str) -> str:
 
 def _data(payload: Any) -> Any:
     if not isinstance(payload, dict) or "data" not in payload:
-        raise RuntimeError("Centaur OS returned an invalid response")
+        raise RuntimeError("Centaur Context returned an invalid response")
     return payload["data"]
 
 
-class CentaurOsClient:
+class CentaurContextClient:
     """Serialize approved operations; validation remains in the Rust API."""
 
     def __init__(
@@ -48,7 +63,11 @@ class CentaurOsClient:
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self.base_url = _clean(base_url or os.getenv("CENTAUR_OS_URL")) or DEFAULT_CENTAUR_OS_URL
+        self.base_url = (
+            _clean(base_url)
+            or _compatible_env("CENTAUR_CONTEXT_URL", "CENTAUR_OS_URL")
+            or DEFAULT_CENTAUR_CONTEXT_URL
+        )
         self.base_url = self.base_url.rstrip("/")
         self.console_url = (
             _clean(console_url or os.getenv("CENTAUR_CONSOLE_URL")) or DEFAULT_CONSOLE_URL
@@ -62,7 +81,13 @@ class CentaurOsClient:
         self._http.close()
 
     def _token(self) -> str:
-        value = self._explicit_token or _clean(os.getenv(TOKEN_NAME)) or _tool_secret(TOKEN_NAME)
+        value = self._explicit_token or _compatible_env(TOKEN_NAME, LEGACY_TOKEN_NAME)
+        if not value:
+            value = _compatible_value(
+                _tool_secret(TOKEN_NAME),
+                _tool_secret(LEGACY_TOKEN_NAME),
+                source="tool secret",
+            )
         if not value:
             raise RuntimeError(f"{TOKEN_NAME} is required")
         return value
@@ -133,11 +158,11 @@ class CentaurOsClient:
             except (ValueError, AttributeError):
                 message = None
             detail = message or f"HTTP {exc.response.status_code}"
-            raise RuntimeError(f"Centaur OS request failed: {detail}") from exc
+            raise RuntimeError(f"Centaur Context request failed: {detail}") from exc
         except httpx.RequestError as exc:
-            raise RuntimeError(f"Centaur OS request failed: {exc}") from exc
+            raise RuntimeError(f"Centaur Context request failed: {exc}") from exc
         except ValueError as exc:
-            raise RuntimeError("Centaur OS returned invalid JSON") from exc
+            raise RuntimeError("Centaur Context returned invalid JSON") from exc
 
     def get_context(
         self,
@@ -176,5 +201,5 @@ class CentaurOsClient:
         """Read one shared record by ID."""
         return self._request("GET", f"/api/v1/objects/{quote(id, safe='')}")
 
-def _client() -> CentaurOsClient:
-    return CentaurOsClient()
+def _client() -> CentaurContextClient:
+    return CentaurContextClient()

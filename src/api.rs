@@ -169,7 +169,7 @@ async fn health() -> Json<Value> {
 async fn api_meta() -> Json<Value> {
     Json(json!({
         "data": {
-            "product": "centaur-os",
+            "product": "centaur-context",
             "product_version": crate::version::PRODUCT_VERSION,
             "api_version": crate::version::API_VERSION,
             "ontology_version": crate::version::ONTOLOGY_VERSION,

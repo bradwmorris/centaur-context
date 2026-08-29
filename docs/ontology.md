@@ -1,6 +1,6 @@
 # Ontology
 
-Centaur OS stores a business as Objects and Connections.
+Centaur Context stores a business as Objects and Connections.
 
 ## Objects
 

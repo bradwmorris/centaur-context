@@ -1,8 +1,9 @@
 # RD: Rename Centaur OS to Centaur Context
 
-**Status:** `in_progress`
+**Status:** `review`
 **Created:** 2026-08-29
 **GitHub Issue:** `#10`
+**Consumer PRs:** Centaur `#1`; private overlay `#2`
 
 ## Execution Plan
 
@@ -15,9 +16,9 @@ tests, and RD contracts; filesystem references outside build/dependency/VCS
 directories; target-name availability; and tracked consumers in the adjacent
 Centaur and private overlay checkouts.
 
-**Missing:** The GitHub repository rename, local checkout/Codex project move,
-and any live installation cutover remain requester-owned actions after the
-local code and consumer changes pass verification.
+**Missing:** Review and merge approval for the three coordinated PRs, followed
+by requester approval for the GitHub repository rename, local checkout/Codex
+project move, pinned-source update, and live installation cutover.
 
 1. Establish the canonical `Centaur Context` naming matrix and compatibility
    bridge, then rename this repository's product, packages, source modules,
@@ -40,12 +41,12 @@ requester-owned steps.
 
 ## What We Are Doing
 
-- [ ] Present one clear product: **Centaur Context**, “Memory for your Centaur,”
+- [x] Present one clear product: **Centaur Context**, “Memory for your Centaur,”
   described technically as a compounding context engine for Centaur users and
   agents.
-- [ ] Make `centaur-context`, `centaur_context`, and `CENTAUR_CONTEXT` the
+- [x] Make `centaur-context`, `centaur_context`, and `CENTAUR_CONTEXT` the
   canonical public, code, and operational identifiers.
-- [ ] Keep existing installations and backups recoverable without rewriting
+- [x] Keep existing installations and backups recoverable without rewriting
   business records, Object Events, Curator Runs, or applied migration history.
 - [ ] Cut over every known Centaur and overlay consumer so ingestion, context
   retrieval, tool grants, DNS, and network policy continue to work.
@@ -68,7 +69,7 @@ requester-owned steps.
 - **Agent owns:** Local rename implementation, compatibility code, documentation,
   consumer patches, tests, residual-reference audit, and local verification when
   execution is separately assigned.
-- **Requester owns:** Renaming `bradwmorris/centaur-os` on GitHub, approving its
+- **Requester owns:** Renaming the current GitHub repository, approving its
   description/settings, moving the checkout or saved Codex project, rotating or
   copying secrets, deployment, database administration, publishing packages or
   images, and deletion of legacy resources.
@@ -113,8 +114,8 @@ Centaur” as positioning, not as the system or ontology name.
 - Do not rewrite Git commits or stored titles, descriptions, immutable events,
   Curator plans, prompt-version provenance, or prior backup files merely to hide
   the former name. Historical references must be truthful and clearly marked.
-- Treat the `brad_os` phase records and research RDs, the AGI Post operations
-  RD, Git history, and `centaur-os-backups` directory as external historical
+- Treat prior personal OS phase records and research RDs, external operations
+  records, Git history, and `centaur-os-backups` directory as historical
   evidence, not product source to bulk-rewrite. New backups use a new
   `centaur-context-backups` location; retained old backups keep their names and
   checksums.
@@ -182,24 +183,37 @@ Centaur” as positioning, not as the system or ontology name.
 
 ## Checks
 
-- [ ] A case-insensitive tracked/filesystem scan covers `Centaur OS`,
+- [x] A case-insensitive tracked/filesystem scan covers `Centaur OS`,
   `centaur-os`, `centaur_os`, `CENTAUR_OS`, `centaur_tool_centaur_os`, derived
   filenames, URLs, DNS names, and headings; every survivor is an allowlisted,
   tested legacy or historical reference.
-- [ ] Tests cover new and legacy environment precedence/conflicts, database
+- [x] Tests cover new and legacy environment precedence/conflicts, database
   allowlists, backup metadata, API metadata, CLI/package names, Docker binary,
   Kubernetes selectors/DNS, install collision refusal, and rollback guidance.
-- [ ] Fresh package/install dry runs and a disposable legacy-name upgrade prove
+- [x] Fresh package/install dry runs and a disposable legacy-name upgrade prove
   that no data, migration checksum, permissions, or network boundary is lost.
 - [ ] Centaur's focused Slack shared-context tests and the overlay's manifest,
   policy, tool-discovery, and fresh-sandbox checks pass with the new heading,
   CLI, host, grants, and pinned source.
-- [ ] This repository passes `cargo fmt --check`,
+- [x] This repository passes `cargo fmt --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`,
   `npm --prefix web run type-check`, `npm --prefix web run build`,
   `python3 -m pytest tools/centaur_context/test_client.py`,
+  `python3 -m pytest scripts/test_rename_contract.py`,
   `python3 -m compileall -q tools/centaur_context`, package-contract checks, and
   `git diff --check`.
+
+## Verification Results
+
+- Rust format, clippy, unit/API/eval tests, and disposable fresh-name and
+  legacy-name database contract tests pass; applied migrations remain unchanged.
+- Web type-check and production build pass. The renamed Python wheel and source
+  distribution build; all 18 client/rename tests and CLI help smoke pass.
+- Package, shell syntax, Kubernetes dry-run, backup metadata, install collision,
+  and residual-reference checks pass.
+- Centaur type-check and 55 focused shared-context tests pass. Its broader
+  Slackbot suite has unrelated pre-existing timing/state failures outside the
+  changed tests. Overlay YAML parsing, NetworkPolicy dry-run, and hygiene pass.
 
 ## Approval Boundary
 

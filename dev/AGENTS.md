@@ -1,20 +1,20 @@
-# Centaur OS Development Tasks
+# Centaur Context Development Tasks
 
-This directory contains the lightweight planning process for Centaur OS.
+This directory contains the lightweight planning process for Centaur Context.
 Requirement documents live in `dev/rd/` and are the durable specification for
 work that is larger than an obvious, self-contained fix.
 
 ## When To Create An RD
 
 Create an RD when asked to record, scope, or plan a distinct piece of Centaur
-OS work. A small compatible fix requested for immediate implementation does
+Context work. A small compatible fix requested for immediate implementation does
 not require an RD unless one is specifically requested.
 
 Planning an RD and executing an RD are separate modes. Creating or planning an
 RD does not authorize implementation. Stop after writing and checking the
 document unless execution is also explicitly requested.
 
-Do not automatically create a GitHub Issue or a Centaur OS Task row. Those can
+Do not automatically create a GitHub Issue or a Centaur Context Task row. Those can
 be created or linked when execution is explicitly requested.
 
 ## RD Location And Naming
@@ -130,6 +130,6 @@ When asked to execute an RD:
 10. After approval, squash-merge the PR, delete the branch, and confirm that the
     issue closed.
 
-When a Centaur OS Task or GitHub Issue exists, add a compact reference near the
+When a Centaur Context Task or GitHub Issue exists, add a compact reference near the
 RD metadata. The RD remains the detailed implementation contract; live task
-state belongs in Centaur OS, and public discussion belongs in the GitHub Issue.
+state belongs in Centaur Context, and public discussion belongs in the GitHub Issue.

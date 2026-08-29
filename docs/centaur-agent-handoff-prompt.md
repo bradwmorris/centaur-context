@@ -1,10 +1,10 @@
-# Centaur + Centaur OS Agent Handoff Prompt
+# Centaur + Centaur Context Agent Handoff Prompt
 
 Paste everything below into a new agent chat.
 
 ---
 
-You are joining me as a senior product, architecture, and engineering collaborator on Centaur and Centaur OS. Treat this prompt as your initial orientation, then inspect the linked public documentation and local repository before making technical claims or proposing changes. Preserve the distinction between verified implementation, current operational posture, and planned work.
+You are joining me as a senior product, architecture, and engineering collaborator on Centaur and Centaur Context. Treat this prompt as your initial orientation, then inspect the linked public documentation and local repository before making technical claims or proposing changes. Preserve the distinction between verified implementation, current operational posture, and planned work.
 
 ## The mission
 
@@ -12,7 +12,7 @@ We are building an operating model in which AI agents can do durable, shared, au
 
 Centaur is the agent control plane. It provides durable agent turns, isolated Kubernetes sandboxes, approved tools, credential-safe outbound calls, durable workflows, thin Slack/API clients, and organization-specific overlays. Its purpose is to make production agents recoverable, governable, and useful across real systems instead of leaving each Slackbot or integration to invent its own agent platform.
 
-Centaur OS is a separate but complementary local-first shared context and operations application for Centaur users and agents. It is the durable semantic workspace: a canonical graph of the things the organization knows and acts on, plus controlled ingestion, curation, retrieval, provenance, and human oversight.
+Centaur Context is a separate but complementary local-first shared context and operations application for Centaur users and agents. It is the durable semantic workspace: a canonical graph of the things the organization knows and acts on, plus controlled ingestion, curation, retrieval, provenance, and human oversight.
 
 The intended relationship is:
 
@@ -28,7 +28,7 @@ Centaur control plane
         |
         | authenticated HTTP API and approved overlay tool
         v
-Centaur OS
+Centaur Context
   - canonical Objects and explained Connections
   - Tasks, Chats, Users, Entities, Memories
   - Slack interaction ingestion
@@ -37,10 +37,10 @@ Centaur OS
   - immutable audit history and human controls
         |
         v
-separate PostgreSQL database: centaur_os
+separate PostgreSQL database: centaur_context
 ```
 
-Centaur orchestrates agents; Centaur OS gives those agents and their users a shared, durable, inspectable model of context and work. Do not collapse the two systems or assume that Centaur OS owns Centaur's session/runtime data.
+Centaur orchestrates agents; Centaur Context gives those agents and their users a shared, durable, inspectable model of context and work. Do not collapse the two systems or assume that Centaur Context owns Centaur's session/runtime data.
 
 ## Centaur: public platform context
 
@@ -65,9 +65,9 @@ The important Centaur concepts are:
 7. **Ordered overlays.** The base Centaur repository remains generic. Separate repos contribute organization-specific tools, workflows, skills, personas, prompt fragments, and sandbox files. Later sources can override earlier names. Production sources should be pinned when reproducibility matters.
 8. **Production shape.** Kubernetes sandboxes, Postgres as source of truth, controlled egress, and optional logs/metrics/dashboards. Centaur is deliberately more infrastructure than a demo chat loop because it targets shared, recoverable production work.
 
-## Centaur OS: repository and current shipped state
+## Centaur Context: repository and current shipped state
 
-Work from the Centaur OS repository root.
+Work from the Centaur Context repository root.
 
 Read these first and treat them as authoritative for repository work:
 
@@ -86,12 +86,12 @@ Current repository baseline:
 - The implemented sequence is: preserved POC baseline; canonical graph migration; deterministic Slack ingestion; read-only Context Builder; atomic Context Curator; completed MVP human surfaces; packaged operations.
 - `dev/` contains the tracked development workflow and backlog. Its RDs are
   plans and are not evidence that the described work has shipped.
-- Release contract: Centaur OS `0.1.0`, HTTP API `v1`, ontology `v1`, database schema version `7`, standard tool version `0.1.0`.
+- Release contract: Centaur Context `0.2.0`, HTTP API `v1`, ontology `v1`, database schema version `8`, standard tool version `0.2.0`.
 - Deployment profile: single organization, local machine or trusted private network. Verified container architecture is `linux/arm64`; builds declare `linux/amd64` and `linux/arm64` support.
 
 ### Product and ontology
 
-Centaur OS centers everything important on one canonical `objects` record with exactly one primary kind:
+Centaur Context centers everything important on one canonical `objects` record with exactly one primary kind:
 
 - `task`
 - `chat`
@@ -126,11 +126,11 @@ The process exposes four distinct listeners and trust boundaries:
 
 Human `/api/v1` surfaces include metadata; Object listing/creation/read/update; Connection listing/creation/update/archive; Task listing/creation/read/update; Chat Messages; Users and external identities; Curator Run listing/detail/Undo; search; context; and Object Events. Unknown API versions fail closed rather than being silently reinterpreted.
 
-The database is always the separate logical database `centaur_os`, owned through the least-privilege application role `centaur_os_app`. Migration and operations code refuses unrelated database names except disposable test databases containing `centaur_os_test`.
+The database is always the separate logical database `centaur_context`, owned through the least-privilege application role `centaur_context_app`. Migration and operations code refuses unrelated database names except disposable test databases containing `centaur_context_test`.
 
 ### Slack interaction ingestion
 
-Centaur's Slack transport posts a provider-neutral transcript envelope to `POST /api/v1/ingest/slack/interactions`. Centaur OS does not read Centaur's private session tables.
+Centaur's Slack transport posts a provider-neutral transcript envelope to `POST /api/v1/ingest/slack/interactions`. Centaur Context does not read Centaur's private session tables.
 
 For each approved Slack thread, ingestion:
 
@@ -167,11 +167,11 @@ Canonical Object title and description are always indexed with PostgreSQL full-t
 
 Embeddings and embedding jobs are rebuildable derived search data, never canonical business truth. Their versioned document format, model, dimensions, and query/document mode participate in stale detection. Object writes queue regeneration. If embeddings are absent, stale, incomplete, or failing, retrieval falls back to full text.
 
-The public standard agent tool lives in `tools/centaur_os` because it is part of the public API contract. It provides only:
+The public standard agent tool lives in `tools/centaur_context` because it is part of the public API contract. It provides only:
 
-- `centaur-os get-context`
-- `centaur-os search-objects`
-- `centaur-os read-object`
+- `centaur-context get-context`
+- `centaur-context search-objects`
+- `centaur-context read-object`
 
 It has no write, deletion, SQL, arbitrary-request, or application-policy command. The server enforces the same restriction on the agent listener even if a sandbox bypasses the CLI. Requests carry the bearer placeholder plus Centaur principal and thread identity headers. The real credential is injected through Centaur's supported secret boundary.
 
@@ -191,7 +191,7 @@ The repository includes:
 - guarded Kubernetes install/uninstall scripts;
 - separate database bootstrap/drop scripts;
 - backup and restore with checksum/metadata validation;
-- a ClusterIP Service and Centaur OS-scoped NetworkPolicy;
+- a ClusterIP Service and Centaur Context-scoped NetworkPolicy;
 - example Secret and provider-egress manifests;
 - package-contract validation;
 - forward-only migration and rollback guidance.
@@ -207,7 +207,7 @@ Five requirements documents exist in `dev/rd/`, all with backlog status and comp
 1. **Canonical Object ID navigation.** Make `Object ID` visible, copyable, deep-linkable, and correctly distinguished from supporting-record IDs everywhere.
 2. **Clean type/source/user/Connection visuals.** Introduce consistent accessible labels, evidence-backed Slack source markers, deterministic avatars, correct user attribution, and directional navigable Connection presentation.
 3. **Harden Context Builder and embedding contract.** Make context explicitly Chat-aware, add bounded subtype projections and a serialized context budget, version embedding input, support document/query embedding modes, and replace hard-coded English search assumptions with validated configuration.
-4. **Read-only schema visualizer.** Add a human-only, allowlisted, paginated view of Centaur OS-owned tables, columns, constraints, relationships, and rows—never arbitrary SQL or cross-database access.
+4. **Read-only schema visualizer.** Add a human-only, allowlisted, paginated view of Centaur Context-owned tables, columns, constraints, relationships, and rows—never arbitrary SQL or cross-database access.
 5. **Stronger Object descriptions and list snippets.** Enforce a more useful canonical-description contract and show consistent accessible snippets in every primary list without creating a competing notes/body field.
 
 These RDs do not authorize implementation by themselves. Execution must be
@@ -217,7 +217,7 @@ merge-approval workflow during execution.
 
 ## Non-negotiable boundaries
 
-- This repository owns only the `centaur_os` logical database. Never query, migrate, copy, or repurpose Centaur's `ai_v2` or Console databases.
+- This repository owns only the `centaur_context` logical database. Never query, migrate, copy, or repurpose Centaur's `ai_v2` or Console databases.
 - Agents use the authenticated HTTP API. Never give a sandbox a database DSN.
 - Keep the ontology centered on canonical Objects, one-to-one subtypes, explained Connections, and immutable Object Events.
 - Organization-specific agents, prompts, workflows, retention rules, and business policies belong in a private overlay, not the reusable base product.
@@ -244,17 +244,17 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 npm --prefix web run type-check
 npm --prefix web run build
-python3 -m pytest tools/centaur_os/test_client.py
-python3 -m compileall -q tools/centaur_os
+python3 -m pytest tools/centaur_context/test_client.py
+python3 -m compileall -q tools/centaur_context
 ```
 
-Database integration tests require `TEST_DATABASE_URL` and must target a disposable database whose name contains `centaur_os_test`. Report skipped environment-dependent checks explicitly. Also run any narrower RD-specific checks and `git diff --check`.
+Database integration tests require `TEST_DATABASE_URL` and must target a disposable database whose name contains `centaur_context_test`. Report skipped environment-dependent checks explicitly. Also run any narrower RD-specific checks and `git diff --check`.
 
 ## Your initial response
 
 After receiving this context:
 
-1. Confirm the Centaur-versus-Centaur-OS boundary in your own words.
+1. Confirm the Centaur-versus-Centaur-Context boundary in your own words.
 2. State what is implemented today versus what is backlog.
 3. Name any source you could not access or any assumption you had to make.
 4. Then ask what outcome I want to work on, unless I included a concrete task after this prompt.
