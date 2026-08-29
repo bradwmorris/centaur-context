@@ -1,4 +1,6 @@
-export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "curator" | "evals";
+import type { SchemaViewMode } from "./types";
+
+export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "curator" | "evals" | "schema";
 
 export interface AppRoute {
   section: Section;
@@ -15,6 +17,7 @@ const sections: Record<string, Section> = {
   memories: "memories",
   "curator-runs": "curator",
   evals: "evals",
+  schema: "schema",
 };
 
 const paths: Record<Section, string> = {
@@ -26,6 +29,7 @@ const paths: Record<Section, string> = {
   memories: "memories",
   curator: "curator-runs",
   evals: "evals",
+  schema: "schema",
 };
 
 export function parseRoute(pathname: string): AppRoute {
@@ -55,12 +59,28 @@ export function objectPath(id: string): string {
   return detailPath("objects", id);
 }
 
+export function schemaPath(table?: string, view: SchemaViewMode = table ? "structure" : "map"): string {
+  if (!table || view === "map") return "/schema";
+  return `/schema/${encodeURIComponent(table)}/${view}`;
+}
+
+export function schemaRowPath(table: string, column: string, value: string): string {
+  const params = new URLSearchParams({ focus_column: column, focus_value: value });
+  return `${schemaPath(table, "rows")}?${params}`;
+}
+
+export function schemaView(pathname: string): SchemaViewMode {
+  const parts = pathname.split("/").filter(Boolean).map(safeDecode);
+  if (parts[0] !== "schema" || !parts[1]) return "map";
+  return parts[2] === "rows" ? "rows" : "structure";
+}
+
 export function connectionPath(id: string): string {
   return `/connections/${encodeURIComponent(id)}`;
 }
 
 export function navigate(path: string, replace = false): void {
-  if (window.location.pathname === path) return;
+  if (`${window.location.pathname}${window.location.search}` === path) return;
   window.history[replace ? "replaceState" : "pushState"]({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }

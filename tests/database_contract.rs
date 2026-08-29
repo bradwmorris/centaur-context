@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, agent_router},
+    api::{AppState, agent_router, human_router},
     config::{EmbeddingConfig, EmbeddingInputMode, TextSearchConfig},
     curator::{
         self, CreateConnection as CuratorConnection, CreateObject as CuratorObject, MemoryFields,
@@ -19,12 +19,12 @@ use centaur_context::{
         SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
         queue_inactive_interactions,
     },
-    search,
+    schema, search,
 };
 use http_body_util::BodyExt;
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
 
@@ -1687,4 +1687,322 @@ async fn canonical_ontology_and_revision_conflicts() {
         .await
         .unwrap();
     assert_eq!(inactive.status(), StatusCode::BAD_REQUEST);
+
+    let baseline_schema = schema::inspect_schema(&pool).await.unwrap();
+    assert_eq!(baseline_schema.tables.len(), 17);
+    let mut application_tables = sqlx::query_scalar::<_, String>(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('_sqlx_migrations', 'schema_visualizer_tables') ORDER BY tablename",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let mut registered_tables = sqlx::query_scalar::<_, String>(
+        "SELECT table_name FROM schema_visualizer_tables ORDER BY table_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    application_tables.sort();
+    registered_tables.sort();
+    assert_eq!(registered_tables, application_tables);
+    assert!(
+        baseline_schema
+            .tables
+            .iter()
+            .find(|table| table.name == "objects")
+            .is_some_and(|table| table.classification == "canonical")
+    );
+    for subtype in ["tasks", "chats", "users", "entities", "memories"] {
+        assert!(
+            baseline_schema
+                .tables
+                .iter()
+                .find(|table| table.name == subtype)
+                .is_some_and(|table| table.classification == "subtype"),
+            "{subtype} must be inferred as a canonical Object subtype"
+        );
+    }
+    assert!(
+        baseline_schema
+            .tables
+            .iter()
+            .find(|table| table.name == "object_embedding_jobs")
+            .is_some_and(|table| table.classification == "supporting"),
+        "derived records with a one-column Object foreign key are not canonical subtypes"
+    );
+    assert!(baseline_schema.foreign_keys.iter().any(|foreign_key| {
+        foreign_key.source_table == "tasks"
+            && foreign_key.target_table == "objects"
+            && foreign_key.one_to_one_subtype
+    }));
+    assert!(matches!(
+        schema::read_rows(&pool, "schema_visualizer_tables", None, None, None).await,
+        Err(schema::SchemaError::UnknownTable)
+    ));
+
+    sqlx::query(
+        "CREATE TABLE schema_visualizer_dynamic_fixture (id bigint PRIMARY KEY, payload jsonb NOT NULL, optional_text text, happened_at timestamptz, enabled boolean NOT NULL DEFAULT false, tags text[], bytes bytea, embedding vector(3), search_terms tsvector)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO schema_visualizer_tables (table_name) VALUES ('schema_visualizer_dynamic_fixture')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let registered_schema = schema::inspect_schema(&pool).await.unwrap();
+    assert_ne!(registered_schema.fingerprint, baseline_schema.fingerprint);
+    assert!(
+        registered_schema
+            .tables
+            .iter()
+            .any(|table| table.name == "schema_visualizer_dynamic_fixture")
+    );
+    let empty_page = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(10),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(empty_page.rows.is_empty());
+    assert!(empty_page.next_cursor.is_none());
+    sqlx::query(
+        r#"INSERT INTO schema_visualizer_dynamic_fixture
+               (id, payload, optional_text, happened_at, enabled, tags, bytes, embedding, search_terms)
+           VALUES (1, '{"message":"first"}', NULL, '2026-08-29T00:00:00Z', true,
+                       ARRAY['alpha','beta'], decode('00ff', 'hex'), '[1,2,3]'::vector,
+                       to_tsvector('simple', 'centaur context')),
+                  (2, '{"message":"second"}', 'A deliberately long value that remains unchanged and copyable after its compact grid preview is expanded.', NULL, false, NULL, NULL, NULL, NULL),
+                  (3, '{"message":"third"}', '', NULL, false, ARRAY[]::text[], decode('', 'hex'), NULL, NULL)"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let after_data = schema::inspect_schema(&pool).await.unwrap();
+    assert_eq!(registered_schema.fingerprint, after_data.fingerprint);
+    let first_page = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(1),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_page.rows.len(), 1);
+    assert_eq!(first_page.rows[0]["id"], "1");
+    assert_eq!(first_page.rows[0]["optional_text"], serde_json::Value::Null);
+    assert_eq!(first_page.rows[0]["enabled"], "true");
+    assert_eq!(first_page.rows[0]["bytes"], "\\x00ff");
+    assert_eq!(first_page.rows[0]["embedding"], "[1,2,3]");
+    assert!(
+        first_page.rows[0]["tags"]
+            .as_str()
+            .unwrap()
+            .contains("alpha")
+    );
+    assert!(
+        first_page.rows[0]["search_terms"]
+            .as_str()
+            .unwrap()
+            .contains("centaur")
+    );
+    let cursor = first_page.next_cursor.as_deref().unwrap();
+    let second_page = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(1),
+        Some(cursor),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second_page.rows[0]["id"], "2");
+    sqlx::query(
+        r#"INSERT INTO schema_visualizer_dynamic_fixture (id, payload, optional_text)
+           VALUES (4, '{"message":"inserted while paging"}', 'concurrent insert')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let third_page = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(1),
+        second_page.next_cursor.as_deref(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(third_page.rows[0]["id"], "3");
+    let fourth_page = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(1),
+        third_page.next_cursor.as_deref(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fourth_page.rows[0]["id"], "4");
+
+    let composite_first = schema::read_rows(&pool, "eval_objects", Some(1), None, None)
+        .await
+        .unwrap();
+    let composite_second = schema::read_rows(
+        &pool,
+        "eval_objects",
+        Some(1),
+        composite_first.next_cursor.as_deref(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_ne!(composite_first.rows[0], composite_second.rows[0]);
+
+    sqlx::query(
+        "ALTER TABLE schema_visualizer_dynamic_fixture ADD COLUMN generated_label text GENERATED ALWAYS AS ('row-' || id::text) STORED",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let altered_schema = schema::inspect_schema(&pool).await.unwrap();
+    assert_ne!(altered_schema.fingerprint, registered_schema.fingerprint);
+    assert!(
+        altered_schema
+            .tables
+            .iter()
+            .find(|table| table.name == "schema_visualizer_dynamic_fixture")
+            .unwrap()
+            .columns
+            .iter()
+            .any(|column| column.name == "generated_label" && column.generated)
+    );
+    assert!(matches!(
+        schema::read_rows(
+            &pool,
+            "schema_visualizer_dynamic_fixture",
+            Some(1),
+            Some(cursor),
+            None,
+        )
+        .await,
+        Err(schema::SchemaError::StaleCursor)
+    ));
+    let focused = schema::read_rows(
+        &pool,
+        "schema_visualizer_dynamic_fixture",
+        Some(50),
+        None,
+        Some(("id", "3")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(focused.rows.len(), 1);
+    assert_eq!(focused.rows[0]["id"], "3");
+    assert!(matches!(
+        schema::read_rows(
+            &pool,
+            "schema_visualizer_dynamic_fixture",
+            Some(50),
+            None,
+            Some(("not_a_column", "3")),
+        )
+        .await,
+        Err(schema::SchemaError::InvalidFocus)
+    ));
+
+    let mut transaction = pool.begin().await.unwrap();
+    sqlx::query(
+        "ALTER TABLE schema_visualizer_dynamic_fixture RENAME TO schema_visualizer_renamed_fixture",
+    )
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE schema_visualizer_tables SET table_name = 'schema_visualizer_renamed_fixture' WHERE table_name = 'schema_visualizer_dynamic_fixture'",
+    )
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    let renamed_schema = schema::inspect_schema(&pool).await.unwrap();
+    assert!(
+        renamed_schema
+            .tables
+            .iter()
+            .any(|table| table.name == "schema_visualizer_renamed_fixture")
+    );
+    assert!(
+        !renamed_schema
+            .tables
+            .iter()
+            .any(|table| table.name == "schema_visualizer_dynamic_fixture")
+    );
+    sqlx::query(
+        "DELETE FROM schema_visualizer_tables WHERE table_name = 'schema_visualizer_renamed_fixture'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DROP TABLE schema_visualizer_renamed_fixture")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let removed_schema = schema::inspect_schema(&pool).await.unwrap();
+    assert_eq!(removed_schema.fingerprint, baseline_schema.fingerprint);
+
+    let human = human_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        PathBuf::from("web/dist"),
+    );
+    let schema_response = human
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schema")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(schema_response.status(), StatusCode::OK);
+    let etag = schema_response
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let not_modified = human
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schema")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    let unknown_table = human
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schema/tables/_sqlx_migrations/rows")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown_table.status(), StatusCode::NOT_FOUND);
 }

@@ -3,10 +3,10 @@ use std::{path::PathBuf, sync::Arc};
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -29,7 +29,7 @@ use crate::{
         ValidationError, allowed, optional_text, provenance, required_text,
     },
     embeddings::EmbeddingClient,
-    search,
+    schema, search,
 };
 
 #[derive(Clone)]
@@ -48,6 +48,7 @@ pub fn human_router(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
     Router::new()
         .merge(service_router(state))
+        .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index)))
         .layer(Extension(ActorContext::human()))
         .layer(TraceLayer::new_for_http())
@@ -106,6 +107,8 @@ fn service_router(state: AppState) -> Router {
                 .route("/curator-runs/{id}/undo", post(undo_curator_run))
                 .route("/evals", get(list_evals))
                 .route("/evals/{id}", get(read_eval))
+                .route("/schema", get(read_schema))
+                .route("/schema/tables/{table}/rows", get(read_schema_rows))
                 .route(
                     "/evals/{id}/annotation",
                     axum::routing::patch(annotate_eval),
@@ -172,6 +175,10 @@ async fn health() -> Json<Value> {
     Json(json!({"ok": true}))
 }
 
+async fn api_not_found() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
 async fn api_meta() -> Json<Value> {
     Json(json!({
         "data": {
@@ -190,6 +197,63 @@ async fn api_meta() -> Json<Value> {
 async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     db::ready(&state.pool).await?;
     Ok(Json(json!({"ok": true, "ready": true})))
+}
+
+async fn read_schema(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let snapshot = schema::inspect_schema(&state.pool).await?;
+    let etag = format!("\"{}\"", snapshot.fingerprint);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    }
+    let mut response = Json(json!({"data": snapshot})).into_response();
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("schema fingerprint is an HTTP-safe ETag"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+struct SchemaRowsQuery {
+    limit: Option<i64>,
+    cursor: Option<String>,
+    focus_column: Option<String>,
+    focus_value: Option<String>,
+}
+
+async fn read_schema_rows(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+    Query(query): Query<SchemaRowsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let focus = match (query.focus_column.as_deref(), query.focus_value.as_deref()) {
+        (Some(column), Some(value)) => Some((column, value)),
+        (None, None) => None,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "focus_column and focus_value must be supplied together".to_owned(),
+            ));
+        }
+    };
+    let page = schema::read_rows(
+        &state.pool,
+        &table,
+        query.limit,
+        query.cursor.as_deref(),
+        focus,
+    )
+    .await?;
+    Ok(Json(json!({"data": page})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1019,6 +1083,7 @@ pub enum ApiError {
     Forbidden(String),
     Validation(ValidationError),
     Db(DbError),
+    Schema(schema::SchemaError),
 }
 
 impl From<ValidationError> for ApiError {
@@ -1030,6 +1095,12 @@ impl From<ValidationError> for ApiError {
 impl From<DbError> for ApiError {
     fn from(value: DbError) -> Self {
         Self::Db(value)
+    }
+}
+
+impl From<schema::SchemaError> for ApiError {
+    fn from(value: schema::SchemaError) -> Self {
+        Self::Schema(value)
     }
 }
 
@@ -1074,6 +1145,50 @@ impl IntoResponse for ApiError {
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
                     "The request could not be completed.".to_owned(),
+                )
+            }
+            Self::Schema(schema::SchemaError::UnsafeDatabase(database)) => (
+                {
+                    tracing::warn!(%database, "schema inspection refused for unexpected database");
+                    StatusCode::FORBIDDEN
+                },
+                "forbidden",
+                "Schema inspection is unavailable for this database.".to_owned(),
+            ),
+            Self::Schema(schema::SchemaError::UnknownTable) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Table is not registered for schema inspection.".to_owned(),
+            ),
+            Self::Schema(schema::SchemaError::InvalidCursor) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_cursor",
+                "The row cursor is invalid.".to_owned(),
+            ),
+            Self::Schema(schema::SchemaError::StaleCursor) => (
+                StatusCode::CONFLICT,
+                "schema_changed",
+                "The schema changed; reload the table before continuing.".to_owned(),
+            ),
+            Self::Schema(schema::SchemaError::InvalidFocus) => (
+                StatusCode::BAD_REQUEST,
+                "invalid_focus",
+                "The focused row lookup is invalid.".to_owned(),
+            ),
+            Self::Schema(schema::SchemaError::Sqlx(error)) => {
+                tracing::error!(%error, "schema inspection failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The schema could not be inspected.".to_owned(),
+                )
+            }
+            Self::Schema(schema::SchemaError::Json(error)) => {
+                tracing::error!(%error, "schema serialization failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "The schema could not be inspected.".to_owned(),
                 )
             }
         };

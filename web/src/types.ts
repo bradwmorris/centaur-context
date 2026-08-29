@@ -1,5 +1,56 @@
 export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory";
 export type TaskStatus = "todo" | "doing" | "blocked" | "review" | "done";
+export type SchemaClassification = "canonical" | "subtype" | "supporting";
+export type SchemaViewMode = "map" | "structure" | "rows";
+
+export interface SchemaColumn {
+  name: string;
+  ordinal: number;
+  data_type: string;
+  nullable: boolean;
+  default: string | null;
+  identity: boolean;
+  generated: boolean;
+}
+
+export interface SchemaConstraint {
+  name: string;
+  kind: "primary_key" | "foreign_key" | "unique" | "check" | string;
+  columns: string[];
+  definition: string;
+}
+
+export interface SchemaTable {
+  name: string;
+  classification: SchemaClassification;
+  estimated_row_count: number;
+  columns: SchemaColumn[];
+  constraints: SchemaConstraint[];
+}
+
+export interface SchemaForeignKey {
+  name: string;
+  source_table: string;
+  source_columns: string[];
+  target_table: string;
+  target_columns: string[];
+  one_to_one_subtype: boolean;
+  nullable: boolean;
+}
+
+export interface SchemaSnapshot {
+  fingerprint: string;
+  tables: SchemaTable[];
+  foreign_keys: SchemaForeignKey[];
+}
+
+export interface SchemaRowPage {
+  schema_fingerprint: string;
+  table: string;
+  rows: Array<Record<string, string | null>>;
+  next_cursor: string | null;
+  page_size: number;
+}
 
 export interface SharedObject {
   id: string;

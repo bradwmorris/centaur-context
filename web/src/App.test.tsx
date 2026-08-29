@@ -1,8 +1,8 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { CuratorRun, SharedObject, Task } from "./types";
+import type { CuratorRun, SchemaSnapshot, SharedObject, Task } from "./types";
 
 const ids = {
   task: "11111111-1111-4111-8111-111111111111",
@@ -67,6 +67,38 @@ const visuals = objects.map((object) => ({
   }] : [],
 }));
 
+const schemaSnapshot: SchemaSnapshot = {
+  fingerprint: "schema123",
+  tables: [
+    {
+      name: "objects", classification: "canonical", estimated_row_count: 5,
+      columns: [
+        { name: "id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false },
+        { name: "title", ordinal: 2, data_type: "text", nullable: false, default: null, identity: false, generated: false },
+        { name: "provenance", ordinal: 3, data_type: "jsonb", nullable: false, default: "'{}'::jsonb", identity: false, generated: false },
+      ],
+      constraints: [{ name: "objects_pkey", kind: "primary_key", columns: ["id"], definition: "PRIMARY KEY (id)" }],
+    },
+    {
+      name: "tasks", classification: "subtype", estimated_row_count: 1,
+      columns: [
+        { name: "object_id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false },
+        { name: "due_at", ordinal: 2, data_type: "timestamp with time zone", nullable: true, default: null, identity: false, generated: false },
+      ],
+      constraints: [
+        { name: "tasks_pkey", kind: "primary_key", columns: ["object_id"], definition: "PRIMARY KEY (object_id)" },
+        { name: "tasks_object_fk", kind: "foreign_key", columns: ["object_id"], definition: "FOREIGN KEY (object_id) REFERENCES objects(id)" },
+      ],
+    },
+    {
+      name: "object_events", classification: "supporting", estimated_row_count: 8,
+      columns: [{ name: "id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false }],
+      constraints: [{ name: "object_events_pkey", kind: "primary_key", columns: ["id"], definition: "PRIMARY KEY (id)" }],
+    },
+  ],
+  foreign_keys: [{ name: "tasks_object_fk", source_table: "tasks", source_columns: ["object_id"], target_table: "objects", target_columns: ["id"], one_to_one_subtype: true, nullable: false }],
+};
+
 function json(data: unknown) {
   return Promise.resolve(new Response(JSON.stringify({ data }), { status: 200, headers: { "Content-Type": "application/json" } }));
 }
@@ -75,6 +107,10 @@ function installApiMock() {
   vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.pathname + input.search : new URL(input.url).pathname;
     if (path.startsWith("/api/v1/objects?")) return json(objects);
+    if (path === "/api/v1/schema") return json(schemaSnapshot);
+    if (path.startsWith("/api/v1/schema/tables/objects/rows")) return json({
+      schema_fingerprint: "schema123", table: "objects", rows: [{ id: ids.task, title: "Canonical task", provenance: "{\"source_type\":\"human\"}" }], next_cursor: null, page_size: 50,
+    });
     if (path === "/api/v1/object-visuals") return json(visuals);
     if (path === "/api/v1/tasks") return json([task]);
     if (path === `/api/v1/tasks/${ids.task}`) return json(task);
@@ -129,6 +165,36 @@ describe("canonical Object identity across the application", () => {
       await userEvent.click(screen.getByRole("button", { name: section }));
       expect(await screen.findByRole("button", { name: `Copy Object ID ${id}` })).toHaveTextContent(`ID: ${id.slice(0, 5)}`);
     }
+  });
+
+  it("opens the live visual schema from the existing navigation and deep-links its views", async () => {
+    window.history.replaceState({}, "", "/objects");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Schema" }));
+    expect(window.location.pathname).toBe("/schema");
+    expect(await screen.findByRole("heading", { name: "Schema map" })).toBeVisible();
+    expect(within(screen.getByRole("navigation", { name: "Centaur Context" })).getByRole("button", { name: "Schema" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: /Objects canonical/ })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: /Objects canonical/ }));
+    expect(window.location.pathname).toBe("/schema/objects/structure");
+    expect(await screen.findByRole("heading", { name: "Columns" })).toBeVisible();
+    expect(screen.getByText("objects_pkey")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rows" }));
+    expect(window.location.pathname).toBe("/schema/objects/rows");
+    expect(await screen.findByText("Canonical task")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy title" })).toBeVisible();
+  });
+
+  it("keeps Schema available in collapsed navigation and supports direct row links", async () => {
+    window.history.replaceState({}, "", "/schema/objects/rows");
+    render(<App />);
+    expect(await screen.findByText("Canonical task")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Collapse navigation" }));
+    const schemaNavigation = within(screen.getByRole("navigation", { name: "Centaur Context" })).getByRole("button", { name: "Schema" });
+    expect(schemaNavigation).toHaveAttribute("title", "Schema");
+    expect(schemaNavigation).toHaveAttribute("aria-current", "page");
   });
 
   it("opens canonical Object IDs at durable URLs and supports back navigation", async () => {
