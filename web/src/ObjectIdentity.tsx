@@ -41,9 +41,9 @@ export function ObjectId({ id, compact = false, copy = true, label = true, rowPi
   </span>;
 }
 
-export function ConnectionId({ id, label = true }: { id: string; label?: boolean }) {
+export function ConnectionId({ id, label = true, compact = false }: { id: string; label?: boolean; compact?: boolean }) {
   const path = connectionPath(id);
-  return <span className="supporting-identity">{label && <span>Connection ID</span>}<a href={path} aria-label={`Open Connection ID ${id}`} onClick={(event) => interceptNavigation(event, path)}>{id}</a></span>;
+  return <span className={compact ? "supporting-identity compact" : "supporting-identity"}>{label && <span>Connection ID</span>}<a href={path} aria-label={`Open Connection ID ${id}`} onClick={(event) => interceptNavigation(event, path)} title={id}>{compact ? `CID: ${id.slice(0, 5)}` : id}</a></span>;
 }
 
 function shortId(value: string) {

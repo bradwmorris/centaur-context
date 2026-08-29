@@ -232,7 +232,7 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} />}
       <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} />}</div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <ActivityTimeline events={events} visuals={visuals} includeThread />
       <Provenance value={item.provenance} />
     </div>
   </div>;
@@ -268,14 +268,18 @@ function ChatTranscript({ id, visuals }: { id: string; visuals: Map<string, Obje
   return <Section title="Messages">
     {error && <p className="form-error">{error}</p>}
     <div className="chat-transcript">
-      {messages.map((item) => <article className="chat-message" key={item.id}>
-        <header><ObjectContext visual={visuals.get(item.sender_user_object_id)} /><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header>
-        <p>{item.content}</p>
-        <footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer>
-      </article>)}
+      {messages.map((item) => <MessageRow item={item} visual={visuals.get(item.sender_user_object_id)} key={item.id} />)}
       {!error && messages.length === 0 && <p className="muted">No messages have been ingested.</p>}
     </div>
   </Section>;
+}
+
+function MessageRow({ item, visual }: { item: ChatMessage; visual: ObjectVisual | undefined }) {
+  return <article className="chat-message"><ObjectContext visual={visual} /><strong>{item.sender_title}</strong><span className="message-kind">{item.sender_kind}</span><p title={item.content}>{item.content}</p><time>{relative(item.source_created_at)}</time></article>;
+}
+
+function ActivityTimeline({ events, visuals, includeThread = false }: { events: ObjectEvent[]; visuals: Map<string, ObjectVisual>; includeThread?: boolean }) {
+  return <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><strong>{event.action.replaceAll("_", " ")}</strong><span className="event-actor" title={`${event.actor_type}:${event.actor_id}${includeThread && event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}`}>{event.actor_type}:{event.actor_id}{includeThread && event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</span><ObjectId id={event.object_id} linkPill /><ObjectContext visual={visuals.get(event.object_id)} />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} label={false} compact />}<time>{relative(event.created_at)}</time></div>)}</div></Section>;
 }
 
 function Connections({ object, objects, visuals, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void> }) {
@@ -343,7 +347,7 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
       </form>
       {error && <p className="form-error">{error}</p>}
       <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} /></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <ActivityTimeline events={events} visuals={visuals} />
       <Provenance value={task.provenance} />
     </div>
   </div>;
@@ -385,7 +389,7 @@ function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; object
     {error && <p className="form-error">{error}</p>}
     {run.status === "completed" && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Undoing…" : "Undo whole run"}</button>}
     {run.status === "reversed" && <p className="undo-note">This run was undone. Messages and audit history were preserved.</p>}
-    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <article className="chat-message" key={item.id}><header><ObjectContext visual={visuals.get(item.sender_user_object_id)} /><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header><p>{item.content}</p><footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer></article>)}</div></Section>
+    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <MessageRow item={item} visual={visuals.get(item.sender_user_object_id)} key={item.id} />)}</div></Section>
     <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <><ObjectId id={change.entity_id} compact /><ObjectContext visual={visuals.get(change.entity_id)} /></> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
   </div></div>;
 }

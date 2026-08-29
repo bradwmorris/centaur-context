@@ -49,6 +49,15 @@ describe("Object identity controls", () => {
     expect(screen.getByRole("link", { name: "Open Connection ID 22222222-2222-4222-8222-222222222222" })).toHaveAttribute("href", "/connections/22222222-2222-4222-8222-222222222222");
   });
 
+  it("renders compact supporting Connection IDs inline", () => {
+    const id = "22222222-2222-4222-8222-222222222222";
+    render(<ConnectionId id={id} label={false} compact />);
+    const link = screen.getByRole("link", { name: `Open Connection ID ${id}` });
+    expect(link).toHaveTextContent("CID: 22222");
+    expect(link).toHaveAttribute("title", id);
+    expect(screen.queryByText("Connection ID")).not.toBeInTheDocument();
+  });
+
   it("reports clipboard failures without throwing", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
     render(<ObjectId id={objectId} />);
