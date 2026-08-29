@@ -208,19 +208,20 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
   if (!item) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { setItem(await api.updateObject(id, { expected_revision: item.revision, title: String(data.get("title")), description: String(data.get("description")), protected: data.get("protected") === "on" })); await Promise.all([load(), onChanged()]); }
+    try { setItem(await api.updateObject(id, { expected_revision: item.revision, title: String(data.get("title")), description: String(data.get("description")), protected: item.protected })); await Promise.all([load(), onChanged()]); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page">
     <div className="record-primary">
       <form className="detail-form" onSubmit={save}>
-        <div className="detail-heading"><SourceBadge provider={visuals.get(item.id)?.source_provider} /><ObjectId id={item.id} rowPill navigate /><input className="title-input" name="title" aria-label="Object title" defaultValue={item.title} key={`${item.id}-${item.revision}-title`} /><ObjectTypeBadge kind={item.kind} /><AttributionStack users={visuals.get(item.id)?.users ?? []} /></div>
+        <div className="detail-heading"><ObjectId id={item.id} rowPill navigate /><input className="title-input" name="title" aria-label="Object title" defaultValue={item.title} key={`${item.id}-${item.revision}-title`} /></div>
         <section className="properties-block" aria-label="Object properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Property label="Revision">{item.revision}</Property>
+            <Property label="Type"><ObjectTypeBadge kind={item.kind} /></Property>
+            <Property label="Source">{visuals.get(item.id)?.source_provider ? <SourceBadge provider={visuals.get(item.id)?.source_provider} /> : textValue(item.provenance.source_type, "Unspecified")}</Property>
+            <Property label="Users">{(visuals.get(item.id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(item.id)?.users ?? []} /> : "None"}</Property>
             <Property label="Created by"><span className="property-value-wrap">{item.created_by_type}:{item.created_by_id}</span></Property>
-            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={item.protected} key={`${item.id}-${item.revision}-protected`} /> Curator-safe</label></Property>
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
@@ -283,13 +284,9 @@ function Connections({ object, objects, visuals, connections, onCreated }: { obj
     try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), description: String(data.get("description")), protected: data.get("protected") === "on", provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
     catch (cause) { setError(message(cause)); }
   };
-  const toggleProtected = async (connection: Connection) => {
-    try { setError(null); await api.updateConnection(connection.id, { expected_revision: connection.revision, protected: !connection.protected }); await onCreated(); }
-    catch (cause) { setError(conflictMessage(cause)); }
-  };
   return <Section title="Relationships" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
     {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-    <div className="connections">{connections.map((connection) => { const outgoing = connection.source_object_id === object.id; const messageIds = stringList(connection.provenance.supporting_message_ids); return <article className="connection" key={connection.id}><header><span className="connection-direction">{outgoing ? "Outgoing" : "Incoming"}</span><strong>{connection.kind.replaceAll("_", " ")}</strong><button className="protect-action" type="button" onClick={() => void toggleProtected(connection)}>{connection.protected ? "Unprotect" : "Protect"}</button></header><ConnectionFlow connection={connection} objects={objects} visuals={visuals} /><p>{connection.description}</p><footer><ConnectionId id={connection.id} />{messageIds.length > 0 && <small>Messages · {messageIds.map(shortId).join(", ")}</small>}</footer></article>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
+    <div className="connections">{connections.map((connection) => <article className="connection" key={connection.id}><ConnectionFlow connection={connection} objects={objects} visuals={visuals} /></article>)}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
   </Section>;
 }
 
@@ -297,10 +294,9 @@ function ConnectionFlow({ connection, objects, visuals }: { connection: Connecti
   const source = objects.find((item) => item.id === connection.source_object_id);
   const target = objects.find((item) => item.id === connection.target_object_id);
   const endpoint = (id: string, item: SharedObject | undefined, label: string) => <div className="connection-endpoint" aria-label={`${label} Object`}>
-    <span>{label}</span>
     <strong>{item?.title ?? shortId(id)}</strong>
     {item && <ObjectTypeBadge kind={item.kind} />}
-    <ObjectId id={id} compact />
+    <ObjectId id={id} linkPill />
     <ObjectContext visual={visuals.get(id)} />
   </div>;
   return <div className="connection-flow">{endpoint(connection.source_object_id, source, "Source")}<span className="connection-arrow" aria-label="connects to">→</span>{endpoint(connection.target_object_id, target, "Target")}</div>;
@@ -321,23 +317,24 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
   useEffect(() => { void load(); }, [load]);
   if (!task || !object) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), protected: data.get("protected") === "on", status: String(data.get("status")), priority: String(data.get("priority")), agent_eligible: data.get("agent_eligible") === "on" }); await Promise.all([load(), onChanged()]); }
+    try { await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), protected: task.protected, status: String(data.get("status")), priority: String(data.get("priority")), agent_eligible: data.get("agent_eligible") === "on" }); await Promise.all([load(), onChanged()]); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page">
     <div className="record-primary">
       <form className="detail-form" onSubmit={save}>
-        <div className="detail-heading"><SourceBadge provider={visuals.get(task.object_id)?.source_provider} /><ObjectId id={task.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} /><ObjectTypeBadge kind="task" /><TaskStatusBadge status={task.status} /><AttributionStack users={visuals.get(task.object_id)?.users ?? []} /></div>
+        <div className="detail-heading"><ObjectId id={task.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} /></div>
         <section className="properties-block" aria-label="Task properties">
           <h2>Properties</h2>
           <div className="properties-grid">
+            <Property label="Type"><ObjectTypeBadge kind="task" /></Property>
+            <Property label="Source">{visuals.get(task.object_id)?.source_provider ? <SourceBadge provider={visuals.get(task.object_id)?.source_provider} /> : textValue(task.provenance.source_type, "Unspecified")}</Property>
+            <Property label="Users">{(visuals.get(task.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(task.object_id)?.users ?? []} /> : "None"}</Property>
             <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
             <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.object_id}-${task.revision}-eligible`} /> Eligible</label></Property>
-            <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.object_id}-${task.revision}-protected`} /> Curator-safe</label></Property>
             <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
             <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
-            <Property label="Revision">{task.revision}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>

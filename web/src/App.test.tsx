@@ -134,8 +134,11 @@ describe("canonical Object identity across the application", () => {
     render(<App />);
     const title = await screen.findByRole("textbox", { name: "Object title" });
     expect(title.parentElement).toHaveClass("detail-heading");
-    expect(title.parentElement).toHaveTextContent("Memory");
     expect(title.parentElement).toHaveTextContent(`ID: ${ids.memory.slice(0, 5)}`);
+    const properties = screen.getByLabelText("Object properties");
+    expect(properties).toHaveTextContent("Memory");
+    expect(properties).not.toHaveTextContent("Revision");
+    expect(properties).not.toHaveTextContent("Protected");
     const provenance = screen.getByText("Provenance").closest("details");
     expect(provenance).not.toHaveAttribute("open");
     expect(provenance?.previousElementSibling).toHaveTextContent("Activity");

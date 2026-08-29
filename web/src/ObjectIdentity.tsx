@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { connectionPath, interceptNavigation, objectPath } from "./routing";
 
-export function ObjectId({ id, compact = false, copy = true, label = true, rowPill = false, navigate = false }: { id: string; compact?: boolean; copy?: boolean; label?: boolean; rowPill?: boolean; navigate?: boolean }) {
+export function ObjectId({ id, compact = false, copy = true, label = true, rowPill = false, navigate = false, linkPill = false }: { id: string; compact?: boolean; copy?: boolean; label?: boolean; rowPill?: boolean; navigate?: boolean; linkPill?: boolean }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const path = objectPath(id);
   const copyId = async () => {
@@ -14,6 +14,9 @@ export function ObjectId({ id, compact = false, copy = true, label = true, rowPi
       setCopyState("error");
     }
   };
+  if (linkPill) {
+    return <span className="object-identity row-pill"><a className="object-id-pill" href={path} onClick={(event) => interceptNavigation(event, path)} title={id} aria-label={`Open Object ID ${id}`}>ID: {id.slice(0, 5)}</a></span>;
+  }
   if (rowPill) {
     return <span className="object-identity row-pill">
       <button

@@ -36,6 +36,14 @@ describe("Object identity controls", () => {
     expect(await screen.findByText(`Copied Object ID ${objectId}`)).toBeInTheDocument();
   });
 
+  it("renders a compact linked ID pill for relationship endpoints", () => {
+    render(<ObjectId id={objectId} linkPill />);
+    const pill = screen.getByRole("link", { name: `Open Object ID ${objectId}` });
+    expect(pill).toHaveTextContent("ID: 11111");
+    expect(pill).toHaveAttribute("href", `/objects/${objectId}`);
+    expect(screen.queryByRole("button", { name: `Copy Object ID ${objectId}` })).not.toBeInTheDocument();
+  });
+
   it("routes supporting Connection IDs separately", () => {
     render(<ConnectionId id="22222222-2222-4222-8222-222222222222" />);
     expect(screen.getByRole("link", { name: "Open Connection ID 22222222-2222-4222-8222-222222222222" })).toHaveAttribute("href", "/connections/22222222-2222-4222-8222-222222222222");
