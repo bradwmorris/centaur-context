@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use centaur_os::{
+use centaur_context::{
     api::{self, AppState},
     config::Config,
     db,
@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "centaur_os=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "centaur_context=info,tower_http=info".into()),
         )
         .init();
 
@@ -23,17 +23,17 @@ async fn main() -> Result<()> {
         .max_connections(10)
         .connect(&config.database_url)
         .await
-        .context("connect to centaur_os database")?;
+        .context("connect to centaur_context database")?;
     db::migrate(&pool)
         .await
-        .context("run centaur_os migrations")?;
+        .context("run centaur_context migrations")?;
     let embedding_client = config
         .embedding
         .as_ref()
-        .map(centaur_os::embeddings::EmbeddingClient::new)
+        .map(centaur_context::embeddings::EmbeddingClient::new)
         .transpose()?;
     if let Some(client) = embedding_client.as_ref() {
-        centaur_os::embeddings::prepare(&pool, client).await?;
+        centaur_context::embeddings::prepare(&pool, client).await?;
     } else {
         info!("Object embeddings disabled; full-text search remains available");
     }
@@ -57,12 +57,12 @@ async fn main() -> Result<()> {
     };
     let human = api::human_router(state.clone(), config.static_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
-    let ingest = centaur_os::ingest::router(
+    let ingest = centaur_context::ingest::router(
         state.clone(),
         config.chat_ingest_api_token,
         config.approved_slack_surfaces,
     );
-    let curator = centaur_os::curator::router(state.clone(), config.curator_api_token);
+    let curator = centaur_context::curator::router(state.clone(), config.curator_api_token);
     let inactivity_pool = state.pool.clone();
     let inactivity_duration = config.interaction_inactivity;
     let poll_interval = config.inactivity_poll_interval;
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         let mut interval = tokio::time::interval(poll_interval);
         loop {
             interval.tick().await;
-            match centaur_os::ingest::queue_inactive_interactions(
+            match centaur_context::ingest::queue_inactive_interactions(
                 &inactivity_pool,
                 inactivity_duration,
             )
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         .map(|embedding| embedding.poll_interval);
     let embedding_worker = async move {
         if let (Some(client), Some(poll_interval)) = (embedding_client, embedding_poll_interval) {
-            centaur_os::embeddings::run_worker(embedding_pool, client, poll_interval).await;
+            centaur_context::embeddings::run_worker(embedding_pool, client, poll_interval).await;
         } else {
             std::future::pending::<()>().await;
         }
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     let curator_text_search_config = config.text_search_config;
     let curator_worker = async move {
         if let Some(curator_model) = curator_model {
-            centaur_os::curator::run_worker(
+            centaur_context::curator::run_worker(
                 curator_pool,
                 curator_embeddings,
                 curator_model,

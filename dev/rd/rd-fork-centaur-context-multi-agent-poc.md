@@ -1,4 +1,4 @@
-# RD: Fork and Dogfood a Personal Centaur OS with Named Slack Agents
+# RD: Fork and Dogfood a Personal Centaur Context with Named Slack Agents
 
 **Status:** `backlog`
 **Created:** 2026-08-29
@@ -7,7 +7,7 @@
 
 **Status:** `complete and ready`
 
-**Basis checked:** Centaur OS ownership, Slack/context, agent-client, and task
+**Basis checked:** Centaur Context ownership, Slack/context, agent-client, and task
 contracts; the existing Centaur checkout and deployment; Centaur overlay,
 persona, workflow, Slack transport, session, and permission implementations;
 and the existing private overlay.
@@ -15,14 +15,14 @@ and the existing private overlay.
 **Missing:** Final repository names/visibility and live Slack credentials and
 channels are requester-owned. Proposed local names allow scaffolding.
 
-1. Keep and pin `/Users/bradleymorris/Desktop/dev/centaur` as the existing
+1. Keep and pin `<adjacent-centaur-checkout>` as the existing
    control plane; do not create another Centaur fork. Make only a separately
    tracked generic compatibility change there if multi-bot binding requires it.
-2. Fork `/Users/bradleymorris/Desktop/dev/centaur-os` into a sibling personal
-   POC OS, proposed as `centaur-os-brad-poc`, preserving the source repository as
+2. Fork `<source-context-checkout>` into a sibling personal
+   POC OS, proposed as `centaur-context-personal-poc`, preserving the source repository as
    an upstream remote and customizing the fork through actual POC use.
 3. Create one new POC-specific overlay, proposed as
-   `centaur-os-brad-poc-overlay`, containing the Editor and Researcher verticals
+   `centaur-context-personal-poc-overlay`, containing the Editor and Researcher verticals
    and connecting Centaur to the personal OS fork through its HTTP API.
 4. Prove the end-to-end Slack, Centaur, personal OS, and feedback loop; document
    which fork changes remain personal and which should return upstream.
@@ -30,27 +30,27 @@ channels are requester-owned. Proposed local names allow scaffolding.
 ## What We Are Doing
 
 - [ ] Use the existing Centaur core as the shared agent control plane.
-- [ ] Create and actively customize a Brad-specific fork of Centaur OS for the
-  POC instead of treating the source Centaur OS as immutable infrastructure.
+- [ ] Create and actively customize a personal-specific fork of Centaur Context for the
+  POC instead of treating the source Centaur Context as immutable infrastructure.
 - [ ] Create a unique overlay for that fork with distinct `@Editor` and
   `@Researcher` Slack agents, instructions, tasks, workflows, tools, and grants.
 - [ ] Turn dogfooding lessons into explicit upstream candidates without leaking
-  personal behavior or copying private AGI Post implementation.
+  personal behavior or copying private private production implementation.
 
 ## Contract
 
-- **Goal:** Build a personal, forked Centaur OS POC operated by multiple named
+- **Goal:** Build a personal, forked Centaur Context POC operated by multiple named
   Slack agents through the existing Centaur core and a dedicated overlay.
 - **Done:** The personal OS fork has clear ancestry and POC customizations;
   `@Editor` and `@Researcher` run from its unique overlay on the existing
   Centaur control plane; both use the forked OS for context and ingestion;
   representative workflows succeed; and every divergence is classified.
-- **Files:** This RD; the existing `/Users/bradleymorris/Desktop/dev/centaur`
+- **Files:** This RD; the existing `<adjacent-centaur-checkout>`
   checkout only for verified generic compatibility work; a new sibling personal
-  OS fork proposed as `/Users/bradleymorris/Desktop/dev/centaur-os-brad-poc`;
+  OS fork proposed as `<adjacent-personal-context-checkout>`;
   and a new sibling overlay proposed as
-  `/Users/bradleymorris/Desktop/dev/centaur-os-brad-poc-overlay`. The existing
-  `/Users/bradleymorris/Desktop/dev/centaur-overlay` is reference material, not
+  `<adjacent-personal-overlay-checkout>`. The existing
+  `<adjacent-private-overlay-checkout>` is reference material, not
   the new POC overlay.
 - **Agent owns:** Local scaffolding when execution is assigned, POC
   customizations, clean-room verticals, tests, divergence records,
@@ -59,28 +59,28 @@ channels are requester-owned. Proposed local names allow scaffolding.
   credentials, live grants, model/provider spend, deployment, publication, and
   approval of any public demo or upstream proposal.
 - **Out of scope:** Another Centaur fork, separate control planes per bot,
-  Brad-specific implementation in the source Centaur OS checkout, reusing the
-  existing overlay, agent database access, public ingress, and copying AGI Post
+  personal-specific implementation in the source Centaur Context checkout, reusing the
+  existing overlay, agent database access, public ingress, and copying private production
   implementation, data, credentials, or publication logic.
 
 ## Requirements
 
 ### Repository topology and ownership
 
-- Record exact commits for Centaur, source Centaur OS, the personal fork, and
-  overlay. Give the personal fork its own origin and source Centaur OS upstream.
+- Record exact commits for Centaur, source Centaur Context, the personal fork, and
+  overlay. Give the personal fork its own origin and source Centaur Context upstream.
 - Keep Centaur responsibilities unchanged: Slack transport, sessions,
   sandboxes, workflows, model execution, and permission enforcement.
 - The personal OS fork owns its isolated logical database, canonical Objects,
   context/curation behavior, API, UI, migrations, and standard agent client. It
-  must never query Centaur, `ai_v2`, Console, or AGI Post databases.
+  must never query Centaur, `ai_v2`, Console, or private production databases.
 - Agents use only the authenticated HTTP API and the standard client shipped by
   the personal OS fork. Do not duplicate that client in the overlay or expose a
   database DSN.
 
 ### Personal OS customization and feedback
 
-- Begin from a pinned, passing Centaur OS commit. Permit POC-driven schema,
+- Begin from a pinned, passing Centaur Context commit. Permit POC-driven schema,
   ontology, API, context, curation, UI, and operational changes in the personal
   fork when they support Editor/Researcher use.
 - Maintain a divergence ledger. For every fork change, record its need,
@@ -107,7 +107,7 @@ channels are requester-owned. Proposed local names allow scaffolding.
   add narrow generic multi-instance/persona binding to that existing fork with
   singleton compatibility, collision-free sessions, provider metadata, and
   isolated recovery.
-- Point both bots' `contextBuilder`, `interactionSink`, and `centaur-os` client
+- Point both bots' `contextBuilder`, `interactionSink`, and `centaur-context` client
   configuration at the personal OS fork. Preserve distinct canonical agent
   Users while allowing shared context across their conversations.
 
@@ -115,7 +115,7 @@ channels are requester-owned. Proposed local names allow scaffolding.
 
 - [ ] Git/remotes prove the intended core, source, personal-fork, and overlay
   topology; pinned commits and the divergence ledger are documented.
-- [ ] Source Centaur OS contains no Brad-specific implementation changes from
+- [ ] Source Centaur Context contains no personal-specific implementation changes from
   this execution, and the unique overlay duplicates neither OS domain logic nor
   the standard client.
 - [ ] Tests cover both personas, tool denial, prompt injection, Slack identity
@@ -123,7 +123,7 @@ channels are requester-owned. Proposed local names allow scaffolding.
 - [ ] Slack smoke proof shows independent `@Editor` and `@Researcher` mentions,
   correct behavior/grants, durable results, distinct agent Users, and later
   shared-context retrieval from the personal OS fork.
-- [ ] Static hygiene finds no credentials, private IDs, database DSNs, AGI Post
+- [ ] Static hygiene finds no credentials, private IDs, database DSNs, private production
   implementation, Supabase project IDs, or Modal commands.
 - [ ] Relevant checks in every changed repository and `git diff --check` pass.
 

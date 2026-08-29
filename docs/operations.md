@@ -1,17 +1,22 @@
-# Operate Centaur OS 0.1.0
+# Operate Centaur Context 0.2.0
 
-All database scripts refuse databases other than `centaur_os` or an explicitly
-confirmed name containing `centaur_os_test`. None operates on Centaur's own
+All database scripts refuse databases other than `centaur_context`, the legacy
+`centaur_os`, or explicitly confirmed test names containing
+`centaur_context_test` or `centaur_os_test`. None operates on Centaur's own
 application databases.
+
+For the 0.2 compatibility release, operations scripts accept legacy
+`CENTAUR_OS_*` variables when the corresponding `CENTAUR_CONTEXT_*` value is
+absent. Conflicting old and new values fail closed.
 
 ## Backup
 
-Provide password-free `CENTAUR_OS_DATABASE_URL` and the separate
-`CENTAUR_OS_DATABASE_PASSWORD` through a protected environment, then choose a
+Provide password-free `CENTAUR_CONTEXT_DATABASE_URL` and the separate
+`CENTAUR_CONTEXT_DATABASE_PASSWORD` through a protected environment, then choose a
 new output path:
 
 ```bash
-./scripts/backup.sh /secure/path/centaur-os.dump
+./scripts/backup.sh /secure/path/centaur-context.dump
 ```
 
 This produces a PostgreSQL custom-format dump, SHA-256 checksum, and small JSON
@@ -24,22 +29,25 @@ database with the correct owner and installs pgvector; it does not alter an
 existing app-role password:
 
 ```bash
-./scripts/bootstrap-database.sh --database centaur_os_test_restore
+./scripts/bootstrap-database.sh --database centaur_context_test_restore
 ```
 
-Then provide password-free `CENTAUR_OS_RESTORE_DATABASE_URL`, the separate
-`CENTAUR_OS_RESTORE_DATABASE_PASSWORD`, and confirm the exact connected
+Then provide password-free `CENTAUR_CONTEXT_RESTORE_DATABASE_URL`, the separate
+`CENTAUR_CONTEXT_RESTORE_DATABASE_PASSWORD`, and confirm the exact connected
 database name:
 
 ```bash
-./scripts/restore.sh /secure/path/centaur-os.dump \
-  --confirm-database centaur_os_test_restore
+./scripts/restore.sh /secure/path/centaur-context.dump \
+  --confirm-database centaur_context_test_restore
 ```
 
 Restore is destructive to the confirmed target database. It validates the
-checksum, preserves the administrator-owned pgvector extension and prepared
-`public` schema, restores Centaur OS-owned records in one transaction, and
-reports the restored migration version.
+checksum and metadata before mutation, preserves the administrator-owned
+pgvector extension and prepared `public` schema, restores Centaur Context-owned
+records in one transaction, and reports the restored migration version. Both
+`centaur-context` and legacy `centaur-os` metadata are accepted. For a verified
+legacy dump that predates the JSON sidecar, add
+`--allow-legacy-without-metadata`; never use that flag for a new backup.
 
 ## Upgrade
 
@@ -52,15 +60,20 @@ reports the restored migration version.
 6. Verify readiness, API/ontology compatibility, retained counts, context
    reads, ingestion, and one Curator Run.
 
+For the product-name handoff, follow the ordered legacy procedure in the
+[installation guide](installation.md). Never run the old and new Deployments at
+the same time against one database.
+
 Migrations are forward-only. Do not treat changing the container image as a
 database rollback.
 
 ## Rollback
 
-If the new release did not change the schema or data contract, reinstall the
-previous immutable image and rerun its smoke tests. If the database must also
-roll back, stop the workload, restore the pre-upgrade backup into a fresh
-confirmed `centaur_os` database, reconnect the previous image, and verify
+For a name-handoff rollback, first scale `deployment/centaur-context` to zero,
+restore Centaur consumer URLs and Secret references to the legacy names, then
+scale `deployment/centaur-os` back up and rerun its smoke tests. If the database
+must also roll back, stop both workloads, restore the pre-upgrade backup into a
+fresh confirmed application database, reconnect the previous image, and verify
 before removing the failed database. Never run a down-migration against
 Centaur-owned data.
 
@@ -69,20 +82,20 @@ Centaur-owned data.
 Remove only the named workload and its own NetworkPolicy:
 
 ```bash
-./scripts/uninstall-kubernetes.sh --confirm centaur-os
+./scripts/uninstall-kubernetes.sh --confirm centaur-context
 ```
 
 The Secret and database are retained by default for recovery. Add
 `--delete-secret` only after credentials are safely retained or intentionally
 retired. To remove the database separately, provide password-free
-`CENTAUR_OS_ADMIN_DATABASE_URL` and `CENTAUR_OS_ADMIN_DATABASE_PASSWORD` for an
+`CENTAUR_CONTEXT_ADMIN_DATABASE_URL` and `CENTAUR_CONTEXT_ADMIN_DATABASE_PASSWORD` for an
 administrator that connects to another database, then run:
 
 ```bash
-./scripts/drop-database.sh --confirm-database centaur_os \
-  --drop-role centaur_os_app
+./scripts/drop-database.sh --confirm-database centaur_context \
+  --drop-role centaur_context_app
 ```
 
 After uninstall, compare the Centaur database inventory with the pre-install
-record. Only `centaur_os`, `centaur_os_app`, and the explicitly named Centaur OS
+record. Only `centaur_context`, `centaur_context_app`, and the explicitly named Centaur Context
 Kubernetes resources may have been removed.

@@ -1570,7 +1570,7 @@ async fn request_plan(
     candidates: &crate::search::SearchPacket,
     validation_feedback: Option<&str>,
 ) -> Result<ReconciliationPlan, CuratorError> {
-    let system = r#"You are the Centaur OS Context Curator. Return only one JSON object with exactly these four arrays:
+    let system = r#"You are the Centaur Context Context Curator. Return only one JSON object with exactly these four arrays:
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
 
 Every create_objects entry MUST contain all of these fields:

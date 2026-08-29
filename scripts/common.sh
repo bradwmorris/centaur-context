@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-CENTAUR_OS_VERSION="0.1.0"
+CENTAUR_CONTEXT_VERSION="0.2.0"
 
 die() {
-  printf 'centaur-os: %s\n' "$*" >&2
+  printf 'centaur-context: %s\n' "$*" >&2
   exit 1
 }
 
@@ -24,6 +24,20 @@ require_postgres_client_16() {
 require_env() {
   local name="$1"
   [[ -n "${!name:-}" ]] || die "$name is required"
+}
+
+resolve_legacy_env() {
+  local canonical="$1"
+  local legacy="$2"
+  local canonical_value="${!canonical:-}"
+  local legacy_value="${!legacy:-}"
+  if [[ -n "$canonical_value" && -n "$legacy_value" && "$canonical_value" != "$legacy_value" ]]; then
+    die "$canonical conflicts with legacy $legacy"
+  fi
+  if [[ -z "$canonical_value" && -n "$legacy_value" ]]; then
+    printf -v "$canonical" '%s' "$legacy_value"
+    export "$canonical"
+  fi
 }
 
 require_password() {
@@ -79,13 +93,14 @@ database_name() {
     --command='SELECT current_database()'
 }
 
-require_centaur_os_database() {
+require_centaur_context_database() {
   local url="$1"
   local password="$2"
   local expected="${3:-}"
   local actual
   actual="$(database_name "$url" "$password")"
-  [[ "$actual" == "centaur_os" || "$actual" == *centaur_os_test* ]] || \
+  [[ "$actual" == "centaur_context" || "$actual" == *centaur_context_test* || \
+    "$actual" == "centaur_os" || "$actual" == *centaur_os_test* ]] || \
     die "refusing operation against unexpected database $actual"
   [[ -z "$expected" || "$actual" == "$expected" ]] || \
     die "database confirmation mismatch: expected $expected, connected to $actual"

@@ -3,17 +3,17 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from centaur_tool_centaur_os import cli
-from centaur_tool_centaur_os.client import CentaurOsClient
+from centaur_tool_centaur_context import cli
+from centaur_tool_centaur_context.client import CentaurContextClient
 
 
 def json_response(data, status_code: int = 200) -> httpx.Response:
     return httpx.Response(status_code, json=data)
 
 
-def make_client(handler, **overrides) -> CentaurOsClient:
-    return CentaurOsClient(
-        base_url="http://centaur-os.test:8081",
+def make_client(handler, **overrides) -> CentaurContextClient:
+    return CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         principal_id="principal-1",
@@ -85,8 +85,8 @@ def test_resolves_principal_from_console_permissions() -> None:
             return json_response({"data": {"principal_id": "resolved-principal"}})
         return json_response({"data": []})
 
-    client = CentaurOsClient(
-        base_url="http://centaur-os.test:8081",
+    client = CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         thread_key="thread-1",
@@ -94,7 +94,7 @@ def test_resolves_principal_from_console_permissions() -> None:
     )
     client.search_objects("context")
 
-    assert hosts == ["centaur-console.test", "centaur-os.test"]
+    assert hosts == ["centaur-console.test", "centaur-context.test"]
 
 
 def test_search_rejects_an_empty_query_before_request() -> None:
@@ -111,14 +111,62 @@ def test_missing_thread_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> Non
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("request should not be sent")
 
-    client = CentaurOsClient(
-        base_url="http://centaur-os.test:8081",
+    client = CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
         token="placeholder-token",
         principal_id="principal-1",
         transport=httpx.MockTransport(handler),
     )
     with pytest.raises(RuntimeError, match="CENTAUR_THREAD_KEY is required"):
         client.read_object("object-1")
+
+
+def test_legacy_url_is_used_when_canonical_value_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CENTAUR_CONTEXT_URL", raising=False)
+    monkeypatch.setenv("CENTAUR_OS_URL", "http://legacy-centaur.test:8081")
+
+    client = CentaurContextClient(
+        token="placeholder-token",
+        principal_id="principal-1",
+        thread_key="thread-1",
+        transport=httpx.MockTransport(lambda _request: json_response({"data": {}})),
+    )
+
+    assert client.base_url == "http://legacy-centaur.test:8081"
+
+
+def test_conflicting_canonical_and_legacy_urls_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CENTAUR_CONTEXT_URL", "http://canonical.test:8081")
+    monkeypatch.setenv("CENTAUR_OS_URL", "http://legacy.test:8081")
+
+    with pytest.raises(RuntimeError, match="conflicting canonical and legacy"):
+        CentaurContextClient()
+
+
+def test_legacy_token_is_used_when_canonical_value_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CENTAUR_CONTEXT_API_TOKEN", raising=False)
+    monkeypatch.setenv("CENTAUR_OS_API_TOKEN", "legacy-placeholder-token")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {}})
+
+    client = CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
+        principal_id="principal-1",
+        thread_key="thread-1",
+        transport=httpx.MockTransport(handler),
+    )
+    client.read_object("object-1")
+
+    assert requests[0].headers["authorization"] == "Bearer legacy-placeholder-token"
 
 
 def test_api_error_preserves_safe_message() -> None:

@@ -1,6 +1,6 @@
-# Install Centaur OS
+# Install Centaur Context
 
-This installs Centaur OS beside Centaur. It does not use or change Centaur's
+This installs Centaur Context beside Centaur. It does not use or change Centaur's
 database.
 
 ## Requirements
@@ -10,13 +10,13 @@ database.
 - Docker, `kubectl`, `psql`, `pg_dump`, and `pg_restore`
 - An existing Kubernetes namespace
 - Three different random API tokens, each at least 32 characters
-- The Slack workspace and channel IDs Centaur OS may accept
+- The Slack workspace and channel IDs Centaur Context may accept
 
 ## 1. Check and build
 
 ```bash
 ./scripts/check-package.py
-./scripts/build-image.sh centaur-os:0.1.0
+./scripts/build-image.sh centaur-context:0.2.0
 ```
 
 Record the image identity printed by the build.
@@ -26,9 +26,9 @@ Record the image identity printed by the build.
 Set these values outside source control:
 
 ```text
-CENTAUR_OS_ADMIN_DATABASE_URL
-CENTAUR_OS_ADMIN_DATABASE_PASSWORD
-CENTAUR_OS_APP_PASSWORD
+CENTAUR_CONTEXT_ADMIN_DATABASE_URL
+CENTAUR_CONTEXT_ADMIN_DATABASE_PASSWORD
+CENTAUR_CONTEXT_APP_PASSWORD
 ```
 
 The admin URL must connect to a maintenance database and must not contain a
@@ -38,12 +38,12 @@ password. Then run:
 ./scripts/bootstrap-database.sh
 ```
 
-This creates the `centaur_os` database and `centaur_os_app` role.
+This creates the `centaur_context` database and `centaur_context_app` role.
 
 ## 3. Create the Kubernetes Secret
 
 Copy the keys from [`deploy/secret.example.yaml`](../deploy/secret.example.yaml)
-into a protected Secret named `centaur-os-env`:
+into a protected Secret named `centaur-context-env`:
 
 ```text
 DATABASE_URL
@@ -81,19 +81,34 @@ default; set `EMBEDDING_INPUT_MODE=typed` only when the provider supports the
 ## 4. Install
 
 ```bash
-export CENTAUR_OS_KUBE_CONTEXT=<exact-kubectl-context>
-export CENTAUR_OS_NAMESPACE=<existing-centaur-namespace>
-./scripts/install-kubernetes.sh --image centaur-os:0.1.0 --apply
+export CENTAUR_CONTEXT_KUBE_CONTEXT=<exact-kubectl-context>
+export CENTAUR_CONTEXT_NAMESPACE=<existing-centaur-namespace>
+./scripts/install-kubernetes.sh --image centaur-context:0.2.0 --apply
 ```
 
 The installer checks the context, Secret, rollout, and resource boundaries.
 
+### Upgrade an existing Centaur OS installation
+
+Do not rename or recreate its database or role. Create `centaur-context-env`
+with the retained values, including the existing `centaur_os` `DATABASE_URL`,
+then take and validate a backup. Scale `deployment/centaur-os` to zero and run:
+
+```bash
+./scripts/install-kubernetes.sh --image centaur-context:0.2.0 --apply --legacy-cutover
+```
+
+The installer refuses this handoff while the legacy Deployment has any desired
+or ready replicas. After the new workload is ready, switch Centaur consumers to
+`http://centaur-context`, verify context reads and ingestion, and retain the old
+scaled-down resources for rollback. Do not delete them during the rename.
+
 ## 5. Open the UI
 
 ```bash
-kubectl --context "$CENTAUR_OS_KUBE_CONTEXT" \
-  --namespace "$CENTAUR_OS_NAMESPACE" \
-  port-forward deployment/centaur-os 8080:8080
+kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" \
+  --namespace "$CENTAUR_CONTEXT_NAMESPACE" \
+  port-forward deployment/centaur-context 8080:8080
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and

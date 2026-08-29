@@ -1,4 +1,4 @@
-"""Small JSON CLI for the Centaur OS agent tool."""
+"""Small JSON CLI for the Centaur Context agent tool."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import typer
 from .client import _client
 
 app = typer.Typer(
-    name="centaur-os",
-    help="Read concise shared context from Centaur OS.",
+    name="centaur-context",
+    help="Read concise shared context from Centaur Context.",
     no_args_is_help=True,
 )
 

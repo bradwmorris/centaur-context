@@ -24,17 +24,17 @@ database contract tests.
 
 ## What We Are Doing
 
-- [ ] Add a `Schema` view that explains the complete Centaur OS relational
+- [ ] Add a `Schema` view that explains the complete Centaur Context relational
   model, including first-class subtype and supporting tables.
 - [ ] Let an authorized human inspect every column and paginated row in every
-  Centaur OS application table without providing arbitrary SQL or mutation.
+  Centaur Context application table without providing arbitrary SQL or mutation.
 - [ ] Make primary keys, foreign keys, nullability, defaults, constraints, row
   counts, and relationships understandable from the UI.
 
 ## Contract
 
 - **Goal:** Give repository operators a trustworthy visual database explorer for the complete
-  Centaur OS schema and its stored data.
+  Centaur Context schema and its stored data.
 - **Done:** The UI discovers every application-owned table, visualizes its
   columns and relationships, and displays all of its rows through pagination;
   foreign-key values can navigate to the referenced row or canonical Object.
@@ -53,11 +53,11 @@ database contract tests.
 ## Detailed Requirements
 
 - Discover tables from the `public` application schema but enforce a server-side
-  allowlist derived from Centaur OS migrations. Never accept a client-supplied
+  allowlist derived from Centaur Context migrations. Never accept a client-supplied
   schema or interpolate an unvalidated table or column identifier.
 - Exclude PostgreSQL catalogs, `information_schema`, migration bookkeeping,
   credentials, environment state, and every logical database except
-  `centaur_os` or a disposable `centaur_os_test` database.
+  `centaur_context` or a disposable `centaur_context_test` database.
 - Show tables such as Objects, subtype tables, Connections, external identities,
   Chat Messages, Curator Runs, Curator Run Changes, Object Embeddings, Object
   Embedding Jobs, and Object Events even when they do not have a dedicated
@@ -76,7 +76,7 @@ database contract tests.
 
 ## Checks
 
-- [ ] API tests prove only allowlisted Centaur OS tables can be inspected and
+- [ ] API tests prove only allowlisted Centaur Context tables can be inspected and
   arbitrary schema/table identifiers are rejected.
 - [ ] Database-backed tests cover table/column metadata, foreign keys, empty
   tables, stable pagination, JSON, long text, and null values.
@@ -87,6 +87,6 @@ database contract tests.
 ## Approval Boundary
 
 This RD authorizes only local, authenticated, read-only inspection of the
-`centaur_os` logical database. It does not authorize querying Centaur-owned
+`centaur_context` logical database. It does not authorize querying Centaur-owned
 databases, exposing a database DSN, adding public ingress, deploying, exporting
 data, executing arbitrary SQL, or changing/deleting any schema or row.

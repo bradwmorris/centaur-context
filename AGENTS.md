@@ -1,14 +1,15 @@
-# Centaur OS
+# Centaur Context
 
-Centaur OS is a reusable local-first shared context and operations application
+Centaur Context is a reusable local-first shared context and operations application
 for Centaur users and agents.
 
 ## Boundaries
 
-- This repository owns the `centaur_os` logical database only.
+- This repository owns the canonical `centaur_context` logical database and
+  legacy-named `centaur_os` installations only.
 - Never query or migrate Centaur's `ai_v2` or Console databases.
 - Agents use the authenticated HTTP API; never give a sandbox a database DSN.
-- This repository owns the standard `tools/centaur_os` agent client because the
+- This repository owns the standard `tools/centaur_context` agent client because the
   client is part of the public API contract.
 - Organization-specific agents, prompts, workflows, retention choices, and
   business rules belong in that organization's private overlay.
@@ -34,9 +35,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 npm --prefix web run type-check
 npm --prefix web run build
-python3 -m pytest tools/centaur_os/test_client.py
-python3 -m compileall -q tools/centaur_os
+python3 -m pytest tools/centaur_context/test_client.py
+python3 -m compileall -q tools/centaur_context
 ```
 
 Database integration tests require `TEST_DATABASE_URL` and must target a
-disposable database whose name contains `centaur_os_test`.
+disposable database whose name contains `centaur_context_test` or the legacy
+`centaur_os_test` pattern.

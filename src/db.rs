@@ -449,7 +449,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
     let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(pool)
         .await?;
-    if database != "centaur_os" && !database.contains("centaur_os_test") {
+    if !allowed_database_name(&database) {
         return Err(DbError::Sqlx(sqlx::Error::Configuration(
             format!("refusing migrations against unexpected database {database:?}").into(),
         )));
@@ -459,6 +459,13 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
         .await
         .map_err(|error| sqlx::Error::Migrate(Box::new(error)))?;
     Ok(())
+}
+
+fn allowed_database_name(database: &str) -> bool {
+    database == "centaur_context"
+        || database.contains("centaur_context_test")
+        || database == "centaur_os"
+        || database.contains("centaur_os_test")
 }
 
 pub async fn ready(pool: &PgPool) -> Result<(), DbError> {
@@ -1703,4 +1710,30 @@ async fn insert_event(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rename_compatibility_tests {
+    use super::allowed_database_name;
+
+    #[test]
+    fn accepts_canonical_and_legacy_database_names_only() {
+        for allowed in [
+            "centaur_context",
+            "centaur_context_test_issue_10",
+            "centaur_os",
+            "centaur_os_test_upgrade",
+        ] {
+            assert!(
+                allowed_database_name(allowed),
+                "expected {allowed} to be accepted"
+            );
+        }
+        for rejected in ["postgres", "ai_v2", "centaur_contextual", "centaur_test"] {
+            assert!(
+                !allowed_database_name(rejected),
+                "expected {rejected} to be rejected"
+            );
+        }
+    }
 }

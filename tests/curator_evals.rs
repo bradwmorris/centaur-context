@@ -1,4 +1,4 @@
-use centaur_os::curator::{ReconciliationPlan, validate_plan};
+use centaur_context::curator::{ReconciliationPlan, validate_plan};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

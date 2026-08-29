@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use centaur_os::{
+use centaur_context::{
     api::{AppState, agent_router},
     config::{EmbeddingConfig, EmbeddingInputMode, TextSearchConfig},
     curator::{
@@ -31,8 +31,8 @@ use tower::ServiceExt;
 async fn test_pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
     assert!(
-        url.contains("centaur_os_test"),
-        "TEST_DATABASE_URL must name a disposable centaur_os_test database"
+        url.contains("centaur_context_test") || url.contains("centaur_os_test"),
+        "TEST_DATABASE_URL must name a disposable centaur_context_test or centaur_os_test database"
     );
     Some(
         PgPoolOptions::new()
@@ -94,7 +94,7 @@ async fn canonical_ontology_and_revision_conflicts() {
         &actor(),
         NewObject {
             kind: "entity".to_owned(),
-            title: "Centaur OS".to_owned(),
+            title: "Centaur Context".to_owned(),
             description: "The canonical product under test.".to_owned(),
             provenance: json!({"source_type": "human"}),
         },
@@ -1092,7 +1092,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 happened_at: timestamp("2026-05-28T00:00:01Z"),
             }),
         }],
-        update_objects: vec![centaur_os::curator::UpdateObject {
+        update_objects: vec![centaur_context::curator::UpdateObject {
             object_id,
             expected_revision,
             title: None,
