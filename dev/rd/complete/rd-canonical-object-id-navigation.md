@@ -3,7 +3,7 @@
 **Status:** `complete`
 **Created:** 2026-08-28
 **Completed:** 2026-08-29
-**GitHub Issue:** [#1](https://github.com/bradwmorris/centaur-os/issues/1)
+**GitHub Issue:** #1
 
 ## Execution Plan
 
