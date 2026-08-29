@@ -380,7 +380,11 @@ pub async fn reconcile(
     prompt_version: &str,
     plan: ReconciliationPlan,
 ) -> Result<Value, CuratorError> {
-    reconcile_owned(pool, run_id, model, prompt_version, plan, None).await
+    let result = reconcile_owned(pool, run_id, model, prompt_version, plan, None).await;
+    if let Err(error) = &result {
+        record_failure(pool, run_id, &error.to_string()).await?;
+    }
+    result
 }
 
 async fn reconcile_owned(
@@ -399,6 +403,9 @@ async fn reconcile_owned(
         .execute(&mut *tx)
         .await?;
     let run = lock_run(&mut tx, run_id).await?;
+    crate::evals::set_curator_context(&mut tx, run_id)
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("eval context failed: {error}")))?;
     if run.status == "completed" {
         if run.proposed_plan.as_ref() == Some(&plan_json) {
             return Ok(run
@@ -665,6 +672,9 @@ async fn reconcile_owned(
         json!({"change_count": sequence, "model": model, "prompt_version": prompt_version}),
     )
     .await?;
+    crate::evals::finish_curator_eval(&mut tx, run_id, sequence)
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("eval completion failed: {error}")))?;
     tx.commit().await?;
     Ok(result)
 }
@@ -688,6 +698,9 @@ pub async fn undo_as(
         .execute(&mut *tx)
         .await?;
     let run = lock_run(&mut tx, run_id).await?;
+    crate::evals::set_curator_context(&mut tx, run_id)
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("eval context failed: {error}")))?;
     if run.status == "reversed" {
         return Ok(run
             .result
@@ -726,6 +739,9 @@ pub async fn undo_as(
     .execute(&mut *tx)
     .await?;
     insert_undo_event(&mut tx, run_id, run.chat_object_id, actor, changes.len()).await?;
+    crate::evals::reverse_curator_eval(&mut tx, run_id, changes.len())
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("eval reversal failed: {error}")))?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1285,6 +1301,9 @@ async fn record_failure(pool: &PgPool, run_id: Uuid, message: &str) -> Result<()
         r#"UPDATE curator_runs SET status='failed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
                   available_at=now()+LEAST(attempts,10)*interval '30 seconds',error_message=$2 WHERE id=$1 AND status <> 'completed' AND status <> 'reversed'"#,
     ).bind(run_id).bind(message.chars().take(2000).collect::<String>()).execute(pool).await?;
+    crate::evals::fail_curator_eval(pool, run_id, message)
+        .await
+        .map_err(|error| CuratorError::Invalid(format!("eval failure trace failed: {error}")))?;
     Ok(())
 }
 
@@ -1389,6 +1408,26 @@ struct WorkerMessage {
 #[derive(Debug, Deserialize)]
 struct ModelResponse {
     choices: Vec<ModelChoice>,
+    usage: Option<ModelUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelUsage {
+    prompt_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    prompt_tokens_details: Option<ModelPromptTokenDetails>,
+    completion_tokens_details: Option<ModelCompletionTokenDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelPromptTokenDetails {
+    cached_tokens: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelCompletionTokenDetails {
+    reasoning_tokens: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1433,9 +1472,20 @@ pub async fn run_worker(
             let (messages, candidates) =
                 worker_context(&pool, embeddings.as_ref(), text_search_config, &run).await?;
             let mut plan =
-                request_plan(&client, &config, &run, &messages, &candidates, None).await?;
+                request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
             if let Err(error) = validate_plan(&mut plan) {
+                crate::evals::append_curator_trace(
+                    &pool,
+                    run.id,
+                    "validation_repair",
+                    json!({"error":error.to_string()}),
+                )
+                .await
+                .map_err(|trace_error| {
+                    CuratorError::Invalid(format!("eval validation trace failed: {trace_error}"))
+                })?;
                 plan = request_plan(
+                    &pool,
                     &client,
                     &config,
                     &run,
@@ -1551,6 +1601,11 @@ async fn worker_context(
         .iter()
         .map(|object| object.id)
         .collect::<Vec<_>>();
+    crate::evals::link_curator_candidates(pool, run.id, &candidate_ids)
+        .await
+        .map_err(|error| {
+            CuratorError::Invalid(format!("candidate eval linkage failed: {error}"))
+        })?;
     let mut connections = crate::db::context_connections(pool, &candidate_ids)
         .await
         .map_err(|error| {
@@ -1563,6 +1618,7 @@ async fn worker_context(
 }
 
 async fn request_plan(
+    pool: &PgPool,
     client: &reqwest::Client,
     config: &CuratorModelConfig,
     run: &CuratorRun,
@@ -1570,6 +1626,7 @@ async fn request_plan(
     candidates: &crate::search::SearchPacket,
     validation_feedback: Option<&str>,
 ) -> Result<ReconciliationPlan, CuratorError> {
+    let attempt_id = Uuid::new_v4().to_string();
     let system = r#"You are the Centaur Context Context Curator. Return only one JSON object with exactly these four arrays:
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
 
@@ -1591,7 +1648,7 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
         "candidate_objects": candidates,
         "validation_feedback": validation_feedback,
     });
-    let response = client
+    let response = match client
         .post(&config.endpoint)
         .bearer_auth(&config.api_token)
         .json(&json!({
@@ -1604,17 +1661,65 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
             "temperature":0
         }))
         .send()
-        .await
-        .map_err(|error| CuratorError::Invalid(format!("curator model request failed: {error}")))?;
+        .await {
+        Ok(response) => response,
+        Err(error) => {
+            record_curator_usage(
+                pool,
+                run,
+                &config.model,
+                &attempt_id,
+                None,
+                Some(&error.to_string()),
+            )
+            .await;
+            return Err(CuratorError::Invalid(format!("curator model request failed: {error}")));
+        }
+    };
     let status = response.status();
     if !status.is_success() {
+        record_curator_usage(
+            pool,
+            run,
+            &config.model,
+            &attempt_id,
+            None,
+            Some(&format!("HTTP {status}")),
+        )
+        .await;
         return Err(CuratorError::Invalid(format!(
             "curator model returned HTTP {status}"
         )));
     }
-    let response: ModelResponse = response.json().await.map_err(|error| {
-        CuratorError::Invalid(format!("invalid curator model response: {error}"))
-    })?;
+    let response: ModelResponse = match response.json().await {
+        Ok(response) => response,
+        Err(error) => {
+            record_curator_usage(
+                pool,
+                run,
+                &config.model,
+                &attempt_id,
+                None,
+                Some(&error.to_string()),
+            )
+            .await;
+            return Err(CuratorError::Invalid(format!(
+                "invalid curator model response: {error}"
+            )));
+        }
+    };
+    record_curator_usage(
+        pool,
+        run,
+        &config.model,
+        &attempt_id,
+        response.usage.as_ref(),
+        response
+            .usage
+            .is_none()
+            .then_some("provider response omitted usage"),
+    )
+    .await;
     let content = response
         .choices
         .into_iter()
@@ -1627,6 +1732,70 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
             "curator model returned an invalid reconciliation plan: {error}"
         ))
     })
+}
+
+async fn record_curator_usage(
+    pool: &PgPool,
+    run: &CuratorRun,
+    model_id: &str,
+    attempt_id: &str,
+    usage: Option<&ModelUsage>,
+    missing_reason: Option<&str>,
+) {
+    let eval_id: Option<Uuid> =
+        match sqlx::query_scalar("SELECT id FROM evals WHERE curator_run_id=$1")
+            .bind(run.id)
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(run_id=%run.id,%error,"failed to resolve eval for Curator usage");
+                return;
+            }
+        };
+    let Some(eval_id) = eval_id else {
+        return;
+    };
+    let input = crate::evals::NormalizedUsage {
+        eval_id,
+        component: "context_curator".into(),
+        provider: "openai".into(),
+        model_id: model_id.to_owned(),
+        display_tier: Some(model_id.to_owned()),
+        execution_type: "direct_api".into(),
+        auth_mode: "api_key".into(),
+        upstream_service: "api.openai.com".into(),
+        billing_mode: "metered_api".into(),
+        reasoning_effort: None,
+        service_tier: None,
+        source_thread_id: Some(run.chat_object_id.to_string()),
+        source_execution_id: attempt_id.to_owned(),
+        source_turn_id: Some(run.id.to_string()),
+        usage_status: if usage.is_some() {
+            "reported"
+        } else {
+            "unavailable"
+        }
+        .into(),
+        usage_missing_reason: missing_reason.map(str::to_owned),
+        input_tokens: usage.and_then(|value| value.prompt_tokens),
+        output_tokens: usage.and_then(|value| value.completion_tokens),
+        cache_creation_tokens: None,
+        cache_read_tokens: usage
+            .and_then(|value| value.prompt_tokens_details.as_ref()?.cached_tokens),
+        reasoning_tokens: usage
+            .and_then(|value| value.completion_tokens_details.as_ref()?.reasoning_tokens),
+        total_tokens: usage.and_then(|value| value.total_tokens),
+        estimated_micro_usd: None,
+        chatgpt_credit_microunits: None,
+        api_equivalent_micro_usd: None,
+        rate_card_version: None,
+        pricing_snapshot: None,
+    };
+    if let Err(error) = crate::evals::record_usage(pool, &input).await {
+        tracing::error!(run_id=%run.id,%error,"failed to record Curator usage");
+    }
 }
 
 #[derive(Debug)]

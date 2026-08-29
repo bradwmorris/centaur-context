@@ -13,6 +13,7 @@ const ids = {
   connection: "66666666-6666-4666-8666-666666666666",
   run: "77777777-7777-4777-8777-777777777777",
   message: "88888888-8888-4888-8888-888888888888",
+  eval: "99999999-9999-4999-8999-999999999999",
 };
 
 const now = "2026-08-29T00:00:00Z";
@@ -40,6 +41,18 @@ const run: CuratorRun = {
   worker_id: null, model: "test", prompt_version: "v1", proposed_plan: null, committed_plan: {}, result: {},
   created_at: now, started_at: now, completed_at: now, reversed_at: null, error_message: null,
 };
+
+const evalSummary = {
+  id: ids.eval, kind: "slack_interaction", status: "completed", actor_type: "system", actor_id: "chat-ingestor",
+  chat_object_id: ids.chat, curator_run_id: ids.run, summary: "Slack interaction for Canonical chat", error_summary: null,
+  verdict: "mixed", notes: "Useful result with one correction.", annotated_by: "local-human", annotation_revision: 1,
+  affected_object_count: 2, total_tokens: 180, estimated_micro_usd: 1200, chatgpt_credit_microunits: null,
+  usage_sources: [
+    { component: "centaur_agent", provider: "openai", model_id: "gpt-5.6-sol", display_tier: "GPT-5.6 Sol", execution_type: "codex_harness", auth_mode: "chatgpt_subscription", billing_mode: "subscription_allowance", usage_status: "reported" },
+    { component: "context_curator", provider: "openai", model_id: "gpt-4.1-mini", display_tier: "GPT-4.1 mini", execution_type: "direct_api", auth_mode: "api_key", billing_mode: "metered_api", usage_status: "reported" },
+  ],
+  created_at: now, updated_at: now, completed_at: now,
+} as const;
 
 const visuals = objects.map((object) => ({
   object_id: object.id,
@@ -74,6 +87,17 @@ function installApiMock() {
         { id: "change-connection", sequence: 2, entity_type: "connection", entity_id: ids.connection, action: "created", before_state: null, after_state: {}, after_revision: 1, created_at: now, undone_at: null },
       ],
     });
+    if (path.startsWith("/api/v1/evals?")) return json([evalSummary]);
+    if (path === `/api/v1/evals/${ids.eval}`) return json({
+      eval: evalSummary,
+      trace: [
+        { id: "trace-1", eval_id: ids.eval, sequence: 1, entry_type: "message_ingested", component: null, provider: null, model_id: null, display_tier: null, execution_type: null, auth_mode: null, upstream_service: null, billing_mode: null, reasoning_effort: null, service_tier: null, source_thread_id: null, source_execution_id: null, source_turn_id: null, usage_status: "not_applicable", usage_missing_reason: null, input_tokens: null, output_tokens: null, cache_creation_tokens: null, cache_read_tokens: null, reasoning_tokens: null, total_tokens: null, estimated_micro_usd: null, chatgpt_credit_microunits: null, api_equivalent_micro_usd: null, rate_card_version: null, pricing_snapshot: null, facts: { message_id: ids.message }, created_at: now },
+        { id: "trace-2", eval_id: ids.eval, sequence: 2, entry_type: "model_attempt", component: "centaur_agent", provider: "openai", model_id: "gpt-5.6-sol", display_tier: "GPT-5.6 Sol", execution_type: "codex_harness", auth_mode: "chatgpt_subscription", upstream_service: "chatgpt.com", billing_mode: "subscription_allowance", reasoning_effort: "high", service_tier: null, source_thread_id: "thread", source_execution_id: "execution", source_turn_id: "turn", usage_status: "reported", usage_missing_reason: null, input_tokens: 100, output_tokens: 50, cache_creation_tokens: 0, cache_read_tokens: 20, reasoning_tokens: 10, total_tokens: 150, estimated_micro_usd: null, chatgpt_credit_microunits: null, api_equivalent_micro_usd: null, rate_card_version: null, pricing_snapshot: null, facts: {}, created_at: now },
+        { id: "trace-3", eval_id: ids.eval, sequence: 3, entry_type: "model_attempt", component: "context_curator", provider: "openai", model_id: "gpt-4.1-mini", display_tier: "GPT-4.1 mini", execution_type: "direct_api", auth_mode: "api_key", upstream_service: "api.openai.com", billing_mode: "metered_api", reasoning_effort: null, service_tier: null, source_thread_id: "thread", source_execution_id: "curator-execution", source_turn_id: "curator-turn", usage_status: "reported", usage_missing_reason: null, input_tokens: 20, output_tokens: 10, cache_creation_tokens: 0, cache_read_tokens: 0, reasoning_tokens: 0, total_tokens: 30, estimated_micro_usd: 1200, chatgpt_credit_microunits: null, api_equivalent_micro_usd: null, rate_card_version: "fixture-v1", pricing_snapshot: {}, facts: {}, created_at: now },
+      ],
+      objects: [{ object_id: ids.memory, role: "created", kind: "memory", title: "Canonical memory", lifecycle: "active" }],
+    });
+    if (path === `/api/v1/evals/${ids.eval}/annotation`) return json({ ...evalSummary, verdict: "pass", annotation_revision: 2 });
     if (path === `/api/v1/connections/${ids.connection}`) return json({ id: ids.connection, source_object_id: ids.chat, kind: "about", target_object_id: ids.memory, description: "The chat is about this memory.", protected: false, revision: 1, created_by_type: "human", created_by_id: "local-human", updated_by_type: "human", updated_by_id: "local-human", provenance: {}, created_at: now, updated_at: now, archived_at: null });
     if (path === `/api/v1/users/${ids.user}`) return json({ object_id: ids.user, title: "Canonical user", description: "Canonical user description", lifecycle: "active", revision: 1, provenance: {}, user_kind: "human", created_at: now, updated_at: now });
     if (path === `/api/v1/users/${ids.user}/identities`) return json([]);
@@ -205,5 +229,30 @@ describe("canonical Object identity across the application", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Could not load" })).toBeVisible();
     expect(screen.getByText("Record not found")).toBeVisible();
+  });
+
+  it("shows mixed execution sources and truthful subscription charging in Evals", async () => {
+    window.history.replaceState({}, "", "/evals");
+    render(<App />);
+    expect(await screen.findByText("Slack interaction for Canonical chat")).toBeVisible();
+    expect(screen.getByText(/GPT-5.6 Sol · codex harness · chatgpt subscription/i)).toBeVisible();
+    expect(screen.getByText(/GPT-4.1 mini · direct api · api key/i)).toBeVisible();
+    expect(screen.getByText(/Included subscription usage; per-trace USD unavailable/)).toBeVisible();
+    expect(screen.getByText(/Metered API estimate \$0\.001200 USD/)).toBeVisible();
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Eval filters")).toBeVisible();
+  });
+
+  it("renders ordered trace, Object navigation, and human review controls", async () => {
+    window.history.replaceState({}, "", `/evals/${ids.eval}`);
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Slack interaction for Canonical chat" })).toBeVisible();
+    expect(screen.getByText("Ordered trace")).toBeVisible();
+    expect(screen.getAllByText("model attempt")).toHaveLength(2);
+    expect(screen.getByText(/included subscription usage; per-trace USD unavailable/)).toBeVisible();
+    expect(screen.getByText(/estimated \$0\.001200 USD \(fixture-v1\)/)).toBeVisible();
+    expect(screen.getByRole("link", { name: `Open Object ID ${ids.memory}` })).toHaveAttribute("href", `/objects/${ids.memory}`);
+    expect(screen.getByRole("combobox", { name: "Verdict" })).toHaveValue("mixed");
+    expect(screen.getByRole("textbox", { name: "Review notes" })).toHaveValue("Useful result with one correction.");
   });
 });

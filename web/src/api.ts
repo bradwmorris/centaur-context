@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectVisual, SharedObject, Task, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectVisual, SharedObject, Task, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -103,6 +103,17 @@ export const api = {
   },
   undoCuratorRun(id: string) {
     return request<Record<string, unknown>>(`/api/v1/curator-runs/${id}/undo`, write("POST", {}));
+  },
+  evals(filters: Record<string, string> = {}) {
+    const params = new URLSearchParams(filters);
+    params.set("limit", "100");
+    return request<EvalSummary[]>(`/api/v1/evals?${params}`);
+  },
+  eval(id: string) {
+    return request<EvalDetail>(`/api/v1/evals/${id}`);
+  },
+  annotateEval(id: string, body: { verdict: EvalVerdict; notes: string | null; expected_revision: number }) {
+    return request<EvalSummary>(`/api/v1/evals/${id}/annotation`, write("PATCH", body));
   },
   tasks() {
     return request<Task[]>("/api/v1/tasks");

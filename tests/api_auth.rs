@@ -72,7 +72,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v1");
-    assert_eq!(metadata["database_schema_version"], 8);
+    assert_eq!(metadata["database_schema_version"], 9);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -203,6 +203,83 @@ async fn agent_listener_does_not_expose_write_routes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
+    let agent = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evals")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent.status(), StatusCode::NOT_FOUND);
+
+    let curator = curator_router(state(), "c".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evals")
+                .header("authorization", format!("Bearer {}", "c".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(curator.status(), StatusCode::NOT_FOUND);
+
+    let ingestion = ingest_router(
+        state(),
+        "i".repeat(32),
+        ApprovedSlackSurfaces::parse("T1:C1").unwrap(),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/api/v1/evals")
+            .header("authorization", format!("Bearer {}", "i".repeat(32)))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
+
+    let invalid_human_filter = human_router(state(), PathBuf::from("web/dist"))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evals?kind=automatic_score")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid_human_filter.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let invalid_human_annotation = human_router(state(), PathBuf::from("web/dist"))
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/evals/00000000-0000-4000-8000-000000000001/annotation")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"verdict":"automatic_score","notes":null,"expected_revision":0}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid_human_annotation.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "curator";
+export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "curator" | "evals";
 
 export interface AppRoute {
   section: Section;
@@ -14,6 +14,7 @@ const sections: Record<string, Section> = {
   entities: "entities",
   memories: "memories",
   "curator-runs": "curator",
+  evals: "evals",
 };
 
 const paths: Record<Section, string> = {
@@ -24,6 +25,7 @@ const paths: Record<Section, string> = {
   entities: "entities",
   memories: "memories",
   curator: "curator-runs",
+  evals: "evals",
 };
 
 export function parseRoute(pathname: string): AppRoute {

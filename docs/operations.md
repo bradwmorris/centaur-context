@@ -67,6 +67,25 @@ the same time against one database.
 Migrations are forward-only. Do not treat changing the container image as a
 database rollback.
 
+## Evals and trace accounting
+
+The trusted human listener exposes `/api/v1/evals` and the **Evals** UI. Agent,
+Curator, and Slack-ingestion listeners do not expose eval reads or annotation.
+Slack ingestion accepts bounded normalized `agent_usage` alongside the
+interaction snapshot and associates it with the current interaction window;
+retries are deduplicated by component, source execution, and source turn.
+
+Object and Connection triggers attach every runtime mutation to the active Eval.
+When a writer does not set an explicit transaction context, the database creates
+an explicitly classified standalone human or system Eval rather than leaving an
+untraced mutation. Migration 9 groups pre-existing Objects under one legacy
+import Eval and does not fabricate historical usage or cost.
+
+Treat prices as deployment-owned configuration. Metered estimates must carry a
+versioned rate-card snapshot and are stored in integer micro-USD. ChatGPT
+subscription or credit usage must display that basis without claiming a `$0`
+per-trace bill. Missing usage, price, or credit data remains visibly incomplete.
+
 ## Rollback
 
 For a name-handoff rollback, first scale `deployment/centaur-context` to zero,
