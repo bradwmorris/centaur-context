@@ -25,6 +25,17 @@ describe("Object identity controls", () => {
     expect(await screen.findByText(`Copied Object ID ${objectId}`)).toBeInTheDocument();
   });
 
+  it("renders a row ID as one five-character pill that copies the complete UUID", async () => {
+    render(<ObjectId id={objectId} rowPill />);
+    const pill = screen.getByRole("button", { name: `Copy Object ID ${objectId}` });
+    expect(pill).toHaveTextContent("ID: 11111");
+    expect(pill).toHaveAttribute("title", `Copy full Object ID ${objectId}`);
+    expect(screen.queryByRole("link", { name: `Open Object ID ${objectId}` })).not.toBeInTheDocument();
+    await userEvent.click(pill);
+    expect(writeText).toHaveBeenCalledWith(objectId);
+    expect(await screen.findByText(`Copied Object ID ${objectId}`)).toBeInTheDocument();
+  });
+
   it("routes supporting Connection IDs separately", () => {
     render(<ConnectionId id="22222222-2222-4222-8222-222222222222" />);
     expect(screen.getByRole("link", { name: "Open Connection ID 22222222-2222-4222-8222-222222222222" })).toHaveAttribute("href", "/connections/22222222-2222-4222-8222-222222222222");

@@ -77,13 +77,14 @@ button { color: inherit; }
 .list-group-head > span:last-child { color: #5f6168; }
 .status-ring { width: 13px; height: 13px; border: 1.5px solid #8a8c93; border-radius: 50%; }
 .record-list { min-height: 0; padding: 0 12px; }
-.record { position: relative; width: 100%; min-height: 53px; display: grid; grid-template-columns: 28px 112px minmax(150px, 1.4fr) minmax(160px, 1fr) minmax(180px, auto) 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; margin-bottom: 2px; }
+.record { position: relative; width: 100%; min-height: 53px; display: grid; grid-template-columns: 28px max-content minmax(150px, 1.3fr) 112px minmax(150px, 1fr) minmax(96px, auto) 62px; align-items: center; gap: 8px; text-align: left; border: 0; border-radius: 4px; background: #0f1012; padding: 0 12px 0 10px; margin-bottom: 2px; }
 .record:hover { background: #17181b; }
 .record > :not(.record-open) { position: relative; z-index: 1; pointer-events: none; }
-.record > .record-context { pointer-events: auto; }
+.record > .object-identity, .record > .record-context { pointer-events: auto; }
 .record-open { position: absolute; inset: 0; z-index: 0; border: 0; border-radius: inherit; background: transparent; cursor: pointer; }
 .record-open:focus-visible { outline: 2px solid #8d91a0; outline-offset: -2px; }
 .row-grip { color: #4e5056; letter-spacing: 1px; }
+.record > .kind { justify-self: start; }
 .record time { color: #5e6067; font-size: 10px; text-align: right; }
 .record strong { min-width: 0; color: #dedee0; font-size: 12px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .record p { min-width: 0; color: #666870; font-size: 11px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -124,6 +125,12 @@ button { color: inherit; }
 .object-identity button:hover { color: #e1e1e3; background: #292a30; }
 .object-identity.compact { flex-wrap: nowrap; white-space: nowrap; }
 .object-identity.compact .identity-label { flex-basis: auto; }
+.object-identity.row-pill { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; }
+.object-identity .object-id-pill { border: 1px solid rgba(255,255,255,.06); border-radius: 999px; background: #1a1b1f; color: #9a9ca3; padding: 3px 8px; font-size: 9px; font-weight: 540; letter-spacing: .02em; }
+.object-identity .object-id-pill:hover { border-color: rgba(255,255,255,.12); background: #232429; color: #eeeeef; }
+.object-identity .object-id-pill:focus-visible { outline: 2px solid #8d91a0; outline-offset: 2px; }
+.object-identity .object-id-pill[data-copy-state="copied"] { border-color: rgba(116,181,144,.35); color: #74b590; }
+.object-identity .object-id-pill[data-copy-state="error"] { border-color: rgba(204,133,133,.35); color: #cc8585; }
 .supporting-identity { min-width: 0; display: grid; gap: 3px; color: #686a71; font-size: 9px; }
 .supporting-identity > span { text-transform: uppercase; letter-spacing: .05em; font-size: 8px; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -253,7 +260,7 @@ button { color: inherit; }
   .nav-button { justify-content: center; padding: 0; font-size: 0; }
   .nav-button > span { width: auto; font-size: 15px; }
   .nav-foot { justify-content: center; padding: 9px 0; font-size: 0; }
-  .record { grid-template-columns: 24px 104px minmax(130px, 1fr) minmax(130px, auto) 58px; }
+  .record { grid-template-columns: 24px max-content minmax(130px, 1fr) 104px minmax(96px, auto) 58px; }
   .record p { display: none; }
   .record-primary { padding-left: 32px; padding-right: 32px; }
 }
@@ -261,9 +268,9 @@ button { color: inherit; }
 @media (max-width: 640px) {
   .topbar { min-height: 45px; padding: 7px 10px; }
   .workspace { margin: 0; }
-  .record { grid-template-columns: 92px minmax(78px, 1fr) 100px 34px; gap: 5px; padding-right: 7px; }
+  .record { grid-template-columns: max-content minmax(90px, 1fr) 86px 36px; gap: 5px; padding-right: 7px; }
   .record .row-grip { display: none; }
-  .record-context .object-context { display: none; }
+  .record-context { display: none; }
   .connection-flow { grid-template-columns: 1fr; }
   .connection-arrow { transform: rotate(90deg); }
   .record-primary { padding: 38px 24px 45px; }
