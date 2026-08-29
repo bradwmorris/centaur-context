@@ -129,6 +129,8 @@ pub struct SlackSenderInput {
     pub provider_user_id: String,
     pub display_name: String,
     pub user_kind: String,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -158,6 +160,7 @@ pub struct ValidatedSlackSender {
     provider_user_id: String,
     display_name: String,
     user_kind: String,
+    avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,6 +223,7 @@ impl SlackInteractionInput {
                         "sender.user_kind",
                         &["human", "agent"],
                     )?,
+                    avatar_url: validate_avatar_url(message.sender.avatar_url)?,
                 },
                 content: required_text(message.content, "content", 20_000)?,
                 source_created_at: message.source_created_at,
@@ -241,6 +245,20 @@ impl SlackInteractionInput {
             interaction_finished: self.interaction_finished,
         })
     }
+}
+
+fn validate_avatar_url(value: Option<String>) -> Result<Option<String>, ValidationError> {
+    let value = optional_text(value, "sender.avatar_url", 2048)?;
+    if value
+        .as_deref()
+        .is_some_and(|url| !url.starts_with("https://") && !url.starts_with("http://"))
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_url",
+            value: value.unwrap_or_default(),
+        });
+    }
+    Ok(value)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -467,10 +485,11 @@ async fn get_or_create_user(
             }));
         }
         sqlx::query(
-            "UPDATE external_identities SET display_name=$2,updated_at=now() WHERE user_object_id=$1 AND provider='slack'",
+            "UPDATE external_identities SET display_name=$2,avatar_url=COALESCE($3,avatar_url),updated_at=now() WHERE user_object_id=$1 AND provider='slack'",
         )
         .bind(id)
         .bind(&sender.display_name)
+        .bind(&sender.avatar_url)
         .execute(&mut **tx)
         .await?;
         return Ok(id);
@@ -506,14 +525,15 @@ async fn get_or_create_user(
         .await?;
     sqlx::query(
         r#"INSERT INTO external_identities
-           (id,user_object_id,provider,workspace_id,provider_user_id,display_name)
-           VALUES ($1,$2,'slack',$3,$4,$5)"#,
+           (id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url)
+           VALUES ($1,$2,'slack',$3,$4,$5,$6)"#,
     )
     .bind(Uuid::new_v4())
     .bind(id)
     .bind(workspace_id)
     .bind(&sender.provider_user_id)
     .bind(&sender.display_name)
+    .bind(&sender.avatar_url)
     .execute(&mut **tx)
     .await?;
     insert_event(
@@ -783,5 +803,16 @@ mod tests {
         assert!(ApprovedSlackSurfaces::parse("").is_err());
         assert!(ApprovedSlackSurfaces::parse("T1").is_err());
         assert!(ApprovedSlackSurfaces::parse(":C1").is_err());
+    }
+
+    #[test]
+    fn provider_avatar_references_require_http_urls() {
+        assert_eq!(
+            validate_avatar_url(Some(" https://example.test/avatar.png ".to_owned())).unwrap(),
+            Some("https://example.test/avatar.png".to_owned())
+        );
+        assert!(validate_avatar_url(Some("data:image/png;base64,secret".to_owned())).is_err());
+        assert!(validate_avatar_url(Some("javascript:alert(1)".to_owned())).is_err());
+        assert_eq!(validate_avatar_url(None).unwrap(), None);
     }
 }

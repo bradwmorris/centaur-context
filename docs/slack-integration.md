@@ -64,6 +64,12 @@ access to port `8081`. Agent sandboxes receive neither real token.
 Centaur OS checks the bearer token and the exact Slack workspace/channel pair.
 Rejected surfaces are not stored.
 
+Each ingested message sender may include an optional `avatar_url`. Centaur OS
+accepts only an HTTP(S) reference, updates it idempotently on the sender's
+existing Slack identity, and falls back to a deterministic local avatar when
+the reference is absent or cannot be loaded. This does not grant Centaur OS new
+Slack permissions or cause the backend to download avatar files.
+
 ## Agent tool
 
 Load `tools/centaur_os` through Centaur's overlay mechanism. The tool supports:

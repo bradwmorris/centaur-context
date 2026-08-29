@@ -82,6 +82,7 @@ fn service_router(state: AppState) -> Router {
             Router::new()
                 .route("/meta", get(api_meta))
                 .route("/objects", get(list_objects).post(create_object))
+                .route("/object-visuals", get(list_object_visuals))
                 .route("/objects/{id}", get(read_object).patch(update_object))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
@@ -684,6 +685,12 @@ async fn list_chat_messages(
 async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     Ok(Json(
         json!({"data": db::list_users(&state.pool, 100).await?}),
+    ))
+}
+
+async fn list_object_visuals(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": db::list_object_visuals(&state.pool).await?}),
     ))
 }
 

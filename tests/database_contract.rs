@@ -438,11 +438,13 @@ async fn canonical_ontology_and_revision_conflicts() {
         provider_user_id: "U_HUMAN".to_owned(),
         display_name: "Example Human".to_owned(),
         user_kind: "human".to_owned(),
+        avatar_url: Some("https://avatars.slack-edge.example/U_HUMAN.png".to_owned()),
     };
     let agent = SlackSenderInput {
         provider_user_id: "U_AGENT".to_owned(),
         display_name: "Centaur Agent".to_owned(),
         user_kind: "agent".to_owned(),
+        avatar_url: None,
     };
     let message = |id: &str, sender: SlackSenderInput, content: &str, at: &str| SlackMessageInput {
         provider_message_id: id.to_owned(),
@@ -625,6 +627,22 @@ async fn canonical_ontology_and_revision_conflicts() {
             .len(),
         1
     );
+    let chat_visuals = db::list_object_visuals(&pool).await.unwrap();
+    let chat_visual = chat_visuals
+        .iter()
+        .find(|visual| visual.object_id == first_ingest.chat_object_id)
+        .unwrap();
+    assert_eq!(chat_visual.source_provider.as_deref(), Some("slack"));
+    assert_eq!(chat_visual.users.len(), 2);
+    assert!(
+        chat_visual
+            .users
+            .iter()
+            .all(|user| user.role == "participant")
+    );
+    assert!(chat_visual.users.iter().any(|user| {
+        user.avatar_url.as_deref() == Some("https://avatars.slack-edge.example/U_HUMAN.png")
+    }));
 
     let run_id = finished.curator_run_id.unwrap();
     let supporting_message_id: uuid::Uuid =
@@ -710,6 +728,18 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     let memory_id =
         uuid::Uuid::parse_str(result["created_objects"]["event-memory"].as_str().unwrap()).unwrap();
+    let memory_visuals = db::list_object_visuals(&pool).await.unwrap();
+    let memory_visual = memory_visuals
+        .iter()
+        .find(|visual| visual.object_id == memory_id)
+        .unwrap();
+    assert_eq!(memory_visual.source_provider.as_deref(), Some("slack"));
+    assert!(
+        memory_visual
+            .users
+            .iter()
+            .any(|user| user.role == "source author" && user.user_kind == "human")
+    );
     assert_eq!(
         curator::get_run(&pool, run_id).await.unwrap().status,
         "completed"
@@ -872,16 +902,19 @@ async fn canonical_ontology_and_revision_conflicts() {
         provider_user_id: "U_DM_A".to_owned(),
         display_name: "Alex Example".to_owned(),
         user_kind: "human".to_owned(),
+        avatar_url: None,
     };
     let dm_human_b = SlackSenderInput {
         provider_user_id: "U_DM_B".to_owned(),
         display_name: "Alex Example".to_owned(),
         user_kind: "human".to_owned(),
+        avatar_url: None,
     };
     let dm_agent = SlackSenderInput {
         provider_user_id: "U_DM_AGENT".to_owned(),
         display_name: "Centaur Assistant".to_owned(),
         user_kind: "agent".to_owned(),
+        avatar_url: None,
     };
     let dm = ingest(
         &pool,

@@ -86,7 +86,7 @@ Current repository baseline:
 - The implemented sequence is: preserved POC baseline; canonical graph migration; deterministic Slack ingestion; read-only Context Builder; atomic Context Curator; completed MVP human surfaces; packaged operations.
 - `dev/` contains the tracked development workflow and backlog. Its RDs are
   plans and are not evidence that the described work has shipped.
-- Release contract: Centaur OS `0.1.0`, HTTP API `v1`, ontology `v1`, database schema version `6`, standard tool version `0.1.0`.
+- Release contract: Centaur OS `0.1.0`, HTTP API `v1`, ontology `v1`, database schema version `7`, standard tool version `0.1.0`.
 - Deployment profile: single organization, local machine or trusted private network. Verified container architecture is `linux/arm64`; builds declare `linux/amd64` and `linux/arm64` support.
 
 ### Product and ontology

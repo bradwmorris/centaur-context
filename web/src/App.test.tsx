@@ -41,6 +41,19 @@ const run: CuratorRun = {
   created_at: now, started_at: now, completed_at: now, reversed_at: null, error_message: null,
 };
 
+const visuals = objects.map((object) => ({
+  object_id: object.id,
+  source_provider: object.id === ids.chat || object.id === ids.memory ? "slack" : null,
+  users: object.id === ids.chat || object.id === ids.memory || object.id === ids.user ? [{
+    object_id: object.id,
+    user_object_id: ids.user,
+    title: "Canonical user",
+    user_kind: "human",
+    role: object.id === ids.user ? "identity" : object.id === ids.chat ? "participant" : "source author",
+    avatar_url: null,
+  }] : [],
+}));
+
 function json(data: unknown) {
   return Promise.resolve(new Response(JSON.stringify({ data }), { status: 200, headers: { "Content-Type": "application/json" } }));
 }
@@ -49,6 +62,7 @@ function installApiMock() {
   vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.pathname + input.search : new URL(input.url).pathname;
     if (path.startsWith("/api/v1/objects?")) return json(objects);
+    if (path === "/api/v1/object-visuals") return json(visuals);
     if (path === "/api/v1/tasks") return json([task]);
     if (path === `/api/v1/tasks/${ids.task}`) return json(task);
     if (path === "/api/v1/curator-runs") return json([run]);
@@ -78,28 +92,32 @@ describe("canonical Object identity across the application", () => {
   beforeEach(() => installApiMock());
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("shows a navigable canonical Object ID in all six primary lists and Curator rows", async () => {
+  it("shows a compact copyable canonical Object ID in all six primary lists and Curator rows", async () => {
     window.history.replaceState({}, "", "/objects");
     render(<App />);
-    expect(await screen.findByRole("link", { name: `Open Object ID ${ids.task}` })).toBeVisible();
-    expect(screen.getByRole("button", { name: `Copy Object ID ${ids.task}` })).toBeVisible();
+    const firstPill = await screen.findByRole("button", { name: `Copy Object ID ${ids.task}` });
+    expect(firstPill).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
+    const firstTitle = firstPill.parentElement?.nextElementSibling;
+    expect(firstTitle).toHaveTextContent("Canonical task");
+    expect(firstTitle).toHaveTextContent("Task");
+    expect(screen.queryByText("···")).not.toBeInTheDocument();
     for (const [section, id] of [["Tasks", ids.task], ["Chats", ids.chat], ["Users", ids.user], ["Entities", ids.entity], ["Memories", ids.memory], ["Curator Runs", ids.chat]] as const) {
       await userEvent.click(screen.getByRole("button", { name: section }));
-      expect(await screen.findByRole("link", { name: `Open Object ID ${id}` })).toBeVisible();
-      expect(screen.getByRole("button", { name: `Copy Object ID ${id}` })).toBeVisible();
+      expect(await screen.findByRole("button", { name: `Copy Object ID ${id}` })).toHaveTextContent(`ID: ${id.slice(0, 5)}`);
     }
   });
 
   it("opens canonical Object IDs at durable URLs and supports back navigation", async () => {
     window.history.replaceState({}, "", "/tasks");
     render(<App />);
-    const link = await screen.findByRole("link", { name: `Open Object ID ${ids.task}` });
-    await userEvent.click(link);
+    await userEvent.click(await screen.findByRole("button", { name: "Open Canonical task" }));
+    expect(window.location.pathname).toBe(`/tasks/${ids.task}`);
+    await userEvent.click(await screen.findByRole("link", { name: `Open Object ID ${ids.task}` }));
     expect(window.location.pathname).toBe(`/objects/${ids.task}`);
     expect(await screen.findByRole("heading", { name: "Properties" })).toBeVisible();
     window.history.back();
-    await waitFor(() => expect(window.location.pathname).toBe("/tasks"));
-    expect(await screen.findByText("All tasks")).toBeVisible();
+    await waitFor(() => expect(window.location.pathname).toBe(`/tasks/${ids.task}`));
+    expect(await screen.findByRole("heading", { name: "Properties" })).toBeVisible();
   });
 
   it("shows the full, copyable canonical UUID on every primary detail type", async () => {
@@ -109,6 +127,21 @@ describe("canonical Object identity across the application", () => {
       expect((await screen.findAllByRole("button", { name: `Copy Object ID ${id}` })).length).toBeGreaterThan(0);
       view.unmount();
     }
+  });
+
+  it("keeps detail identity in the header and provenance collapsed at the bottom", async () => {
+    window.history.replaceState({}, "", `/memories/${ids.memory}`);
+    render(<App />);
+    const title = await screen.findByRole("textbox", { name: "Object title" });
+    expect(title.parentElement).toHaveClass("detail-heading");
+    expect(title.parentElement).toHaveTextContent(`ID: ${ids.memory.slice(0, 5)}`);
+    const properties = screen.getByLabelText("Object properties");
+    expect(properties).toHaveTextContent("Memory");
+    expect(properties).not.toHaveTextContent("Revision");
+    expect(properties).not.toHaveTextContent("Protected");
+    const provenance = screen.getByText("Provenance").closest("details");
+    expect(provenance).not.toHaveAttribute("open");
+    expect(provenance?.previousElementSibling).toHaveTextContent("Activity");
   });
 
   it("routes Curator object and Connection changes to the correct record types", async () => {
@@ -124,6 +157,18 @@ describe("canonical Object identity across the application", () => {
     expect(await screen.findByRole("link", { name: `Open Object ID ${ids.chat}` })).toBeVisible();
     expect(screen.getByRole("link", { name: `Open Object ID ${ids.memory}` })).toBeVisible();
     expect(screen.getByText("Connection ID")).toBeVisible();
+    await screen.findByText("Canonical chat");
+    expect(screen.getByLabelText("Source Object")).toHaveTextContent("Canonical chat");
+    expect(screen.getByLabelText("Target Object")).toHaveTextContent("Canonical memory");
+    expect(screen.getAllByLabelText("Source: Slack")).toHaveLength(2);
+  });
+
+  it("shows type, Slack source, and evidence-backed User visuals", async () => {
+    window.history.replaceState({}, "", "/memories");
+    render(<App />);
+    expect(await screen.findByText("Memory")).toBeVisible();
+    expect(screen.getByLabelText("Source: Slack")).toBeVisible();
+    expect(screen.getByRole("img", { name: "Canonical user, Human, source author" })).toBeVisible();
   });
 
   it("renders an explicit missing-target state for an unknown deep link", async () => {
