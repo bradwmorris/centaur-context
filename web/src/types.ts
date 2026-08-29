@@ -161,3 +161,89 @@ export interface CuratorRunDetail {
   messages: ChatMessage[];
   changes: CuratorRunChange[];
 }
+
+export type EvalVerdict = "unreviewed" | "pass" | "mixed" | "fail";
+
+export interface EvalUsageSource {
+  component: string | null;
+  provider: string | null;
+  model_id: string | null;
+  display_tier: string | null;
+  execution_type: string | null;
+  auth_mode: string | null;
+  billing_mode: string | null;
+  usage_status: string;
+}
+
+export interface EvalSummary {
+  id: string;
+  kind: "slack_interaction" | "human_mutation" | "system_mutation" | "legacy_import";
+  status: "open" | "running" | "completed" | "failed" | "reversed";
+  actor_type: string;
+  actor_id: string;
+  chat_object_id: string | null;
+  curator_run_id: string | null;
+  summary: string;
+  error_summary: string | null;
+  verdict: EvalVerdict;
+  notes: string | null;
+  annotated_by: string | null;
+  annotation_revision: number;
+  affected_object_count: number;
+  total_tokens: number;
+  estimated_micro_usd: number | null;
+  chatgpt_credit_microunits: number | null;
+  usage_sources: EvalUsageSource[];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface EvalTraceEntry {
+  id: string;
+  eval_id: string;
+  sequence: number;
+  entry_type: string;
+  component: string | null;
+  provider: string | null;
+  model_id: string | null;
+  display_tier: string | null;
+  execution_type: string | null;
+  auth_mode: string | null;
+  upstream_service: string | null;
+  billing_mode: string | null;
+  reasoning_effort: string | null;
+  service_tier: string | null;
+  source_thread_id: string | null;
+  source_execution_id: string | null;
+  source_turn_id: string | null;
+  usage_status: "reported" | "partial" | "unavailable" | "not_applicable";
+  usage_missing_reason: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_creation_tokens: number | null;
+  cache_read_tokens: number | null;
+  reasoning_tokens: number | null;
+  total_tokens: number | null;
+  estimated_micro_usd: number | null;
+  chatgpt_credit_microunits: number | null;
+  api_equivalent_micro_usd: number | null;
+  rate_card_version: string | null;
+  pricing_snapshot: Record<string, unknown> | null;
+  facts: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface EvalObject {
+  object_id: string;
+  role: string;
+  kind: ObjectKind;
+  title: string;
+  lifecycle: string;
+}
+
+export interface EvalDetail {
+  eval: EvalSummary;
+  trace: EvalTraceEntry[];
+  objects: EvalObject[];
+}

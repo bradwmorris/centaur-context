@@ -50,6 +50,11 @@ slackbotv2:
     timeoutMs: 5000
     secretName: centaur-context-env
     secretKey: CHAT_INGEST_API_TOKEN
+    usage:
+      provider: openai
+      authMode: unknown
+      billingMode: unknown
+      upstreamService: unknown
 
   contextBuilder:
     url: http://centaur-context:8081/api/v1/context
@@ -64,6 +69,14 @@ access to port `8081`. Agent sandboxes receive neither real token.
 
 Centaur Context checks the bearer token and the exact Slack workspace/channel pair.
 Rejected surfaces are not stored.
+
+The completed snapshot may include normalized per-attempt agent usage. Centaur
+Context attaches it to the same Slack Eval and deduplicates it by component,
+execution, and turn. Set `authMode`, `billingMode`, and `upstreamService` to the
+observed runtime facts; keep them `unknown` until the corresponding Centaur
+authentication mode is verified. Never infer authentication or billing from a
+model name. Subscription usage has no per-trace billed USD value, while metered
+API estimates require a versioned rate-card snapshot.
 
 Each ingested message sender may include an optional `avatar_url`. Centaur Context
 accepts only an HTTP(S) reference, updates it idempotently on the sender's

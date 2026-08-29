@@ -55,7 +55,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     };
     db::migrate(&pool).await.unwrap();
     sqlx::query(
-        "TRUNCATE object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
+        "TRUNCATE eval_trace_entries, eval_objects, evals, object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
     )
         .execute(&pool)
         .await
@@ -74,6 +74,17 @@ async fn canonical_ontology_and_revision_conflicts() {
     )
     .await
     .unwrap();
+    let first_eval_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM evals e JOIN eval_objects eo ON eo.eval_id=e.id WHERE e.kind='human_mutation' AND eo.object_id=$1 AND eo.role='created'",
+    )
+    .bind(first.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        first_eval_count, 1,
+        "unscoped human writes are classified once"
+    );
     let replay = db::create_object(
         &pool,
         &actor(),
@@ -677,12 +688,12 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert!(protected_task.protected);
 
     let table_count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs','curator_run_changes','object_embeddings','object_embedding_jobs')",
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('objects','connections','tasks','chats','users','external_identities','entities','memories','object_events','chat_messages','curator_runs','curator_run_changes','object_embeddings','object_embedding_jobs','evals','eval_trace_entries','eval_objects')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(table_count, 14);
+    assert_eq!(table_count, 17);
     let blank_descriptions: i64 =
         sqlx::query_scalar("SELECT count(*) FROM objects WHERE btrim(description) = ''")
             .fetch_one(&pool)
@@ -744,6 +755,7 @@ async fn canonical_ontology_and_revision_conflicts() {
         title: None,
         messages,
         interaction_finished: finished,
+        agent_usage: vec![],
     };
 
     let first_messages = vec![
@@ -783,22 +795,28 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(replay.inserted_message_count, 0);
     assert_eq!(replay.duplicate_message_count, 2);
 
-    let finished = ingest(
-        &pool,
-        interaction(
-            vec![message(
-                "1780000002.000100",
-                human.clone(),
-                "Finished.",
-                "2026-05-27T00:00:02Z",
-            )],
-            true,
-        )
-        .validate()
-        .unwrap(),
-    )
-    .await
-    .unwrap();
+    let mut finished_input = interaction(
+        vec![message(
+            "1780000002.000100",
+            human.clone(),
+            "Finished.",
+            "2026-05-27T00:00:02Z",
+        )],
+        true,
+    );
+    finished_input.agent_usage = vec![json!({
+        "component":"centaur_agent","provider":"openai","model_id":"gpt-5.6-sol",
+        "display_tier":"GPT-5.6 Sol","execution_type":"codex_harness",
+        "auth_mode":"chatgpt_subscription","upstream_service":"chatgpt.com",
+        "billing_mode":"subscription_allowance","reasoning_effort":"high",
+        "source_thread_id":"thread-fixture","source_execution_id":"execution-fixture",
+        "source_turn_id":"turn-fixture","usage_status":"reported",
+        "input_tokens":100,"output_tokens":50,"cache_creation_tokens":0,
+        "cache_read_tokens":20,"reasoning_tokens":10,"total_tokens":150
+    })];
+    let finished = ingest(&pool, finished_input.validate().unwrap())
+        .await
+        .unwrap();
     assert_eq!(finished.inserted_message_count, 1);
     assert!(finished.curator_run_id.is_some());
 
@@ -820,6 +838,13 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     assert_eq!(finished_replay.inserted_message_count, 0);
     assert!(finished_replay.curator_run_id.is_none());
+    let eval_count_after_finished_replay: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM evals WHERE chat_object_id=$1")
+            .bind(first_ingest.chat_object_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(eval_count_after_finished_replay, 1);
 
     let continuation = ingest(
         &pool,
@@ -928,6 +953,71 @@ async fn canonical_ontology_and_revision_conflicts() {
     }));
 
     let run_id = finished.curator_run_id.unwrap();
+    let slack_eval_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM evals WHERE curator_run_id=$1 AND kind='slack_interaction'",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let slack_eval_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM evals WHERE chat_object_id=$1 AND curator_run_id=$2",
+    )
+    .bind(finished.chat_object_id)
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(slack_eval_count, 1, "one Slack window has exactly one eval");
+    let message_trace_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM eval_trace_entries WHERE eval_id=$1 AND entry_type='message_ingested'",
+    )
+    .bind(slack_eval_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(message_trace_count, 3);
+
+    let subscription_usage = centaur_context::evals::NormalizedUsage {
+        eval_id: slack_eval_id,
+        component: "centaur_agent".to_owned(),
+        provider: "openai".to_owned(),
+        model_id: "gpt-5.6-sol".to_owned(),
+        display_tier: Some("GPT-5.6 Sol".to_owned()),
+        execution_type: "codex_harness".to_owned(),
+        auth_mode: "chatgpt_subscription".to_owned(),
+        upstream_service: "chatgpt.com".to_owned(),
+        billing_mode: "subscription_allowance".to_owned(),
+        reasoning_effort: Some("high".to_owned()),
+        service_tier: None,
+        source_thread_id: Some("thread-fixture".to_owned()),
+        source_execution_id: "execution-fixture".to_owned(),
+        source_turn_id: Some("turn-fixture".to_owned()),
+        usage_status: "reported".to_owned(),
+        usage_missing_reason: None,
+        input_tokens: Some(100),
+        output_tokens: Some(50),
+        cache_creation_tokens: Some(0),
+        cache_read_tokens: Some(20),
+        reasoning_tokens: Some(10),
+        total_tokens: Some(150),
+        estimated_micro_usd: None,
+        chatgpt_credit_microunits: None,
+        api_equivalent_micro_usd: None,
+        rate_card_version: None,
+        pricing_snapshot: None,
+    };
+    subscription_usage.validate().unwrap();
+    let usage_id = centaur_context::evals::record_usage(&pool, &subscription_usage)
+        .await
+        .unwrap();
+    assert_eq!(
+        centaur_context::evals::record_usage(&pool, &subscription_usage)
+            .await
+            .unwrap(),
+        usage_id,
+        "usage retries are idempotent"
+    );
     let supporting_message_id: uuid::Uuid =
         sqlx::query_scalar("SELECT last_message_id FROM curator_runs WHERE id=$1")
             .bind(run_id)
@@ -1027,6 +1117,23 @@ async fn canonical_ontology_and_revision_conflicts() {
         curator::get_run(&pool, run_id).await.unwrap().status,
         "completed"
     );
+    let completed_eval = centaur_context::evals::detail(&pool, slack_eval_id)
+        .await
+        .unwrap();
+    assert_eq!(completed_eval.eval.status, "completed");
+    assert_eq!(completed_eval.eval.total_tokens, 150);
+    assert!(
+        completed_eval
+            .objects
+            .iter()
+            .any(|item| item.object_id == memory_id)
+    );
+    assert!(
+        completed_eval
+            .trace
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
     let run_detail = curator::run_detail(&pool, run_id).await.unwrap();
     assert_eq!(run_detail.messages.len(), 3);
     assert_eq!(run_detail.changes.len(), 2);
@@ -1066,6 +1173,14 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
     assert_eq!(undo_actor, "human");
+    assert_eq!(
+        centaur_context::evals::detail(&pool, slack_eval_id)
+            .await
+            .unwrap()
+            .eval
+            .status,
+        "reversed"
+    );
 
     let update_run_id: uuid::Uuid =
         sqlx::query_scalar("SELECT id FROM curator_runs WHERE trigger='inactivity'")
@@ -1229,6 +1344,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 ),
             ],
             interaction_finished: true,
+            agent_usage: vec![],
         }
         .validate()
         .unwrap(),

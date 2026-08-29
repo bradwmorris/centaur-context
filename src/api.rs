@@ -103,7 +103,13 @@ fn service_router(state: AppState) -> Router {
                 .route("/users/{id}/identities", get(list_user_identities))
                 .route("/curator-runs", get(list_curator_runs))
                 .route("/curator-runs/{id}", get(read_curator_run))
-                .route("/curator-runs/{id}/undo", post(undo_curator_run)),
+                .route("/curator-runs/{id}/undo", post(undo_curator_run))
+                .route("/evals", get(list_evals))
+                .route("/evals/{id}", get(read_eval))
+                .route(
+                    "/evals/{id}/annotation",
+                    axum::routing::patch(annotate_eval),
+                ),
         )
         .with_state(state)
 }
@@ -804,6 +810,165 @@ async fn undo_curator_run(
         .await
         .map_err(map_curator_error)?;
     Ok(Json(json!({"data": result})))
+}
+
+#[derive(Debug, Deserialize)]
+struct EvalListQuery {
+    kind: Option<String>,
+    status: Option<String>,
+    verdict: Option<String>,
+    component: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    execution_type: Option<String>,
+    auth_mode: Option<String>,
+    billing_mode: Option<String>,
+    object_id: Option<Uuid>,
+    from: Option<String>,
+    to: Option<String>,
+    before: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn list_evals(
+    State(state): State<AppState>,
+    Query(query): Query<EvalListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let data = crate::evals::list(
+        &state.pool,
+        crate::evals::EvalFilter {
+            kind: query
+                .kind
+                .map(|value| {
+                    allowed(
+                        value,
+                        "kind",
+                        &[
+                            "slack_interaction",
+                            "human_mutation",
+                            "system_mutation",
+                            "legacy_import",
+                        ],
+                    )
+                })
+                .transpose()?,
+            status: query
+                .status
+                .map(|value| {
+                    allowed(
+                        value,
+                        "status",
+                        &["open", "running", "completed", "failed", "reversed"],
+                    )
+                })
+                .transpose()?,
+            verdict: query
+                .verdict
+                .map(|value| allowed(value, "verdict", crate::evals::VERDICTS))
+                .transpose()?,
+            component: optional_text(query.component, "component", 100)?,
+            provider: optional_text(query.provider, "provider", 100)?,
+            model: optional_text(query.model, "model", 200)?,
+            execution_type: query
+                .execution_type
+                .map(|value| {
+                    allowed(
+                        value,
+                        "execution_type",
+                        &["codex_harness", "direct_api", "embedding", "other"],
+                    )
+                })
+                .transpose()?,
+            auth_mode: query
+                .auth_mode
+                .map(|value| {
+                    allowed(
+                        value,
+                        "auth_mode",
+                        &[
+                            "chatgpt_subscription",
+                            "api_key",
+                            "not_applicable",
+                            "unknown",
+                        ],
+                    )
+                })
+                .transpose()?,
+            billing_mode: query
+                .billing_mode
+                .map(|value| {
+                    allowed(
+                        value,
+                        "billing_mode",
+                        &[
+                            "subscription_allowance",
+                            "chatgpt_credits",
+                            "metered_api",
+                            "not_applicable",
+                            "unknown",
+                        ],
+                    )
+                })
+                .transpose()?,
+            object_id: query.object_id,
+            from: query
+                .from
+                .map(|value| parse_timestamp(value, "from"))
+                .transpose()?,
+            to: query
+                .to
+                .map(|value| parse_timestamp(value, "to"))
+                .transpose()?,
+            before: query
+                .before
+                .map(|value| parse_timestamp(value, "before"))
+                .transpose()?,
+            limit: query.limit.unwrap_or(50).clamp(1, 100),
+        },
+    )
+    .await?;
+    Ok(Json(json!({"data": data})))
+}
+
+async fn read_eval(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data": crate::evals::detail(&state.pool, id).await?}),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct EvalAnnotationRequest {
+    verdict: String,
+    notes: Option<String>,
+    expected_revision: i64,
+}
+
+async fn annotate_eval(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<EvalAnnotationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let verdict = allowed(input.verdict, "verdict", crate::evals::VERDICTS)?;
+    let notes = optional_text(input.notes, "notes", 4000)?;
+    let eval = crate::evals::annotate(
+        &state.pool,
+        id,
+        &verdict,
+        notes.as_deref(),
+        &actor.actor_id,
+        input.expected_revision,
+    )
+    .await?;
+    Ok(Json(json!({"data": eval})))
+}
+
+fn parse_timestamp(value: String, field: &'static str) -> Result<OffsetDateTime, ApiError> {
+    OffsetDateTime::parse(&value, &Rfc3339)
+        .map_err(|_| ApiError::BadRequest(format!("{field} must be an RFC 3339 timestamp")))
 }
 
 fn map_curator_error(error: crate::curator::CuratorError) -> ApiError {

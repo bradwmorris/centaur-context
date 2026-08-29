@@ -24,6 +24,7 @@ use crate::{
 
 const INGESTOR_ACTOR_ID: &str = "chat-ingestor";
 const MAX_MESSAGES_PER_REQUEST: usize = 500;
+const MAX_USAGE_ATTEMPTS_PER_REQUEST: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct ApprovedSlackSurfaces {
@@ -83,6 +84,7 @@ pub fn router(state: AppState, token: String, approved_surfaces: ApprovedSlackSu
             "/api/v1/ingest/slack/interactions",
             post(ingest_slack_interaction),
         )
+        .route("/api/v1/ingest/evals/usage", post(ingest_eval_usage))
         .with_state(IngestState {
             pool: state.pool,
             approved_surfaces,
@@ -153,6 +155,8 @@ pub struct SlackInteractionInput {
     pub messages: Vec<SlackMessageInput>,
     #[serde(default)]
     pub interaction_finished: bool,
+    #[serde(default)]
+    pub agent_usage: Vec<Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -181,6 +185,7 @@ pub struct ValidatedSlackInteraction {
     title: Option<String>,
     messages: Vec<ValidatedSlackMessage>,
     interaction_finished: bool,
+    agent_usage: Vec<Value>,
 }
 
 impl SlackInteractionInput {
@@ -192,6 +197,18 @@ impl SlackInteractionInput {
             return Err(ValidationError::TooLong {
                 field: "messages",
                 max: MAX_MESSAGES_PER_REQUEST,
+            });
+        }
+        if self.agent_usage.len() > MAX_USAGE_ATTEMPTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "agent_usage",
+                max: MAX_USAGE_ATTEMPTS_PER_REQUEST,
+            });
+        }
+        if self.agent_usage.iter().any(|value| !value.is_object()) {
+            return Err(ValidationError::Unsupported {
+                field: "agent_usage",
+                value: "every usage attempt must be an object".to_owned(),
             });
         }
         let mut seen = BTreeSet::new();
@@ -243,6 +260,7 @@ impl SlackInteractionInput {
             title: optional_text(self.title, "title", 300)?,
             messages,
             interaction_finished: self.interaction_finished,
+            agent_usage: self.agent_usage,
         })
     }
 }
@@ -288,6 +306,18 @@ async fn ingest_slack_interaction(
     Ok((StatusCode::ACCEPTED, Json(json!({"data": result}))))
 }
 
+async fn ingest_eval_usage(
+    State(state): State<IngestState>,
+    Json(input): Json<crate::evals::NormalizedUsage>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    input.validate().map_err(ApiError::BadRequest)?;
+    let id = crate::evals::record_usage(&state.pool, &input).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"trace_entry_id":id}})),
+    ))
+}
+
 pub async fn ingest(
     pool: &PgPool,
     input: ValidatedSlackInteraction,
@@ -302,7 +332,15 @@ pub async fn ingest(
         ),
     )
     .await?;
+    let (eval_id, eval_created) = crate::evals::open_slack_interaction(
+        &mut tx,
+        &input.workspace_id,
+        &input.channel_id,
+        &input.thread_id,
+    )
+    .await?;
     let chat_object_id = get_or_create_chat(&mut tx, &actor, &input).await?;
+    crate::evals::attach_slack_chat(&mut tx, eval_id, chat_object_id).await?;
     let mut participants = BTreeSet::new();
     let mut inserted_message_count = 0usize;
     let mut last_ingested_message_id = None;
@@ -311,6 +349,7 @@ pub async fn ingest(
         let user_object_id =
             get_or_create_user(&mut tx, &actor, &input.workspace_id, &message.sender).await?;
         participants.insert(user_object_id);
+        crate::evals::link_object(&mut tx, eval_id, user_object_id, "participant").await?;
         ensure_participant_connection(
             &mut tx,
             &actor,
@@ -319,8 +358,15 @@ pub async fn ingest(
             &message.sender.display_name,
         )
         .await?;
-        if let Some(message_id) =
-            insert_message(&mut tx, &actor, chat_object_id, user_object_id, message).await?
+        if let Some(message_id) = insert_message(
+            &mut tx,
+            &actor,
+            eval_id,
+            chat_object_id,
+            user_object_id,
+            message,
+        )
+        .await?
         {
             inserted_message_count += 1;
             last_ingested_message_id = Some(message_id);
@@ -349,10 +395,37 @@ pub async fn ingest(
     .await?;
 
     let curator_run_id = if input.interaction_finished {
-        queue_next_window(&mut tx, &actor, chat_object_id, "explicit_finish").await?
+        queue_next_window(&mut tx, &actor, eval_id, chat_object_id, "explicit_finish").await?
     } else {
         None
     };
+    for raw_usage in &input.agent_usage {
+        let mut value = raw_usage.clone();
+        value
+            .as_object_mut()
+            .expect("validated agent usage is an object")
+            .insert("eval_id".to_owned(), Value::String(eval_id.to_string()));
+        let usage: crate::evals::NormalizedUsage =
+            serde_json::from_value(value).map_err(|error| {
+                DbError::Validation(ValidationError::Unsupported {
+                    field: "agent_usage",
+                    value: error.to_string(),
+                })
+            })?;
+        usage.validate().map_err(|error| {
+            DbError::Validation(ValidationError::Unsupported {
+                field: "agent_usage",
+                value: error,
+            })
+        })?;
+        crate::evals::record_usage_in_tx(&mut tx, &usage).await?;
+    }
+    if eval_created && inserted_message_count == 0 && curator_run_id.is_none() {
+        sqlx::query("DELETE FROM evals WHERE id=$1")
+            .bind(eval_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     tx.commit().await?;
 
     Ok(IngestResult {
@@ -602,6 +675,7 @@ async fn ensure_participant_connection(
 async fn insert_message(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    eval_id: Uuid,
     chat_object_id: Uuid,
     user_object_id: Uuid,
     message: &ValidatedSlackMessage,
@@ -642,12 +716,25 @@ async fn insert_message(
         }),
     )
     .await?;
+    crate::evals::append_trace(
+        tx,
+        eval_id,
+        "message_ingested",
+        json!({
+            "message_id": id,
+            "provider_message_id": message.provider_message_id,
+            "chat_object_id": chat_object_id,
+            "sender_user_object_id": user_object_id
+        }),
+    )
+    .await?;
     Ok(Some(id))
 }
 
 async fn queue_next_window(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    eval_id: Uuid,
     chat_object_id: Uuid,
     trigger: &str,
 ) -> Result<Option<Uuid>, DbError> {
@@ -708,6 +795,7 @@ async fn queue_next_window(
         }),
     )
     .await?;
+    crate::evals::attach_curator_run(tx, eval_id, id).await?;
     Ok(Some(id))
 }
 
@@ -724,8 +812,8 @@ pub async fn queue_inactive_interactions(
     let cutoff = OffsetDateTime::now_utc() - inactivity;
     let actor = ActorContext::system(INGESTOR_ACTOR_ID);
     let mut tx = pool.begin().await?;
-    let chats: Vec<(Uuid,)> = sqlx::query_as(
-        r#"SELECT c.object_id
+    let chats: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        r#"SELECT c.object_id,c.workspace_id,c.channel_id,c.thread_id
            FROM chats c
            WHERE c.provider='slack' AND c.last_message_at <= $1
              AND EXISTS (
@@ -742,8 +830,22 @@ pub async fn queue_inactive_interactions(
     .fetch_all(&mut *tx)
     .await?;
     let mut queued = 0usize;
-    for (chat_object_id,) in chats {
-        if queue_next_window(&mut tx, &actor, chat_object_id, "inactivity")
+    for (chat_object_id, workspace_id, channel_id, thread_id) in chats {
+        let eval_id =
+            if let Some(id) = crate::evals::resume_slack_eval(&mut tx, chat_object_id).await? {
+                id
+            } else {
+                let (id, _) = crate::evals::open_slack_interaction(
+                    &mut tx,
+                    &workspace_id,
+                    &channel_id,
+                    &thread_id,
+                )
+                .await?;
+                crate::evals::attach_slack_chat(&mut tx, id, chat_object_id).await?;
+                id
+            };
+        if queue_next_window(&mut tx, &actor, eval_id, chat_object_id, "inactivity")
             .await?
             .is_some()
         {

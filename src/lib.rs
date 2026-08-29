@@ -4,6 +4,7 @@ pub mod curator;
 pub mod db;
 pub mod domain;
 pub mod embeddings;
+pub mod evals;
 pub mod ingest;
 pub mod search;
 pub mod version;

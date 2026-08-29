@@ -5,11 +5,11 @@ import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs" };
+const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs", evals: "Evals" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories"]);
@@ -94,6 +94,7 @@ export default function App() {
           <NavButton active={section === "entities"} compact={collapsed} icon="◎" label="Entities" onClick={() => selectSection("entities")} />
           <NavButton active={section === "memories"} compact={collapsed} icon="✦" label="Memories" onClick={() => selectSection("memories")} />
           <NavButton active={section === "curator"} compact={collapsed} icon="↻" label="Curator Runs" onClick={() => selectSection("curator")} />
+          <NavButton active={section === "evals"} compact={collapsed} icon="≋" label="Evals" onClick={() => selectSection("evals")} />
         </nav>
         <div className="nav-foot" title="Running locally"><span className="status-dot" />{!collapsed && "Local workspace"}</div>
       </aside>
@@ -108,7 +109,7 @@ export default function App() {
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {!selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "evals" ? (selectedId ? <section className="detail-page"><EvalDetailView id={selectedId} /></section> : <EvalsList />) : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
@@ -148,6 +149,7 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
   if (section === "tasks") return tasks;
   if (section === "curator") return curatorRuns;
   if (section === "objects") return objects;
+  if (section === "evals") return [];
   const kind = sectionKinds[section];
   return objects.filter((item) => item.kind === kind);
 }
@@ -405,6 +407,119 @@ function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; object
     <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <MessageRow item={item} visual={visuals.get(item.sender_user_object_id)} key={item.id} />)}</div></Section>
     <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <><ObjectId id={change.entity_id} compact /><ObjectContext visual={visuals.get(change.entity_id)} /></> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
   </div></div>;
+}
+
+function EvalsList() {
+  const [items, setItems] = useState<EvalSummary[]>([]);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const filterKey = JSON.stringify(filters);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    void api.evals(filters).then((data) => { if (active) { setItems(data); setError(null); } })
+      .catch((cause) => { if (active) setError(message(cause)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  // A stable serialized key prevents a fetch loop while retaining every filter.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
+  const setFilter = (name: string, value: string) => setFilters((current) => {
+    const next = { ...current };
+    if (value) next[name] = value; else delete next[name];
+    return next;
+  });
+  return <section className="list-view eval-list" aria-label="eval records">
+    <header className="list-view-head"><h1>Evals</h1></header>
+    <div className="eval-filters" aria-label="Eval filters">
+      <FilterSelect label="Kind" value={filters.kind} options={["slack_interaction", "human_mutation", "system_mutation", "legacy_import"]} onChange={(value) => setFilter("kind", value)} />
+      <FilterSelect label="Status" value={filters.status} options={["open", "running", "completed", "failed", "reversed"]} onChange={(value) => setFilter("status", value)} />
+      <FilterSelect label="Verdict" value={filters.verdict} options={["unreviewed", "pass", "mixed", "fail"]} onChange={(value) => setFilter("verdict", value)} />
+      <FilterSelect label="Execution" value={filters.execution_type} options={["codex_harness", "direct_api", "embedding", "other"]} onChange={(value) => setFilter("execution_type", value)} />
+      <FilterSelect label="Auth" value={filters.auth_mode} options={["chatgpt_subscription", "api_key", "not_applicable", "unknown"]} onChange={(value) => setFilter("auth_mode", value)} />
+      <FilterSelect label="Billing" value={filters.billing_mode} options={["subscription_allowance", "chatgpt_credits", "metered_api", "not_applicable", "unknown"]} onChange={(value) => setFilter("billing_mode", value)} />
+      {(["component", "provider", "model", "object_id"] as const).map((name) => <label className="eval-filter" key={name}><span>{name.replace("_", " ")}</span><input value={filters[name] ?? ""} onChange={(event) => setFilter(name, event.target.value.trim())} /></label>)}
+      <label className="eval-filter"><span>From</span><input type="date" onChange={(event) => setFilter("from", event.target.value ? `${event.target.value}T00:00:00Z` : "")} /></label>
+      <label className="eval-filter"><span>To</span><input type="date" onChange={(event) => setFilter("to", event.target.value ? `${event.target.value}T23:59:59Z` : "")} /></label>
+    </div>
+    {error && <div className="error-banner">{error}</div>}
+    <div className="list-group-head"><span className="status-ring" /><strong>Newest first</strong><span>{items.length}</span></div>
+    <div className="record-list eval-records">
+      {items.map((item) => <article className="eval-record" key={item.id}>
+        <button className="record-open" onClick={() => navigate(detailPath("evals", item.id))} aria-label={`Open eval ${item.summary}`} />
+        <div className="eval-record-main"><div><strong>{item.summary}</strong><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span><StateBadge state={item.status} /></div><small>{item.kind.replaceAll("_", " ")} · {item.actor_type}:{item.actor_id}{item.chat_object_id ? ` · Chat ${shortId(item.chat_object_id)}` : ""}</small></div>
+        <div className="usage-badges">{item.usage_sources.map((source, index) => <span className="usage-badge" key={`${source.component}-${source.model_id}-${index}`}>{usageLabel(source)}</span>)}{item.usage_sources.length === 0 && <span className="usage-badge">Non-model · not applicable</span>}</div>
+        <div className="eval-metrics"><span>{item.total_tokens.toLocaleString()} tokens</span><span>{chargeLabel(item)}</span><span>{item.affected_object_count} Objects</span><time>{relative(item.created_at)}</time></div>
+      </article>)}
+      {!loading && items.length === 0 && <div className="empty-list">No evals match these filters.</div>}
+      {loading && <div className="empty-list">Loading evals…</div>}
+    </div>
+  </section>;
+}
+
+function FilterSelect({ label, value, options, onChange }: { label: string; value?: string; options: string[]; onChange: (value: string) => void }) {
+  return <label className="eval-filter"><span>{label}</span><select value={value ?? ""} onChange={(event) => onChange(event.target.value)}><option value="">All</option>{options.map((option) => <option key={option}>{option}</option>)}</select></label>;
+}
+
+function EvalDetailView({ id }: { id: string }) {
+  const [detail, setDetail] = useState<EvalDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    try { setDetail(await api.eval(id)); setError(null); }
+    catch (cause) { setError(message(cause)); }
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  if (!detail) return <DetailLoading error={error} />;
+  const item = detail.eval;
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null);
+    const data = new FormData(event.currentTarget);
+    try { await api.annotateEval(id, { verdict: String(data.get("verdict")) as EvalVerdict, notes: String(data.get("notes")).trim() || null, expected_revision: item.annotation_revision }); await load(); }
+    catch (cause) { setError(conflictMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <div className="record-page"><div className="record-primary eval-detail">
+    <h1 className="detail-title">{item.summary}</h1>
+    <p className="detail-description">{item.kind.replaceAll("_", " ")} · {item.actor_type}:{item.actor_id}</p>
+    <section className="properties-block" aria-label="Eval properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Status"><StateBadge state={item.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span></Property>
+      <Property label="Created">{new Date(item.created_at).toLocaleString()}</Property><Property label="Tokens">{item.total_tokens.toLocaleString()}</Property><Property label="Charge">{chargeLabel(item)}</Property><Property label="Affected Objects">{item.affected_object_count}</Property>
+      {item.chat_object_id && <Property label="Chat"><ObjectId id={item.chat_object_id} /></Property>}{item.curator_run_id && <Property label="Curator Run"><a href={detailPath("curator", item.curator_run_id)}>{item.curator_run_id}</a></Property>}
+    </div></section>
+    {item.error_summary && <p className="run-error">{item.error_summary}</p>}{error && <p className="form-error">{error}</p>}
+    <form className="eval-annotation" onSubmit={save}><Field label="Verdict"><select name="verdict" defaultValue={item.verdict} key={`${item.id}-${item.annotation_revision}-verdict`}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></Field><Field label="Review notes"><textarea name="notes" maxLength={4000} rows={4} defaultValue={item.notes ?? ""} key={`${item.id}-${item.annotation_revision}-notes`} /></Field><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save review"}</button>{item.annotated_by && <small>Last reviewed by {item.annotated_by}</small>}</form>
+    <Section title="Usage and charge provenance"><div className="usage-detail">{item.usage_sources.map((source, index) => <span className="usage-badge" key={index}>{usageLabel(source)}</span>)}<p>{chargeLabel(item)}</p></div></Section>
+    <Section title="Ordered trace"><div className="trace-list">{detail.trace.map((entry) => <article className={entry.entry_type === "failure" ? "trace-entry failure" : "trace-entry"} key={entry.id}><span>{entry.sequence}</span><div><strong>{entry.entry_type.replaceAll("_", " ")}</strong>{entry.model_id && <small>{entry.provider} · {entry.model_id} · {entry.execution_type} · {entry.auth_mode} · {entry.billing_mode}</small>}{entry.usage_status !== "not_applicable" && <small>{entry.usage_status} · {(entry.total_tokens ?? 0).toLocaleString()} tokens · {traceChargeLabel(entry)}{entry.usage_missing_reason ? ` · ${entry.usage_missing_reason}` : ""}</small>}<code>{JSON.stringify(entry.facts)}</code></div></article>)}</div></Section>
+    <Section title="Related Objects"><div className="eval-objects">{detail.objects.map((object) => <div key={`${object.object_id}-${object.role}`}><ObjectTypeBadge kind={object.kind} /><strong>{object.title}</strong><span>{object.role}</span><ObjectId id={object.object_id} /></div>)}</div></Section>
+  </div></div>;
+}
+
+function usageLabel(source: EvalUsageSource) {
+  const provider = source.provider === "openai" ? "OpenAI" : source.provider ?? "Unknown provider";
+  const model = source.display_tier ?? source.model_id ?? "Unknown model";
+  const execution = source.execution_type?.replaceAll("_", " ") ?? "Unknown execution";
+  const auth = source.auth_mode?.replaceAll("_", " ") ?? "Unknown auth";
+  return `${provider} · ${model} · ${execution} · ${auth}`;
+}
+
+function chargeLabel(item: EvalSummary) {
+  const labels: string[] = [];
+  if (item.chatgpt_credit_microunits !== null) labels.push(`${(item.chatgpt_credit_microunits / 1_000_000).toFixed(4)} ChatGPT credits; subscription per-trace USD unavailable`);
+  else if (item.usage_sources.some((source) => source.billing_mode === "subscription_allowance")) labels.push("Included subscription usage; per-trace USD unavailable");
+  if (item.estimated_micro_usd !== null) labels.push(`Metered API estimate $${(item.estimated_micro_usd / 1_000_000).toFixed(6)} USD`);
+  return labels.join(" · ") || (item.usage_sources.length === 0 ? "Not applicable" : "Charge unavailable");
+}
+
+function traceChargeLabel(entry: EvalTraceEntry) {
+  if (entry.chatgpt_credit_microunits !== null) return `${(entry.chatgpt_credit_microunits / 1_000_000).toFixed(4)} ChatGPT credits; per-trace USD unavailable`;
+  if (entry.billing_mode === "subscription_allowance") {
+    const equivalent = entry.api_equivalent_micro_usd === null ? "" : `; API-equivalent estimate $${(entry.api_equivalent_micro_usd / 1_000_000).toFixed(6)} USD`;
+    return `included subscription usage; per-trace USD unavailable${equivalent}`;
+  }
+  if (entry.estimated_micro_usd !== null) return `estimated $${(entry.estimated_micro_usd / 1_000_000).toFixed(6)} USD${entry.rate_card_version ? ` (${entry.rate_card_version})` : ""}`;
+  return "charge unavailable";
 }
 
 function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
