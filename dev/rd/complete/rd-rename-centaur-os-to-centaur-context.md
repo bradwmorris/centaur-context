@@ -1,6 +1,6 @@
 # RD: Rename Centaur OS to Centaur Context
 
-**Status:** `review`
+**Status:** `complete`
 **Created:** 2026-08-29
 **GitHub Issue:** `#10`
 **Consumer PRs:** Centaur `#1`; private overlay `#2`
@@ -16,9 +16,9 @@ tests, and RD contracts; filesystem references outside build/dependency/VCS
 directories; target-name availability; and tracked consumers in the adjacent
 Centaur and private overlay checkouts.
 
-**Missing:** Review and merge approval for the three coordinated PRs, followed
-by requester approval for the GitHub repository rename, local checkout/Codex
-project move, pinned-source update, and live installation cutover.
+**Missing:** none. The coordinated PRs, GitHub repository rename, local checkout
+and Codex saved-project move, pinned-source update, and live installation
+cutover are complete.
 
 1. Establish the canonical `Centaur Context` naming matrix and compatibility
    bridge, then rename this repository's product, packages, source modules,
@@ -48,7 +48,7 @@ requester-owned steps.
   canonical public, code, and operational identifiers.
 - [x] Keep existing installations and backups recoverable without rewriting
   business records, Object Events, Curator Runs, or applied migration history.
-- [ ] Cut over every known Centaur and overlay consumer so ingestion, context
+- [x] Cut over every known Centaur and overlay consumer so ingestion, context
   retrieval, tool grants, DNS, and network policy continue to work.
 
 ## Contract
@@ -192,7 +192,7 @@ Centaur” as positioning, not as the system or ontology name.
   Kubernetes selectors/DNS, install collision refusal, and rollback guidance.
 - [x] Fresh package/install dry runs and a disposable legacy-name upgrade prove
   that no data, migration checksum, permissions, or network boundary is lost.
-- [ ] Centaur's focused Slack shared-context tests and the overlay's manifest,
+- [x] Centaur's focused Slack shared-context tests and the overlay's manifest,
   policy, tool-discovery, and fresh-sandbox checks pass with the new heading,
   CLI, host, grants, and pinned source.
 - [x] This repository passes `cargo fmt --check`,
@@ -214,13 +214,27 @@ Centaur” as positioning, not as the system or ontology name.
 - Centaur type-check and 55 focused shared-context tests pass. Its broader
   Slackbot suite has unrelated pre-existing timing/state failures outside the
   changed tests. Overlay YAML parsing, NetworkPolicy dry-run, and hygiene pass.
+- Product, Centaur, and private-overlay PRs merged. GitHub is now
+  `bradwmorris/centaur-context`; the local checkout, origin, linked worktree,
+  and VS Code workspace entry use `centaur-context`.
+- A validated pre-cutover PostgreSQL 16 custom-format backup was created with
+  checksum and truthful legacy metadata. The old Deployment is retained at
+  zero replicas; the old database, role, Secret, Service, policies, and backup
+  remain available for rollback.
+- Live `centaur-context:0.2.0` is ready on `kind-centaur-lab`; the database
+  migrated from schema 7 to 8 with all 13 Objects preserved. `/healthz`,
+  `/readyz`, and `/api/v1/meta` pass and report `centaur-context` 0.2.0.
+- Slack's authenticated read path returns HTTP 200 and its authenticated ingest
+  path reaches request validation. Helm revision 17 persists the new DNS,
+  Secret, consumer image, and exact public tool-source commit so a later
+  upgrade does not revert the cutover.
+- The Codex saved project is `centaur_context` and points to
+  `/Users/bradleymorris/Desktop/dev/centaur-context`.
 
 ## Approval Boundary
 
-Execution is assigned for local code, documentation, compatibility, consumer
-patches, verification, commits, and PRs. It does not authorize a GitHub rename,
-local checkout move, publishing, package/image push, deployment, Secret
-mutation, database/role rename, data copy, legacy-resource deletion, public
-ingress, or changes to a live Centaur installation. Each external or destructive
-cutover requires explicit requester approval after local verification and a
-fresh validated backup.
+The requester approved the GitHub rename, local checkout move, image build,
+Secret copy, pinned-source update, and live Kubernetes cutover on 2026-08-29
+after local verification and a fresh validated backup. That approval did not
+expand the rename into database/role mutation, data copy, legacy-resource
+deletion, or public ingress; those rollback assets remain preserved.
