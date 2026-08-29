@@ -1,0 +1,43 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { AttributionList, AttributionStack, ObjectTypeBadge, SourceBadge, TaskStatusBadge } from "./RecordVisuals";
+
+const user = {
+  object_id: "11111111-1111-4111-8111-111111111111",
+  user_object_id: "11111111-1111-4111-8111-111111111111",
+  title: "Example Human",
+  user_kind: "human" as const,
+  role: "source author" as const,
+  avatar_url: "https://example.test/avatar.png",
+};
+
+describe("record visual language", () => {
+  it("gives every Object type and Task state text plus a non-colour icon", () => {
+    render(<>
+      {(["task", "chat", "user", "entity", "memory"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
+      {(["todo", "doing", "blocked", "review", "done"] as const).map((status) => <TaskStatusBadge status={status} key={status} />)}
+    </>);
+    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "To do", "Doing", "Blocked", "Review", "Done"]) {
+      expect(screen.getByText(label)).toBeVisible();
+    }
+    expect(screen.getByText("Memory")).toHaveTextContent("✦Memory");
+    expect(screen.getByText("Blocked")).toHaveTextContent("!Blocked");
+  });
+
+  it("labels Slack origin without requiring an external logo", () => {
+    render(<SourceBadge provider="slack" />);
+    expect(screen.getByLabelText("Source: Slack")).toHaveTextContent("Slack");
+  });
+
+  it("falls back deterministically when an avatar image is broken", () => {
+    const { container } = render(<AttributionStack users={[user]} />);
+    fireEvent.error(container.querySelector("img")!);
+    expect(screen.getByRole("img", { name: "Example Human, Human, source author" })).toHaveTextContent("EH");
+  });
+
+  it("shows the evidence-backed attribution role in detail contexts", () => {
+    render(<AttributionList users={[user]} />);
+    expect(screen.getByText("Example Human")).toBeVisible();
+    expect(screen.getByText("source author")).toBeVisible();
+  });
+});

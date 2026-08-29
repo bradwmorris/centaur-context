@@ -100,8 +100,24 @@ export interface ExternalIdentity {
   workspace_id: string;
   provider_user_id: string;
   display_name: string | null;
+  avatar_url: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserAttribution {
+  object_id: string;
+  user_object_id: string;
+  title: string;
+  user_kind: "human" | "agent";
+  role: "identity" | "owner" | "participant" | "source author";
+  avatar_url: string | null;
+}
+
+export interface ObjectVisual {
+  object_id: string;
+  source_provider: string | null;
+  users: UserAttribution[];
 }
 
 export interface CuratorRun {

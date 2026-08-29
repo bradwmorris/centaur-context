@@ -32,7 +32,7 @@ def main() -> None:
     )
     require("Read and update" not in text("tools/centaur_os/pyproject.toml"), "read-only tool description regressed")
     migrations = [int(path.name.split("_", 1)[0]) for path in (ROOT / "migrations").glob("*.sql")]
-    require(max(migrations) == 6, "database schema version does not match migrations")
+    require(max(migrations) == 7, "database schema version does not match migrations")
 
     tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
     private = re.compile(r"brad(?:ley|wmorris)?|theagipost", re.IGNORECASE)

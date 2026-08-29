@@ -19,6 +19,11 @@ An Object may have one matching subtype row:
 
 The Object is canonical. The subtype stores fields specific to that type.
 
+A User may have provider identities such as Slack. Those identities retain the
+provider/workspace key, display name, and an optional HTTP(S) avatar reference.
+The UI always has a deterministic local fallback avatar, so the canonical User
+does not depend on an external image remaining available.
+
 ## Supporting records
 
 These are not Objects:
@@ -53,5 +58,8 @@ short explanation.
 - A Task is created only from an explicit instruction or commitment.
 - Updates use revisions so newer changes are not overwritten.
 - Every Curator change points back to its source Chat and messages.
+- Source and User visuals are derived from stored Chat, message, owner,
+  `involves`, `derived_from`, and supporting-message evidence. Display names
+  alone never establish attribution.
 - Curator Runs are atomic: all changes commit, or none do.
 - Undo reverses a whole Curator Run without deleting its audit history.

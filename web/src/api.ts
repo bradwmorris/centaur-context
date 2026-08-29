@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, SharedObject, Task, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectVisual, SharedObject, Task, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -53,6 +53,9 @@ export const api = {
   },
   object(id: string) {
     return request<SharedObject>(`/api/v1/objects/${id}`);
+  },
+  objectVisuals() {
+    return request<ObjectVisual[]>("/api/v1/object-visuals");
   },
   createObject(body: {
     kind: string;

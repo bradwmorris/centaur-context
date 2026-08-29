@@ -1,7 +1,9 @@
 # RD: Clean Type, Source, User, and Connection Visuals
 
-**Status:** `backlog`
+**Status:** `complete`
 **Created:** 2026-08-28
+**Completed:** 2026-08-29
+**GitHub Issue:** #4
 
 ## Execution Plan
 
@@ -25,13 +27,13 @@ and the canonical Object ID navigation RD.
 
 ## What We Are Doing
 
-- [ ] Replace weak plain-text type/status markers with clean, consistent,
+- [x] Replace weak plain-text type/status markers with clean, consistent,
   visually distinguishable labels for every supported Object and Task state.
-- [ ] Display a Slack icon wherever a record has evidence-backed Slack origin,
+- [x] Display a Slack icon wherever a record has evidence-backed Slack origin,
   including beside its Object ID on subtype and supporting-row surfaces.
-- [ ] Give every canonical human and agent User a visible avatar and show the
+- [x] Give every canonical human and agent User a visible avatar and show the
   applicable attributable User or Users beside the canonical Object ID.
-- [ ] Make Connections visually clear, directional, explained, and navigable to
+- [x] Make Connections visually clear, directional, explained, and navigable to
   both canonical endpoint Objects.
 
 ## Contract
@@ -97,18 +99,30 @@ and the canonical Object ID navigation RD.
 
 ## Checks
 
-- [ ] Database/API tests prove Slack identity deduplication, one canonical User
+- [x] Database/API tests prove Slack identity deduplication, one canonical User
   per provider identity, correct participant/sender/owner/source-author
   resolution, and deterministic avatar and technical-actor fallbacks.
-- [ ] UI tests cover every type/status label, Slack and non-Slack records, human
+- [x] UI tests cover every type/status label, Slack and non-Slack records, human
   and agent avatars, missing/broken avatars, long names/IDs, and all Connection
   directions.
-- [ ] Accessibility checks prove icons have text equivalents, colour is not the
+- [x] Accessibility checks prove icons have text equivalents, colour is not the
   only signal, avatars have useful accessible names, and controls are keyboard
   navigable.
-- [ ] All six primary list/detail views and representative schema rows are
+- [x] All six primary list/detail views and representative schema rows are
   visually verified at desktop and narrow widths.
-- [ ] The repository verification suite and `git diff --check` pass.
+- [x] The repository verification suite and `git diff --check` pass.
+
+## Verification Results
+
+- Rust formatting, Clippy, unit/API/evaluation tests, web type-check/build, 24 UI
+  tests, Python client tests, Python compilation, package contract checks, and
+  `git diff --check` pass.
+- The database contract passed against a disposable PostgreSQL database migrated
+  through schema version 7, covering Slack identity reuse, participants, avatar
+  references, and source-author attribution.
+- All six primary views, Curator surfaces, Task states, Connection directions,
+  attribution roles, broken-avatar fallback, and narrow layouts were inspected
+  in the local review UI without console errors or horizontal overflow.
 
 ## Approval Boundary
 

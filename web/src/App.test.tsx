@@ -41,6 +41,19 @@ const run: CuratorRun = {
   created_at: now, started_at: now, completed_at: now, reversed_at: null, error_message: null,
 };
 
+const visuals = objects.map((object) => ({
+  object_id: object.id,
+  source_provider: object.id === ids.chat || object.id === ids.memory ? "slack" : null,
+  users: object.id === ids.chat || object.id === ids.memory || object.id === ids.user ? [{
+    object_id: object.id,
+    user_object_id: ids.user,
+    title: "Canonical user",
+    user_kind: "human",
+    role: object.id === ids.user ? "identity" : object.id === ids.chat ? "participant" : "source author",
+    avatar_url: null,
+  }] : [],
+}));
+
 function json(data: unknown) {
   return Promise.resolve(new Response(JSON.stringify({ data }), { status: 200, headers: { "Content-Type": "application/json" } }));
 }
@@ -49,6 +62,7 @@ function installApiMock() {
   vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.pathname + input.search : new URL(input.url).pathname;
     if (path.startsWith("/api/v1/objects?")) return json(objects);
+    if (path === "/api/v1/object-visuals") return json(visuals);
     if (path === "/api/v1/tasks") return json([task]);
     if (path === `/api/v1/tasks/${ids.task}`) return json(task);
     if (path === "/api/v1/curator-runs") return json([run]);
@@ -124,6 +138,18 @@ describe("canonical Object identity across the application", () => {
     expect(await screen.findByRole("link", { name: `Open Object ID ${ids.chat}` })).toBeVisible();
     expect(screen.getByRole("link", { name: `Open Object ID ${ids.memory}` })).toBeVisible();
     expect(screen.getByText("Connection ID")).toBeVisible();
+    await screen.findByText("Canonical chat");
+    expect(screen.getByLabelText("Source Object")).toHaveTextContent("Canonical chat");
+    expect(screen.getByLabelText("Target Object")).toHaveTextContent("Canonical memory");
+    expect(screen.getAllByLabelText("Source: Slack")).toHaveLength(2);
+  });
+
+  it("shows type, Slack source, and evidence-backed User visuals", async () => {
+    window.history.replaceState({}, "", "/memories");
+    render(<App />);
+    expect(await screen.findByText("Memory")).toBeVisible();
+    expect(screen.getByLabelText("Source: Slack")).toBeVisible();
+    expect(screen.getByRole("img", { name: "Canonical user, Human, source author" })).toBeVisible();
   });
 
   it("renders an explicit missing-target state for an unknown deep link", async () => {

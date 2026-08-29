@@ -1,9 +1,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
+import { AttributionList, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, SharedObject, Task, TaskStatus, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
@@ -29,6 +30,7 @@ export default function App() {
   const [objects, setObjects] = useState<SharedObject[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [curatorRuns, setCuratorRuns] = useState<CuratorRun[]>([]);
+  const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
@@ -38,10 +40,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextObjects, nextTasks, nextCuratorRuns] = await Promise.all([api.objects(query), api.tasks(), api.curatorRuns()]);
+      const [nextObjects, nextTasks, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.curatorRuns(), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
       setCuratorRuns(nextCuratorRuns);
+      setVisuals(nextVisuals);
     } catch (cause) {
       setError(message(cause));
     } finally {
@@ -68,6 +71,7 @@ export default function App() {
   };
 
   const currentItems = itemsForSection(section, objects, tasks, curatorRuns);
+  const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
 
@@ -119,17 +123,17 @@ export default function App() {
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="row-grip">···</span>
-                  <span className={`kind ${itemBadge(item)}`}>{itemBadge(item)}</span>
+                  <span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span>
                   <strong>{itemTitle(item, objects)}</strong>
                   <p>{itemDescription(item)}</p>
-                  <ObjectId id={canonicalObjectId(item)} compact />
+                  <span className="record-context"><ObjectId id={canonicalObjectId(item)} compact /><ObjectContext visual={visualsById.get(canonicalObjectId(item))} /></span>
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
@@ -154,7 +158,7 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
 function itemRouteId(item: ListItem) { return "trigger" in item ? item.id : canonicalObjectId(item); }
 function canonicalObjectId(item: ListItem) { return "trigger" in item ? item.chat_object_id : "object_id" in item ? item.object_id : item.id; }
 
-function itemBadge(item: ListItem) { return "kind" in item ? item.kind : "trigger" in item ? item.status : item.status; }
+function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "task"; }
 function itemTitle(item: ListItem, objects: SharedObject[]) { return "title" in item ? item.title : `Chat · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}`; }
 function itemDescription(item: ListItem) { return "description" in item ? item.description : `${item.trigger.replace("_", " ")} · ${item.message_count} message${item.message_count === 1 ? "" : "s"}`; }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
@@ -202,7 +206,7 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   </form></CreateModal>;
 }
 
-function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedObject[]; onChanged: () => Promise<void> }) {
+function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
   const [item, setItem] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
@@ -225,12 +229,13 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
         <section className="properties-block" aria-label="Object properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Property label="Object ID"><ObjectId id={item.id} label={false} /></Property>
-            <Property label="Type"><span className={`kind ${item.kind}`}>{item.kind}</span></Property>
+            <Property label="Object ID"><ObjectId id={item.id} label={false} /><ObjectContext visual={visuals.get(item.id)} /></Property>
+            <Property label="Type"><ObjectTypeBadge kind={item.kind} /></Property>
             <Property label="Revision">{item.revision}</Property>
             <Property label="Created by"><span className="property-value-wrap">{item.created_by_type}:{item.created_by_id}</span></Property>
             <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={item.protected} key={`${item.id}-${item.revision}-protected`} /> Keep this record curator-safe</label></Property>
-            <Property label="Source">{textValue(item.provenance.source_type, "Unspecified")}</Property>
+            <Property label="Source"><SourceBadge provider={visuals.get(item.id)?.source_provider} />{!visuals.get(item.id)?.source_provider && textValue(item.provenance.source_type, "Unspecified")}</Property>
+            <Property label="Attributed users"><AttributionList users={visuals.get(item.id)?.users ?? []} /></Property>
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
@@ -238,16 +243,16 @@ function ObjectDetail({ id, objects, onChanged }: { id: string; objects: SharedO
         <button className="secondary save-button">Save changes</button>
       </form>
       {error && <p className="form-error">{error}</p>}
-      {item.kind === "user" && <UserIdentityPanel id={item.id} />}
-      {item.kind === "chat" && <ChatTranscript id={item.id} />}
+      {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} />}
+      {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} />}
       <Provenance value={item.provenance} />
-      <Connections object={item} objects={objects} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p><ObjectId id={event.object_id} compact />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} />}</div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}{event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} />}</div><time>{relative(event.created_at)}</time></div>)}</div></Section>
     </div>
   </div>;
 }
 
-function UserIdentityPanel({ id }: { id: string }) {
+function UserIdentityPanel({ id, visual }: { id: string; visual: ObjectVisual | undefined }) {
   const [user, setUser] = useState<User | null>(null);
   const [identities, setIdentities] = useState<ExternalIdentity[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -260,11 +265,11 @@ function UserIdentityPanel({ id }: { id: string }) {
   }, [id]);
   return <Section title="Identity">
     {error && <p className="form-error">{error}</p>}
-    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /></Property><Property label="User kind"><span className={`kind ${user.user_kind}`}>{user.user_kind}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><span>{identity.provider}</span><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={identity.user_object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
+    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /><ObjectContext visual={visual} /></Property><Property label="User kind"><span className="user-kind-label">{user.user_kind === "agent" ? "Agent" : "Human"}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><SourceBadge provider={identity.provider} /><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={identity.user_object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
   </Section>;
 }
 
-function ChatTranscript({ id }: { id: string }) {
+function ChatTranscript({ id, visuals }: { id: string; visuals: Map<string, ObjectVisual> }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -278,7 +283,7 @@ function ChatTranscript({ id }: { id: string }) {
     {error && <p className="form-error">{error}</p>}
     <div className="chat-transcript">
       {messages.map((item) => <article className="chat-message" key={item.id}>
-        <header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header>
+        <header><ObjectContext visual={visuals.get(item.sender_user_object_id)} /><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header>
         <p>{item.content}</p>
         <footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer>
       </article>)}
@@ -287,9 +292,8 @@ function ChatTranscript({ id }: { id: string }) {
   </Section>;
 }
 
-function Connections({ object, objects, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; connections: Connection[]; onCreated: () => Promise<void> }) {
+function Connections({ object, objects, visuals, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void> }) {
   const [open, setOpen] = useState(false); const [error, setError] = useState<string | null>(null);
-  const titles = useMemo(() => new Map(objects.map((item) => [item.id, item.title])), [objects]);
   const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
     try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), description: String(data.get("description")), protected: data.get("protected") === "on", provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
     catch (cause) { setError(message(cause)); }
@@ -300,11 +304,24 @@ function Connections({ object, objects, connections, onCreated }: { object: Shar
   };
   return <Section title="Relationships" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
     {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-    <div className="connections">{connections.map((connection) => { const outgoing = connection.source_object_id === object.id; const other = outgoing ? connection.target_object_id : connection.source_object_id; const messageIds = stringList(connection.provenance.supporting_message_ids); return <div className="connection" key={connection.id}><span>{outgoing ? "Outgoing" : "Incoming"}</span><strong>{connection.kind.replace("_", " ")} · {titles.get(other) ?? shortId(other)}</strong><button className="protect-action" type="button" onClick={() => void toggleProtected(connection)}>{connection.protected ? "Unprotect" : "Protect"}</button><p>{connection.description}</p><div className="connection-identities"><ConnectionId id={connection.id} /><ObjectId id={connection.source_object_id} compact /><span aria-hidden="true">→</span><ObjectId id={connection.target_object_id} compact /></div>{messageIds.length > 0 && <small>Messages · {messageIds.map(shortId).join(", ")}</small>}</div>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
+    <div className="connections">{connections.map((connection) => { const outgoing = connection.source_object_id === object.id; const messageIds = stringList(connection.provenance.supporting_message_ids); return <article className="connection" key={connection.id}><header><span className="connection-direction">{outgoing ? "Outgoing" : "Incoming"}</span><strong>{connection.kind.replaceAll("_", " ")}</strong><button className="protect-action" type="button" onClick={() => void toggleProtected(connection)}>{connection.protected ? "Unprotect" : "Protect"}</button></header><ConnectionFlow connection={connection} objects={objects} visuals={visuals} /><p>{connection.description}</p><footer><ConnectionId id={connection.id} />{messageIds.length > 0 && <small>Messages · {messageIds.map(shortId).join(", ")}</small>}</footer></article>; })}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
   </Section>;
 }
 
-function TaskDetail({ id, objects, onChanged }: { id: string; objects: SharedObject[]; onChanged: () => Promise<void> }) {
+function ConnectionFlow({ connection, objects, visuals }: { connection: Connection; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+  const source = objects.find((item) => item.id === connection.source_object_id);
+  const target = objects.find((item) => item.id === connection.target_object_id);
+  const endpoint = (id: string, item: SharedObject | undefined, label: string) => <div className="connection-endpoint" aria-label={`${label} Object`}>
+    <span>{label}</span>
+    <strong>{item?.title ?? shortId(id)}</strong>
+    {item && <ObjectTypeBadge kind={item.kind} />}
+    <ObjectId id={id} compact />
+    <ObjectContext visual={visuals.get(id)} />
+  </div>;
+  return <div className="connection-flow">{endpoint(connection.source_object_id, source, "Source")}<span className="connection-arrow" aria-label="connects to">→</span>{endpoint(connection.target_object_id, target, "Target")}</div>;
+}
+
+function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
   const [task, setTask] = useState<Task | null>(null);
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -329,12 +346,14 @@ function TaskDetail({ id, objects, onChanged }: { id: string; objects: SharedObj
         <section className="properties-block" aria-label="Task properties">
           <h2>Properties</h2>
           <div className="properties-grid">
-            <Property label="Object ID"><ObjectId id={task.object_id} label={false} /></Property>
-            <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
+            <Property label="Object ID"><ObjectId id={task.object_id} label={false} /><ObjectContext visual={visuals.get(task.object_id)} /></Property>
+            <Property label="Type"><ObjectTypeBadge kind="task" /></Property>
+            <Field label="Status"><span className="field-with-badge"><TaskStatusBadge status={task.status} /><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></span></Field>
             <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.object_id}-${task.revision}-eligible`} /> Eligible</label></Property>
             <Property label="Protected"><label className="property-check"><input type="checkbox" name="protected" defaultChecked={task.protected} key={`${task.object_id}-${task.revision}-protected`} /> Keep this record curator-safe</label></Property>
             <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
-            <Property label="Owner">{task.owner_object_id ? <ObjectId id={task.owner_object_id} /> : "Unassigned"}</Property>
+            <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
+            <Property label="Attributed users"><AttributionList users={visuals.get(task.object_id)?.users ?? []} /></Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
             <Property label="Revision">{task.revision}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
@@ -345,13 +364,13 @@ function TaskDetail({ id, objects, onChanged }: { id: string; objects: SharedObj
       </form>
       {error && <p className="form-error">{error}</p>}
       <Provenance value={task.provenance} />
-      <Connections object={object} objects={objects} connections={connections} onCreated={load} />
-      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p><ObjectId id={event.object_id} compact /></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
+      <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+      <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><div><strong>{event.action.replaceAll("_", " ")}</strong><p>{event.actor_type}:{event.actor_id}</p><ObjectId id={event.object_id} compact /><ObjectContext visual={visuals.get(event.object_id)} /></div><time>{relative(event.created_at)}</time></div>)}</div></Section>
     </div>
   </div>;
 }
 
-function CuratorDetail({ id, objects, onChanged }: { id: string; objects: SharedObject[]; onChanged: () => Promise<void> }) {
+function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState<CuratorRunDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -374,9 +393,9 @@ function CuratorDetail({ id, objects, onChanged }: { id: string; objects: Shared
     <h1 className="detail-title">{chatTitle}</h1>
     <p className="detail-description">Context reconciliation for {run.message_count} message{run.message_count === 1 ? "" : "s"} in this interaction window.</p>
     <section className="properties-block" aria-label="Curator Run properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Status"><span className={`kind ${run.status}`}>{run.status}</span></Property>
+      <Property label="Status"><StateBadge state={run.status} /></Property>
       <Property label="Trigger">{run.trigger.replace("_", " ")}</Property>
-      <Property label="Chat"><span>{chatTitle}</span><ObjectId id={run.chat_object_id} /></Property>
+      <Property label="Chat"><span>{chatTitle}</span><ObjectId id={run.chat_object_id} /><ObjectContext visual={visuals.get(run.chat_object_id)} /></Property>
       <Property label="Messages">{run.message_count}</Property>
       <Property label="Attempts">{run.attempts}</Property>
       <Property label="Model">{run.model ?? "Not assigned"}</Property>
@@ -387,12 +406,12 @@ function CuratorDetail({ id, objects, onChanged }: { id: string; objects: Shared
     {error && <p className="form-error">{error}</p>}
     {run.status === "completed" && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Undoing…" : "Undo whole run"}</button>}
     {run.status === "reversed" && <p className="undo-note">This run was undone. Messages and audit history were preserved.</p>}
-    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <article className="chat-message" key={item.id}><header><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header><p>{item.content}</p><footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer></article>)}</div></Section>
-    <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <ObjectId id={change.entity_id} compact /> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
+    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <article className="chat-message" key={item.id}><header><ObjectContext visual={visuals.get(item.sender_user_object_id)} /><strong>{item.sender_title}</strong><span>{item.sender_kind}</span><time>{new Date(item.source_created_at).toLocaleString()}</time></header><p>{item.content}</p><footer><ObjectId id={item.chat_object_id} compact /><ObjectId id={item.sender_user_object_id} compact /></footer></article>)}</div></Section>
+    <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <><ObjectId id={change.entity_id} compact /><ObjectContext visual={visuals.get(change.entity_id)} /></> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
   </div></div>;
 }
 
-function ConnectionDetail({ id, objects }: { id: string; objects: SharedObject[] }) {
+function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -403,16 +422,13 @@ function ConnectionDetail({ id, objects }: { id: string; objects: SharedObject[]
     return () => { active = false; };
   }, [id]);
   if (!connection) return <DetailLoading error={error} />;
-  const sourceTitle = objects.find((item) => item.id === connection.source_object_id)?.title;
-  const targetTitle = objects.find((item) => item.id === connection.target_object_id)?.title;
   return <div className="record-page"><div className="record-primary">
     <h1 className="detail-title">{connection.kind.replaceAll("_", " ")}</h1>
     <p className="detail-description">{connection.description}</p>
-    <section className="properties-block" aria-label="Connection properties"><h2>Properties</h2><div className="properties-grid">
+    <ConnectionFlow connection={connection} objects={objects} visuals={visuals} />
+    <section className="properties-block connection-properties" aria-label="Connection properties"><h2>Properties</h2><div className="properties-grid">
       <Property label="Connection ID"><ConnectionId id={connection.id} label={false} /></Property>
-      <Property label="Source Object">{sourceTitle && <strong>{sourceTitle}</strong>}<ObjectId id={connection.source_object_id} /></Property>
-      <Property label="Direction"><span aria-label="Source to target">→</span></Property>
-      <Property label="Target Object">{targetTitle && <strong>{targetTitle}</strong>}<ObjectId id={connection.target_object_id} /></Property>
+      <Property label="Connection type">{connection.kind.replaceAll("_", " ")}</Property>
       <Property label="Revision">{connection.revision}</Property>
       <Property label="Protected">{connection.protected ? "Yes" : "No"}</Property>
       <Property label="Updated">{relative(connection.updated_at)}</Property>

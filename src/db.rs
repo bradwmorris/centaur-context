@@ -142,10 +142,34 @@ pub struct ExternalIdentity {
     pub workspace_id: String,
     pub provider_user_id: String,
     pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ObjectVisual {
+    pub object_id: Uuid,
+    pub source_provider: Option<String>,
+    pub users: Vec<UserAttribution>,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct UserAttribution {
+    pub object_id: Uuid,
+    pub user_object_id: Uuid,
+    pub title: String,
+    pub user_kind: String,
+    pub role: String,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, FromRow)]
+struct ObjectVisualSource {
+    object_id: Uuid,
+    source_provider: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -937,7 +961,7 @@ pub async fn list_external_identities(
 ) -> Result<Vec<ExternalIdentity>, DbError> {
     get_user(pool, user_object_id).await?;
     Ok(sqlx::query_as(
-        r#"SELECT id,user_object_id,provider,workspace_id,provider_user_id,display_name,
+        r#"SELECT id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url,
                   created_at,updated_at
            FROM external_identities WHERE user_object_id=$1
            ORDER BY provider,workspace_id,provider_user_id"#,
@@ -945,6 +969,105 @@ pub async fn list_external_identities(
     .bind(user_object_id)
     .fetch_all(pool)
     .await?)
+}
+
+pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbError> {
+    let sources: Vec<ObjectVisualSource> = sqlx::query_as(
+        r#"SELECT o.id AS object_id,
+                  CASE WHEN
+                    lower(COALESCE(o.provenance->>'source_type',''))='slack'
+                    OR EXISTS (
+                      SELECT 1 FROM chats ch
+                      WHERE ch.object_id=o.id AND ch.provider='slack'
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM connections c
+                      JOIN chats ch ON ch.object_id=CASE
+                        WHEN c.source_object_id=o.id THEN c.target_object_id
+                        ELSE c.source_object_id
+                      END
+                      WHERE c.archived_at IS NULL AND c.kind='derived_from'
+                        AND (c.source_object_id=o.id OR c.target_object_id=o.id)
+                        AND ch.provider='slack'
+                    )
+                    OR EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements_text(
+                        CASE WHEN jsonb_typeof(o.provenance->'supporting_message_ids')='array'
+                          THEN o.provenance->'supporting_message_ids' ELSE '[]'::jsonb END
+                      ) message_ref
+                      JOIN chat_messages m ON m.id=message_ref.value::uuid
+                      JOIN chats ch ON ch.object_id=m.chat_object_id
+                      WHERE ch.provider='slack'
+                    )
+                  THEN 'slack'::text ELSE NULL::text END AS source_provider
+           FROM objects o
+           WHERE o.lifecycle='active'
+           ORDER BY o.updated_at DESC,o.id"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let attributions: Vec<UserAttribution> = sqlx::query_as(
+        r#"WITH attribution AS (
+             SELECT u.object_id,u.object_id AS user_object_id,'identity'::text AS role
+             FROM users u
+             UNION
+             SELECT t.object_id,t.owner_object_id,'owner'::text
+             FROM tasks t WHERE t.owner_object_id IS NOT NULL
+             UNION
+             SELECT c.source_object_id,u.object_id,'participant'::text
+             FROM connections c JOIN users u ON u.object_id=c.target_object_id
+             WHERE c.kind='involves' AND c.archived_at IS NULL
+             UNION
+             SELECT c.target_object_id,u.object_id,'participant'::text
+             FROM connections c JOIN users u ON u.object_id=c.source_object_id
+             WHERE c.kind='involves' AND c.archived_at IS NULL
+             UNION
+             SELECT o.id,m.sender_user_object_id,'source author'::text
+             FROM objects o
+             JOIN LATERAL jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(o.provenance->'supporting_message_ids')='array'
+                 THEN o.provenance->'supporting_message_ids' ELSE '[]'::jsonb END
+             ) message_ref ON true
+             JOIN chat_messages m ON m.id=message_ref.value::uuid
+           )
+           SELECT a.object_id,a.user_object_id,uo.title,u.user_kind,a.role,
+                  avatar.avatar_url
+           FROM attribution a
+           JOIN users u ON u.object_id=a.user_object_id
+           JOIN objects uo ON uo.id=u.object_id
+           LEFT JOIN LATERAL (
+             SELECT e.avatar_url FROM external_identities e
+             WHERE e.user_object_id=u.object_id AND e.avatar_url IS NOT NULL
+             ORDER BY (e.provider='slack') DESC,e.updated_at DESC LIMIT 1
+           ) avatar ON true
+           ORDER BY a.object_id,
+             CASE a.role WHEN 'owner' THEN 1 WHEN 'source author' THEN 2
+               WHEN 'participant' THEN 3 ELSE 4 END,
+             uo.title,a.user_object_id"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut users_by_object = std::collections::HashMap::<Uuid, Vec<UserAttribution>>::new();
+    for attribution in attributions {
+        users_by_object
+            .entry(attribution.object_id)
+            .or_default()
+            .push(attribution);
+    }
+    Ok(sources
+        .into_iter()
+        .map(|source| ObjectVisual {
+            object_id: source.object_id,
+            source_provider: source.source_provider,
+            users: users_by_object
+                .remove(&source.object_id)
+                .unwrap_or_default(),
+        })
+        .collect())
 }
 
 pub async fn full_text_candidates(
