@@ -78,28 +78,27 @@ describe("canonical Object identity across the application", () => {
   beforeEach(() => installApiMock());
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it("shows a navigable canonical Object ID in all six primary lists and Curator rows", async () => {
+  it("shows a compact copyable canonical Object ID in all six primary lists and Curator rows", async () => {
     window.history.replaceState({}, "", "/objects");
     render(<App />);
-    expect(await screen.findByRole("link", { name: `Open Object ID ${ids.task}` })).toBeVisible();
-    expect(screen.getByRole("button", { name: `Copy Object ID ${ids.task}` })).toBeVisible();
+    expect(await screen.findByRole("button", { name: `Copy Object ID ${ids.task}` })).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
     for (const [section, id] of [["Tasks", ids.task], ["Chats", ids.chat], ["Users", ids.user], ["Entities", ids.entity], ["Memories", ids.memory], ["Curator Runs", ids.chat]] as const) {
       await userEvent.click(screen.getByRole("button", { name: section }));
-      expect(await screen.findByRole("link", { name: `Open Object ID ${id}` })).toBeVisible();
-      expect(screen.getByRole("button", { name: `Copy Object ID ${id}` })).toBeVisible();
+      expect(await screen.findByRole("button", { name: `Copy Object ID ${id}` })).toHaveTextContent(`ID: ${id.slice(0, 5)}`);
     }
   });
 
   it("opens canonical Object IDs at durable URLs and supports back navigation", async () => {
     window.history.replaceState({}, "", "/tasks");
     render(<App />);
-    const link = await screen.findByRole("link", { name: `Open Object ID ${ids.task}` });
-    await userEvent.click(link);
+    await userEvent.click(await screen.findByRole("button", { name: "Open Canonical task" }));
+    expect(window.location.pathname).toBe(`/tasks/${ids.task}`);
+    await userEvent.click(await screen.findByRole("link", { name: `Open Object ID ${ids.task}` }));
     expect(window.location.pathname).toBe(`/objects/${ids.task}`);
     expect(await screen.findByRole("heading", { name: "Properties" })).toBeVisible();
     window.history.back();
-    await waitFor(() => expect(window.location.pathname).toBe("/tasks"));
-    expect(await screen.findByText("All tasks")).toBeVisible();
+    await waitFor(() => expect(window.location.pathname).toBe(`/tasks/${ids.task}`));
+    expect(await screen.findByRole("heading", { name: "Properties" })).toBeVisible();
   });
 
   it("shows the full, copyable canonical UUID on every primary detail type", async () => {

@@ -122,7 +122,7 @@ export default function App() {
                   <span className={`kind ${itemBadge(item)}`}>{itemBadge(item)}</span>
                   <strong>{itemTitle(item, objects)}</strong>
                   <p>{itemDescription(item)}</p>
-                  <ObjectId id={canonicalObjectId(item)} compact />
+                  <ObjectId id={canonicalObjectId(item)} rowPill />
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}

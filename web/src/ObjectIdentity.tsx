@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { connectionPath, interceptNavigation, objectPath } from "./routing";
 
-export function ObjectId({ id, compact = false, copy = true, label = true }: { id: string; compact?: boolean; copy?: boolean; label?: boolean }) {
+export function ObjectId({ id, compact = false, copy = true, label = true, rowPill = false }: { id: string; compact?: boolean; copy?: boolean; label?: boolean; rowPill?: boolean }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const path = objectPath(id);
   const copyId = async () => {
@@ -14,6 +14,19 @@ export function ObjectId({ id, compact = false, copy = true, label = true }: { i
       setCopyState("error");
     }
   };
+  if (rowPill) {
+    return <span className="object-identity row-pill">
+      <button
+        type="button"
+        className="object-id-pill"
+        data-copy-state={copyState}
+        onClick={(event) => { event.stopPropagation(); void copyId(); }}
+        aria-label={`Copy Object ID ${id}`}
+        title={`Copy full Object ID ${id}`}
+      >ID: {id.slice(0, 5)}</button>
+      <span className="sr-only" aria-live="polite">{copyState === "copied" ? `Copied Object ID ${id}` : copyState === "error" ? `Could not copy Object ID ${id}` : ""}</span>
+    </span>;
+  }
   return <span className={compact ? "object-identity compact" : "object-identity"}>
     {label && <span className="identity-label">Object ID</span>}
     <a href={path} onClick={(event) => interceptNavigation(event, path)} title={id} aria-label={`Open Object ID ${id}`}>

@@ -107,6 +107,12 @@ button { color: inherit; }
 .object-identity button:hover { color: #e1e1e3; background: #292a30; }
 .object-identity.compact { flex-wrap: nowrap; white-space: nowrap; }
 .object-identity.compact .identity-label { flex-basis: auto; }
+.object-identity.row-pill { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; }
+.object-identity .object-id-pill { border: 1px solid rgba(255,255,255,.06); border-radius: 999px; background: #1a1b1f; color: #9a9ca3; padding: 3px 8px; font-size: 9px; font-weight: 540; letter-spacing: .02em; }
+.object-identity .object-id-pill:hover { border-color: rgba(255,255,255,.12); background: #232429; color: #eeeeef; }
+.object-identity .object-id-pill:focus-visible { outline: 2px solid #8d91a0; outline-offset: 2px; }
+.object-identity .object-id-pill[data-copy-state="copied"] { border-color: rgba(116,181,144,.35); color: #74b590; }
+.object-identity .object-id-pill[data-copy-state="error"] { border-color: rgba(204,133,133,.35); color: #cc8585; }
 .supporting-identity { min-width: 0; display: grid; gap: 3px; color: #686a71; font-size: 9px; }
 .supporting-identity > span { text-transform: uppercase; letter-spacing: .05em; font-size: 8px; }
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
