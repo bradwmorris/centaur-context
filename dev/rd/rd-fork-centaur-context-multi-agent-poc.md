@@ -1,136 +1,176 @@
-# RD: Fork and Dogfood a Personal Centaur Context with Named Slack Agents
+# RD: Deploy and Dogfood Centaur Context for Enyu with Named Slack Agents
 
-**Status:** `backlog`
+**Status:** `in_progress`
 **Created:** 2026-08-29
+**GitHub Issue:** `#15`
+**Prerequisite Issues:** Centaur `#3`, `#4`
 
 ## Execution Plan
 
 **Status:** `complete and ready`
 
-**Basis checked:** Centaur Context ownership, Slack/context, agent-client, and task
-contracts; the existing Centaur checkout and deployment; Centaur overlay,
-persona, workflow, Slack transport, session, and permission implementations;
-and the existing private overlay.
+**Basis checked:** Current Centaur Slackbot v2 server, session, persona,
+permission, overlay, Helm, ingress, state/recovery, and NetworkPolicy contracts;
+the ACME overlay guidance; the existing private overlay; and Centaur Context's
+ingestion, Context Builder, Curator, identity, client, deployment, and database
+contracts through migration 9.
 
-**Missing:** Final repository names/visibility and live Slack credentials and
-channels are requester-owned. Proposed local names allow scaffolding.
+**Missing:** No planning decision. Execution is gated by the requester-owned
+resources and approvals listed below. The two reusable product gaps in phases 1
+and 2 must be implemented through their own issue, branch, tests, and PR before
+the Enyu overlay is deployed.
 
-1. Keep and pin `<adjacent-centaur-checkout>` as the existing
-   control plane; do not create another Centaur fork. Make only a separately
-   tracked generic compatibility change there if multi-bot binding requires it.
-2. Fork `<source-context-checkout>` into a sibling personal
-   POC OS, proposed as `centaur-context-personal-poc`, preserving the source repository as
-   an upstream remote and customizing the fork through actual POC use.
-3. Create one new POC-specific overlay, proposed as
-   `centaur-context-personal-poc-overlay`, containing the Editor and Researcher verticals
-   and connecting Centaur to the personal OS fork through its HTTP API.
-4. Prove the end-to-end Slack, Centaur, personal OS, and feedback loop; document
-   which fork changes remain personal and which should return upstream.
+### Fixed execution decisions
+
+- Use one pinned Centaur control plane, two Slack apps (`editor` and
+  `researcher`), one private `centaur-enyu` overlay, and one fresh shared Centaur
+  Context installation. Do not fork or rebrand either reusable product.
+- Start in a local/private Kubernetes environment. Prove the complete path with
+  signed Slack fixtures before asking for a live Slack callback. Create
+  `centaur-enyu-infra` only for a later durable GitOps rollout.
+- Give each bot a dedicated test channel and allow both bots in one shared test
+  channel. Use synthetic Enyu data only. Access the Context UI by port-forward.
+- Use separate Context PostgreSQL storage, database, role, tokens, and backups;
+  do not reuse Centaur's application, Console, or `ai_v2` database.
+- Keep agents read-only in Context. Only the authenticated interaction sink and
+  Curator may write.
+
+### Ordered phases and gates
+
+| Phase | Deliverable | Gate to continue |
+| --- | --- | --- |
+| 0. Pin and baseline | Record passing Centaur and Centaur Context commits, verify the current singleton path, and record an Enyu gap ledger. | Both products pass their targeted checks. |
+| 1. Repair the context handshake | In reusable product work, ingest/upsert the current Slack snapshot before context retrieval, parse and persist the returned opaque `chat_object_id`, pass it to Context Builder, and repeat ingestion after the response. Keep failure non-blocking and idempotent. | A first turn, retry, and restart resolve the same canonical Chat; a later turn gets bounded context. |
+| 2. Add generic multi-Slack support | Add named Slackbot instances while preserving the singleton values contract. Isolate app secrets, webhook Services/routes, bot identity, persona, state/recovery prefix, session namespace, permission principal, metrics, and policies. | Two fixture-driven bots run concurrently; duplicate events, restarts, and one-bot failure do not collide. |
+| 3. Build `centaur-enyu` | Scaffold Editor and Researcher personas, skills, prompt policy, configuration, test fixtures, role/grant manifest, and the pinned standard Context client. | Static tests prove correct persona selection, least privilege, and no duplicated product code or secrets. |
+| 4. Deploy privately | Deploy pinned products plus the overlay, a fresh Context database, approved synthetic surfaces, Curator configuration, and private UI access. | Health, migrations, authenticated ingestion/context, denial tests, Curator, and UI inspection pass. |
+| 5. Prove the story locally | Replay signed Slack fixtures through both webhook routes and verify the two directional handoffs below. | All acceptance evidence is captured without a live Slack mutation. |
+| 6. Live Slack trial | After approval, create/configure the two apps, expose narrowly scoped HTTPS callback routes, apply credentials/grants, and repeat the smoke test. | Both real mentions and both cross-agent retrievals succeed. |
+| 7. Close or harden | Classify gaps and either stop the POC or, with separate approval, create `centaur-enyu-infra` and a durable rollout plan. | Revisions, evidence, rollback, and remaining risks are recorded. |
+
+Phase 1 uses two keys deliberately: Centaur's session key includes the Slackbot
+instance so the bots cannot collide, while the Context thread key remains the
+canonical `slack:<workspace>:<channel>:<thread>` identity so both bots can share
+one Chat when they participate in the same Slack thread.
 
 ## What We Are Doing
 
-- [ ] Use the existing Centaur core as the shared agent control plane.
-- [ ] Create and actively customize a personal-specific fork of Centaur Context for the
-  POC instead of treating the source Centaur Context as immutable infrastructure.
-- [ ] Create a unique overlay for that fork with distinct `@Editor` and
-  `@Researcher` Slack agents, instructions, tasks, workflows, tools, and grants.
-- [ ] Turn dogfooding lessons into explicit upstream candidates without leaking
-  personal behavior or copying private private production implementation.
+- [ ] Prove unchanged reusable Centaur and Centaur Context products can support
+  an organization overlay with two named agents.
+- [ ] Run distinct Editor and Researcher Slack apps through one Centaur control
+  plane with isolated personas, sessions, state, tools, credentials, and
+  failure domains.
+- [ ] Give both agents one fresh, shared Centaur Context through authenticated
+  HTTP APIs only.
+- [ ] Demonstrate durable knowledge transfer in both directions and classify
+  every discovered gap.
 
 ## Contract
 
-- **Goal:** Build a personal, forked Centaur Context POC operated by multiple named
-  Slack agents through the existing Centaur core and a dedicated overlay.
-- **Done:** The personal OS fork has clear ancestry and POC customizations;
-  `@Editor` and `@Researcher` run from its unique overlay on the existing
-  Centaur control plane; both use the forked OS for context and ingestion;
-  representative workflows succeed; and every divergence is classified.
-- **Files:** This RD; the existing `<adjacent-centaur-checkout>`
-  checkout only for verified generic compatibility work; a new sibling personal
-  OS fork proposed as `<adjacent-personal-context-checkout>`;
-  and a new sibling overlay proposed as
-  `<adjacent-personal-overlay-checkout>`. The existing
-  `<adjacent-private-overlay-checkout>` is reference material, not
-  the new POC overlay.
-- **Agent owns:** Local scaffolding when execution is assigned, POC
-  customizations, clean-room verticals, tests, divergence records,
-  documentation, and local verification.
-- **Requester owns:** Repository creation/visibility, Slack app creation and
-  credentials, live grants, model/provider spend, deployment, publication, and
-  approval of any public demo or upstream proposal.
-- **Out of scope:** Another Centaur fork, separate control planes per bot,
-  personal-specific implementation in the source Centaur Context checkout, reusing the
-  existing overlay, agent database access, public ingress, and copying private production
-  implementation, data, credentials, or publication logic.
+- **Goal:** Prove that Enyu can operate two specialized Slack agents with
+  isolated execution and shared durable context without bespoke product forks.
+- **Done:** Fixture-driven and approved live Slack tests show Editor and
+  Researcher selecting the correct persona and grants; each produces a curated
+  result retrieved by the other; Context shows distinct agent Users, Chats,
+  Objects, provenance, and Curator Runs; and every product change is merged or
+  recorded as an unresolved gap.
+- **Files:** This RD; separately tracked generic changes in
+  `/Users/bradleymorris/Desktop/dev/centaur` and, only if required by the
+  handshake, `/Users/bradleymorris/Desktop/dev/centaur-context`; a new private
+  `/Users/bradleymorris/Desktop/dev/centaur-enyu`; and an optional later
+  `/Users/bradleymorris/Desktop/dev/centaur-enyu-infra`. The existing
+  `centaur-overlay` is reference material only.
+- **Agent owns:** Authorized local product work, overlay scaffolding,
+  configuration, fixtures, tests, evidence, gap classification, and local
+  verification.
+- **Requester owns:** Repository creation/visibility, Slack apps and workspace
+  settings, channel membership, credentials, Console grants, model/provider
+  spend, live callback ingress, deployment, publication, demos, and upstream
+  approval.
+- **Out of scope:** Product forks or rebrands, one control plane per bot,
+  Enyu-specific product code, imported real data, agent database access,
+  arbitrary Context writes, permanent public UI exposure, and copying AGI Post
+  code, credentials, data, schema, or private business rules.
 
-## Requirements
+## Required Product Contracts
 
-### Repository topology and ownership
+### Context handshake
 
-- Record exact commits for Centaur, source Centaur Context, the personal fork, and
-  overlay. Give the personal fork its own origin and source Centaur Context upstream.
-- Keep Centaur responsibilities unchanged: Slack transport, sessions,
-  sandboxes, workflows, model execution, and permission enforcement.
-- The personal OS fork owns its isolated logical database, canonical Objects,
-  context/curation behavior, API, UI, migrations, and standard agent client. It
-  must never query Centaur, `ai_v2`, Console, or private production databases.
-- Agents use only the authenticated HTTP API and the standard client shipped by
-  the personal OS fork. Do not duplicate that client in the overlay or expose a
-  database DSN.
+- The pre-turn interaction sink returns `chat_object_id`; Slackbot validates and
+  stores it in thread state, supplies it on the Context Builder request, and
+  safely reacquires it after restart. A post-turn snapshot adds the response.
+- Pre/post snapshots use stable idempotency and never close an interaction merely
+  because a context lookup ran. Context failure skips shared context but does
+  not prevent the Slack response.
+- Context authenticates the bearer token, principal, canonical thread key, and
+  approved workspace/channel. Sandboxes never receive ingestion credentials.
 
-### Personal OS customization and feedback
+### Named Slackbot instances
 
-- Begin from a pinned, passing Centaur Context commit. Permit POC-driven schema,
-  ontology, API, context, curation, UI, and operational changes in the personal
-  fork when they support Editor/Researcher use.
-- Maintain a divergence ledger. For every fork change, record its need,
-  compatibility impact, tests, and one classification:
-  `personal`, `overlay`, `upstream_candidate`, or `discard`.
-- Move instructions, workflow/tool policy, retention, and organization logic to
-  the overlay. Use a separate RD/issue/PR for reusable source-product
-  improvements; never sync personal changes upstream wholesale.
+- Introduce a list-shaped instance contract with a required stable instance ID;
+  translate the existing singleton values into one default instance for
+  compatibility.
+- Each instance selects its own token/signing-secret keys, bot user, persona,
+  state prefix, Service, callback route, observability label, and permission
+  namespace. API/session metadata records the instance and persona.
+- Separate Centaur session identity from canonical Context conversation
+  identity. Include workspace and instance in Centaur session/state/recovery
+  keys, but do not fragment one Slack conversation into different Context
+  Chats merely because two bots participated.
+- Prove per-instance signature rejection, webhook/event idempotency, render
+  recovery, Console visibility, tool denial, and NetworkPolicy routing.
 
-### Unique overlay and named agents
+### Enyu overlay and permissions
 
-- Define `editor` and `researcher` persona packages with `PROMPT.md`. Use
-  `SKILL.md` for task contracts, Python workflows for durable multi-step work,
-  packaged CLI tools for capabilities, and `AGENTS.md` only for contributor
-  guidance.
-- Editor handles bounded editing, critique, restructuring, and provenance-safe
-  revision. Researcher handles URL, supplied-text, and bounded-topic research
-  with authoritative evidence, direct citations, uncertainty, and explicit
-  access gaps.
-- Give each Slack app its own token/signing-secret reference, stable bot
-  identity, persona binding, state/session namespace, and permission principal.
-  Enforce different tools and credentials through roles, not prompts.
-- First use the existing Centaur contract. If it cannot safely host both bots,
-  add narrow generic multi-instance/persona binding to that existing fork with
-  singleton compatibility, collision-free sessions, provider metadata, and
-  isolated recovery.
-- Point both bots' `contextBuilder`, `interactionSink`, and `centaur-context` client
-  configuration at the personal OS fork. Preserve distinct canonical agent
-  Users while allowing shared context across their conversations.
+- Package `personas/editor` and `personas/researcher` using Centaur's discovered
+  persona format and `PROMPT.md`; keep repeatable task procedures in skills and
+  durable multi-step automation in workflows only when needed.
+- Define three least-privilege roles: shared read-only Context, Editor-specific
+  capabilities, and Researcher-specific capabilities. Record the exact tool and
+  credential matrix before live grants; neither bot receives ingestion,
+  Curator, database, cluster, or the other bot's private credentials.
+- Editor performs bounded, provenance-safe revision. Researcher produces cited
+  research with uncertainty and explicit access gaps. Prompts do not substitute
+  for enforced grants.
+
+## Acceptance Scenarios
+
+1. **Editor to Researcher:** Editor records a synthetic brief containing a
+   unique nonce, finishes the interaction, and Curator creates durable Objects.
+   Researcher answers a later question from its own channel using those Objects.
+2. **Researcher to Editor:** Researcher records a cited synthetic fact packet;
+   Editor later applies it to a revision and identifies the supporting Context
+   Object.
+3. **Isolation:** The wrong bot ignores an unaddressed event; each bot resolves
+   its own persona and principal; cross-role tool attempts are denied; replayed
+   webhooks are idempotent; and stopping one instance does not stall the other.
+4. **Security and recovery:** An unapproved channel is rejected, injected
+   instructions inside Context remain reference data, Context outage degrades
+   safely, restart reacquires the Chat, and no secret or DSN appears in a pod,
+   log, fixture, event, or repository.
 
 ## Checks
 
-- [ ] Git/remotes prove the intended core, source, personal-fork, and overlay
-  topology; pinned commits and the divergence ledger are documented.
-- [ ] Source Centaur Context contains no personal-specific implementation changes from
-  this execution, and the unique overlay duplicates neither OS domain logic nor
-  the standard client.
-- [ ] Tests cover both personas, tool denial, prompt injection, Slack identity
-  isolation, session collision, context/ingestion, and fork-specific OS changes.
-- [ ] Slack smoke proof shows independent `@Editor` and `@Researcher` mentions,
-  correct behavior/grants, durable results, distinct agent Users, and later
-  shared-context retrieval from the personal OS fork.
-- [ ] Static hygiene finds no credentials, private IDs, database DSNs, private production
-  implementation, Supabase project IDs, or Modal commands.
+- [ ] Each reusable product change has its own issue/branch/PR, focused tests,
+  and passing repository checks; singleton Centaur remains compatible.
+- [ ] The overlay pins reviewed product revisions and contains no product copy,
+  Enyu credentials, private IDs, database DSN, or unrestricted write path.
+- [ ] Tests cover handshake, two instances, personas, permissions, signature
+  rejection, idempotency, collision avoidance, recovery, and independent
+  failure.
+- [ ] A fresh Context database proves first-turn and later-turn Chat resolution,
+  distinct agent Users, shared authorized Objects, Curator provenance, and UI
+  visibility.
+- [ ] Both directional acceptance scenarios pass first with signed fixtures and
+  then, after approval, in live Slack.
 - [ ] Relevant checks in every changed repository and `git diff --check` pass.
 
 ## Approval Boundary
 
-This RD remains planning-only until execution is separately assigned. Local
-scaffolding would not authorize creating or publishing repositories, creating
-Slack apps, changing a workspace, granting credentials, spending, deploying,
-public ingress, upstream proposals, a live demo, external writes, or deletion.
-Each requires explicit requester approval.
+Planning and local fixture work do not authorize repository creation or
+publication, Slack app/workspace/channel changes, credentials or live grants,
+model calls or spend, deployment, database creation, data import, HTTPS callback
+ingress, demos, upstream proposals, external writes, or deletion. The live
+Slack phase requires explicit approval for two apps, their exact surfaces and
+credentials, narrowly scoped callback ingress, model use, deployment, and
+rollback. Permanent public UI ingress is not part of this POC.
