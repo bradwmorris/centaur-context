@@ -99,7 +99,8 @@ describe("canonical Object identity across the application", () => {
     expect(firstPill).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
     const firstTitle = firstPill.parentElement?.nextElementSibling;
     expect(firstTitle).toHaveTextContent("Canonical task");
-    expect(firstTitle?.nextElementSibling).toHaveTextContent("Task");
+    expect(firstTitle).toHaveTextContent("Task");
+    expect(screen.queryByText("···")).not.toBeInTheDocument();
     for (const [section, id] of [["Tasks", ids.task], ["Chats", ids.chat], ["Users", ids.user], ["Entities", ids.entity], ["Memories", ids.memory], ["Curator Runs", ids.chat]] as const) {
       await userEvent.click(screen.getByRole("button", { name: section }));
       expect(await screen.findByRole("button", { name: `Copy Object ID ${id}` })).toHaveTextContent(`ID: ${id.slice(0, 5)}`);

@@ -24,9 +24,11 @@ describe("record visual language", () => {
     expect(screen.getByText("Blocked")).toHaveTextContent("!Blocked");
   });
 
-  it("labels Slack origin without requiring an external logo", () => {
-    render(<SourceBadge provider="slack" />);
-    expect(screen.getByLabelText("Source: Slack")).toHaveTextContent("Slack");
+  it("uses an accessible Slack source icon", () => {
+    const { container } = render(<SourceBadge provider="slack" />);
+    expect(screen.getByLabelText("Source: Slack")).toBeVisible();
+    expect(screen.getByLabelText("Source: Slack")).toHaveTextContent("");
+    expect(container.querySelector("svg")).toBeVisible();
   });
 
   it("falls back deterministically when an avatar image is broken", () => {

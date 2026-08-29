@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
-import { AttributionList, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { AttributionList, AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
 import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
@@ -122,12 +122,10 @@ export default function App() {
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
-                  <span className="row-grip">···</span>
+                  <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
                   <ObjectId id={canonicalObjectId(item)} rowPill />
-                  <strong>{itemTitle(item, objects)}</strong>
-                  <span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span>
+                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /></span>
                   <p>{itemDescription(item)}</p>
-                  <span className="record-context"><ObjectContext visual={visualsById.get(canonicalObjectId(item))} /></span>
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}
