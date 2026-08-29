@@ -36,6 +36,7 @@ use crate::{
 pub struct AppState {
     pub pool: PgPool,
     pub embeddings: Option<EmbeddingClient>,
+    pub text_search_config: crate::config::TextSearchConfig,
 }
 
 #[derive(Clone)]
@@ -192,23 +193,60 @@ struct SearchQuery {
     limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ContextQuery {
+    q: String,
+    chat_object_id: Option<Uuid>,
+    kind: Option<String>,
+    limit: Option<i64>,
+}
+
 async fn get_context(
     State(state): State<AppState>,
-    Query(query): Query<SearchQuery>,
+    Extension(actor): Extension<ActorContext>,
+    Query(query): Query<ContextQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let query_text = required_text(query.q, "q", 1000)?;
+    let chat_object_id = query
+        .chat_object_id
+        .ok_or_else(|| ApiError::BadRequest("chat_object_id is required".to_owned()))?;
+    let chat = db::get_context_chat(&state.pool, chat_object_id).await?;
+    if chat.lifecycle != "active" {
+        return Err(ApiError::BadRequest(
+            "chat_object_id must reference an active Chat".to_owned(),
+        ));
+    }
+    let expected_thread_key = chat
+        .thread_key()
+        .and_then(|value| normalize_thread_key(&value))
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "chat_object_id must reference a Chat with a provider thread identity".to_owned(),
+            )
+        })?;
+    let supplied_thread_key = actor
+        .centaur_thread_key
+        .as_deref()
+        .and_then(normalize_thread_key)
+        .ok_or_else(|| ApiError::BadRequest("X-Centaur-Thread-Key is invalid".to_owned()))?;
+    if supplied_thread_key != expected_thread_key {
+        return Err(ApiError::Forbidden(
+            "The requested Chat does not match the authenticated thread.".to_owned(),
+        ));
+    }
     let kind = query
         .kind
         .map(|value| allowed(value, "kind", OBJECT_KINDS))
         .transpose()?;
     let limit = query.limit.unwrap_or(10).clamp(1, 10);
-    let packet = search::search(
+    let packet = search::context(
         &state.pool,
         state.embeddings.as_ref(),
+        state.text_search_config,
         &query_text,
         kind.as_deref(),
+        chat_object_id,
         limit,
-        true,
     )
     .await?;
     Ok(Json(json!({"data": packet})))
@@ -226,13 +264,30 @@ async fn search_objects(
     let packet = search::search(
         &state.pool,
         state.embeddings.as_ref(),
+        state.text_search_config,
         &query_text,
         kind.as_deref(),
         bounded_limit(query.limit),
-        false,
     )
     .await?;
     Ok(Json(json!({"data": packet})))
+}
+
+fn normalize_thread_key(value: &str) -> Option<String> {
+    if value.len() > 1_000 {
+        return None;
+    }
+    let parts = value.split(':').map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4 || parts.iter().any(|part| part.is_empty()) {
+        return None;
+    }
+    Some(format!(
+        "{}:{}:{}:{}",
+        parts[0].to_ascii_lowercase(),
+        parts[1],
+        parts[2],
+        parts[3]
+    ))
 }
 
 async fn read_context_object(
@@ -271,6 +326,7 @@ async fn list_objects(
             kind,
             lifecycle,
             limit: bounded_limit(query.limit),
+            text_search_config: state.text_search_config,
         },
     )
     .await?;

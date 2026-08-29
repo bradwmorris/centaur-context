@@ -18,6 +18,7 @@ pub struct Config {
     pub interaction_inactivity: std::time::Duration,
     pub inactivity_poll_interval: std::time::Duration,
     pub embedding: Option<EmbeddingConfig>,
+    pub text_search_config: TextSearchConfig,
     pub curator_model: Option<CuratorModelConfig>,
     pub static_dir: PathBuf,
 }
@@ -28,7 +29,65 @@ pub struct EmbeddingConfig {
     pub api_token: String,
     pub model: String,
     pub dimensions: i32,
+    pub input_mode: EmbeddingInputMode,
     pub poll_interval: std::time::Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddingInputMode {
+    Shared,
+    Typed,
+}
+
+impl EmbeddingInputMode {
+    pub fn document_mode(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Typed => "search_document",
+        }
+    }
+
+    pub fn query_mode(self) -> Option<&'static str> {
+        match self {
+            Self::Shared => None,
+            Self::Typed => Some("search_query"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextSearchConfig(&'static str);
+
+impl TextSearchConfig {
+    pub const SIMPLE: Self = Self("simple");
+
+    pub fn parse(value: &str) -> Result<Self> {
+        let value = value.trim().to_ascii_lowercase();
+        let value = match value.as_str() {
+            "simple" => "simple",
+            "english" => "english",
+            "dutch" => "dutch",
+            "french" => "french",
+            "german" => "german",
+            "italian" => "italian",
+            "portuguese" => "portuguese",
+            "spanish" => "spanish",
+            _ => bail!(
+                "TEXT_SEARCH_CONFIG must be one of: simple, dutch, english, french, german, italian, portuguese, spanish"
+            ),
+        };
+        Ok(Self(value))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl Default for TextSearchConfig {
+    fn default() -> Self {
+        Self::SIMPLE
+    }
 }
 
 #[derive(Clone)]
@@ -84,6 +143,9 @@ impl Config {
             )?,
             inactivity_poll_interval: parse_duration_seconds("INACTIVITY_POLL_SECONDS", 30, 5)?,
             embedding,
+            text_search_config: TextSearchConfig::parse(
+                &env::var("TEXT_SEARCH_CONFIG").unwrap_or_else(|_| "simple".to_owned()),
+            )?,
             curator_model,
             static_dir: env::var("STATIC_DIR")
                 .map(PathBuf::from)
@@ -149,11 +211,22 @@ fn embedding_config() -> Result<Option<EmbeddingConfig>> {
     if !(1..=2000).contains(&dimensions) {
         bail!("EMBEDDING_DIMENSIONS must be between 1 and 2000 for pgvector HNSW indexing");
     }
+    let input_mode = match env::var("EMBEDDING_INPUT_MODE")
+        .unwrap_or_else(|_| "shared".to_owned())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "shared" => EmbeddingInputMode::Shared,
+        "typed" => EmbeddingInputMode::Typed,
+        _ => bail!("EMBEDDING_INPUT_MODE must be either shared or typed"),
+    };
     Ok(Some(EmbeddingConfig {
         endpoint,
         api_token,
         model,
         dimensions,
+        input_mode,
         poll_interval: parse_duration_seconds("EMBEDDING_POLL_SECONDS", 5, 1)?,
     }))
 }
@@ -193,4 +266,30 @@ fn parse_addr(name: &str, default: &str) -> Result<SocketAddr> {
         .unwrap_or_else(|_| default.to_owned())
         .parse()
         .with_context(|| format!("{name} must be a socket address"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EmbeddingInputMode, TextSearchConfig};
+
+    #[test]
+    fn text_search_configuration_is_allowlisted() {
+        assert_eq!(
+            TextSearchConfig::parse(" simple ").unwrap().as_str(),
+            "simple"
+        );
+        assert_eq!(
+            TextSearchConfig::parse("FRENCH").unwrap().as_str(),
+            "french"
+        );
+        assert!(TextSearchConfig::parse("simple; DROP TABLE objects").is_err());
+    }
+
+    #[test]
+    fn embedding_modes_distinguish_queries_and_documents_only_when_requested() {
+        assert_eq!(EmbeddingInputMode::Shared.document_mode(), "shared");
+        assert_eq!(EmbeddingInputMode::Shared.query_mode(), None);
+        assert_eq!(EmbeddingInputMode::Typed.document_mode(), "search_document");
+        assert_eq!(EmbeddingInputMode::Typed.query_mode(), Some("search_query"));
+    }
 }

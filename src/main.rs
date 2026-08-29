@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         pool,
         embeddings: embedding_client.clone(),
+        text_search_config: config.text_search_config,
     };
     let human = api::human_router(state.clone(), config.static_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
@@ -96,9 +97,16 @@ async fn main() -> Result<()> {
     let curator_pool = state.pool.clone();
     let curator_embeddings = state.embeddings.clone();
     let curator_model = config.curator_model.clone();
+    let curator_text_search_config = config.text_search_config;
     let curator_worker = async move {
         if let Some(curator_model) = curator_model {
-            centaur_os::curator::run_worker(curator_pool, curator_embeddings, curator_model).await;
+            centaur_os::curator::run_worker(
+                curator_pool,
+                curator_embeddings,
+                curator_model,
+                curator_text_search_config,
+            )
+            .await;
         } else {
             info!(
                 "Context Curator model disabled; queued runs remain available for the internal curator API"

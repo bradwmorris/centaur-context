@@ -1,4 +1,10 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use centaur_os::{
+    api::{AppState, agent_router},
+    config::{EmbeddingConfig, EmbeddingInputMode, TextSearchConfig},
     curator::{
         self, CreateConnection as CuratorConnection, CreateObject as CuratorObject, MemoryFields,
         ObjectRef, ReconciliationPlan, TaskFields,
@@ -8,16 +14,19 @@ use centaur_os::{
         ObjectListFilter, TaskChanges,
     },
     domain::ActorContext,
+    embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
     ingest::{
         SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
         queue_inactive_interactions,
     },
     search,
 };
+use http_body_util::BodyExt;
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tower::ServiceExt;
 
 async fn test_pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
@@ -153,6 +162,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             kind: None,
             lifecycle: None,
             limit: 20,
+            text_search_config: TextSearchConfig::SIMPLE,
         },
     )
     .await
@@ -167,6 +177,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             kind: None,
             lifecycle: None,
             limit: 20,
+            text_search_config: TextSearchConfig::SIMPLE,
         },
     )
     .await
@@ -182,6 +193,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 kind: None,
                 lifecycle: None,
                 limit: 20,
+                text_search_config: TextSearchConfig::SIMPLE,
             },
         )
         .await
@@ -253,33 +265,46 @@ async fn canonical_ontology_and_revision_conflicts() {
         Err(DbError::Conflict)
     ));
 
-    let context = search::search(&pool, None, "shared context engine", None, 10, true)
-        .await
-        .unwrap();
+    let context = search::search(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "shared context engine",
+        None,
+        10,
+    )
+    .await
+    .unwrap();
     assert_eq!(context.retrieval, "full_text");
     assert!(context.objects.len() <= 10);
-    assert!(context.objects.iter().any(|item| item.id == second.id));
-    assert!(
-        context
-            .objects
-            .iter()
-            .find(|item| item.id == second.id)
-            .is_some_and(|item| !item.connections.is_empty())
-    );
-    let memory_only_context =
-        search::search(&pool, None, "shared context", Some("memory"), 10, true)
-            .await
-            .unwrap();
+    assert!(context.objects.iter().any(|item| item.id == first.id));
+    let memory_only_context = search::search(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "shared context",
+        Some("memory"),
+        10,
+    )
+    .await
+    .unwrap();
     assert!(
         memory_only_context
             .objects
             .iter()
             .all(|item| item.kind == "memory"),
-        "one-hop expansion must preserve an explicit kind filter"
+        "search must preserve an explicit kind filter"
     );
-    let plain_search = search::search(&pool, None, "shared context", None, 10, false)
-        .await
-        .unwrap();
+    let plain_search = search::search(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "shared context",
+        None,
+        10,
+    )
+    .await
+    .unwrap();
     assert!(
         plain_search
             .objects
@@ -292,28 +317,136 @@ async fn canonical_ontology_and_revision_conflicts() {
             .iter()
             .all(|item| !item.relevance.rationale.contains("active connection"))
     );
+    let multilingual = db::create_object(
+        &pool,
+        &actor(),
+        NewObject {
+            kind: "entity".to_owned(),
+            title: "東京移行計画 Northwind-42".to_owned(),
+            description: "Les équipes françaises préparent les migrations client.".to_owned(),
+            provenance: json!({"source_type": "human"}),
+        },
+        "create-multilingual-search-fixture",
+    )
+    .await
+    .unwrap();
+    let neutral_matches = db::full_text_candidates(
+        &pool,
+        TextSearchConfig::SIMPLE,
+        "東京移行計画 Northwind-42",
+        None,
+        10,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        neutral_matches
+            .iter()
+            .any(|candidate| candidate.object.id == multilingual.id)
+    );
+    let french_matches = db::full_text_candidates(
+        &pool,
+        TextSearchConfig::parse("french").unwrap(),
+        "migration",
+        None,
+        10,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        french_matches
+            .iter()
+            .any(|candidate| candidate.object.id == multilingual.id)
+    );
+    let unavailable_embeddings = EmbeddingClient::new(&EmbeddingConfig {
+        endpoint: "http://127.0.0.1:1/embeddings".to_owned(),
+        api_token: "local-test-token".to_owned(),
+        model: "unavailable-test-model".to_owned(),
+        dimensions: 3,
+        input_mode: EmbeddingInputMode::Shared,
+        poll_interval: Duration::from_secs(1),
+    })
+    .unwrap();
+    let fallback = search::search(
+        &pool,
+        Some(&unavailable_embeddings),
+        TextSearchConfig::SIMPLE,
+        "shared context",
+        None,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fallback.retrieval, "full_text");
 
     db::ensure_embedding_index(&pool, 3).await.unwrap();
     let source_hash: String = sqlx::query_scalar(
-        "SELECT object_embedding_source_hash(kind,title,description) FROM objects WHERE id=$1",
+        "SELECT object_embedding_source_hash($2,kind,title,description) FROM objects WHERE id=$1",
     )
     .bind(second.id)
+    .bind(OBJECT_EMBEDDING_FORMAT)
     .fetch_one(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO object_embeddings (object_id,model,dimensions,source_hash,embedding) VALUES ($1,'test-model',3,$2,'[1,0,0]'::vector)",
+        "INSERT INTO object_embeddings (object_id,model,dimensions,format_version,input_mode,source_hash,embedding) VALUES ($1,'test-model',3,$2,'shared',$3,'[1,0,0]'::vector)",
     )
     .bind(second.id)
+    .bind(OBJECT_EMBEDDING_FORMAT)
     .bind(source_hash)
     .execute(&pool)
     .await
     .unwrap();
-    let semantic =
-        db::semantic_candidates(&pool, &[1.0, 0.0, 0.0], "test-model", 3, None, 10, false)
-            .await
-            .unwrap();
+    let semantic = db::semantic_candidates(
+        &pool,
+        &[1.0, 0.0, 0.0],
+        "test-model",
+        3,
+        OBJECT_EMBEDDING_FORMAT,
+        "shared",
+        None,
+        10,
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(semantic[0].object.id, second.id);
+    assert!(
+        db::semantic_candidates(
+            &pool,
+            &[1.0, 0.0, 0.0],
+            "test-model",
+            3,
+            "centaur-object-v2",
+            "shared",
+            None,
+            10,
+            false,
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "a stale embedding format must never participate"
+    );
+    assert!(
+        db::semantic_candidates(
+            &pool,
+            &[1.0, 0.0, 0.0],
+            "test-model",
+            3,
+            OBJECT_EMBEDDING_FORMAT,
+            "search_document",
+            None,
+            10,
+            false,
+        )
+        .await
+        .unwrap()
+        .is_empty(),
+        "a stale provider input mode must never participate"
+    );
 
     db::update_object(
         &pool,
@@ -329,17 +462,33 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
     assert!(
-        db::semantic_candidates(&pool, &[1.0, 0.0, 0.0], "test-model", 3, None, 10, false,)
-            .await
-            .unwrap()
-            .is_empty(),
+        db::semantic_candidates(
+            &pool,
+            &[1.0, 0.0, 0.0],
+            "test-model",
+            3,
+            OBJECT_EMBEDDING_FORMAT,
+            "shared",
+            None,
+            10,
+            false,
+        )
+        .await
+        .unwrap()
+        .is_empty(),
         "an embedding must stop participating as soon as its Object text changes"
     );
 
     assert!(
-        db::queue_missing_embeddings(&pool, "worker-test-model")
-            .await
-            .unwrap()
+        db::queue_missing_embeddings(
+            &pool,
+            "worker-test-model",
+            3,
+            OBJECT_EMBEDDING_FORMAT,
+            "shared",
+        )
+        .await
+        .unwrap()
             > 0
     );
 
@@ -347,9 +496,17 @@ async fn canonical_ontology_and_revision_conflicts() {
         .await
         .unwrap()
         .expect("migration and Object writes must queue embedding work");
-    db::complete_embedding_job(&pool, &claimed, "worker-test-model", 3, &[0.0, 1.0, 0.0])
-        .await
-        .unwrap();
+    db::complete_embedding_job(
+        &pool,
+        &claimed,
+        "worker-test-model",
+        3,
+        OBJECT_EMBEDDING_FORMAT,
+        "shared",
+        &[0.0, 1.0, 0.0],
+    )
+    .await
+    .unwrap();
     let stored_worker_embedding: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM object_embeddings WHERE object_id=$1 AND model='worker-test-model')",
     )
@@ -358,6 +515,97 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
     assert!(stored_worker_embedding);
+    assert!(
+        db::queue_missing_embeddings(
+            &pool,
+            "worker-test-model",
+            3,
+            OBJECT_EMBEDDING_FORMAT,
+            "search_document",
+        )
+        .await
+        .unwrap()
+            > 0,
+        "changing provider input mode must queue rebuilds"
+    );
+    let queued_mode: String =
+        sqlx::query_scalar("SELECT input_mode FROM object_embedding_jobs WHERE object_id=$1")
+            .bind(claimed.object_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(queued_mode, "search_document");
+    sqlx::query("DELETE FROM object_embedding_jobs WHERE object_id<>$1")
+        .bind(claimed.object_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE object_embedding_jobs SET available_at=now() WHERE object_id=$1")
+        .bind(claimed.object_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let failed_job = db::claim_embedding_job(&pool).await.unwrap().unwrap();
+    db::fail_embedding_job(&pool, failed_job.object_id, "temporary local test failure")
+        .await
+        .unwrap();
+    let failed_state: (String, i32) =
+        sqlx::query_as("SELECT status,attempts FROM object_embedding_jobs WHERE object_id=$1")
+            .bind(failed_job.object_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(failed_state, ("failed".to_owned(), 1));
+    sqlx::query("UPDATE object_embedding_jobs SET available_at=now() WHERE object_id=$1")
+        .bind(failed_job.object_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let retried_job = db::claim_embedding_job(&pool).await.unwrap().unwrap();
+    let retry_attempts: i32 =
+        sqlx::query_scalar("SELECT attempts FROM object_embedding_jobs WHERE object_id=$1")
+            .bind(retried_job.object_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(retry_attempts, 2);
+    db::complete_embedding_job(
+        &pool,
+        &retried_job,
+        "worker-test-model",
+        3,
+        OBJECT_EMBEDDING_FORMAT,
+        "search_document",
+        &[0.0, 1.0, 0.0],
+    )
+    .await
+    .unwrap();
+    assert!(
+        db::queue_missing_embeddings(
+            &pool,
+            "worker-test-model",
+            4,
+            OBJECT_EMBEDDING_FORMAT,
+            "search_document",
+        )
+        .await
+        .unwrap()
+            > 0,
+        "changing dimensions must queue rebuilds"
+    );
+    assert!(
+        db::queue_missing_embeddings(
+            &pool,
+            "worker-test-model",
+            4,
+            "centaur-object-v2",
+            "search_document",
+        )
+        .await
+        .unwrap()
+            > 0,
+        "changing the formatter version must queue rebuilds"
+    );
 
     for index in 0..12 {
         db::create_object(
@@ -374,9 +622,16 @@ async fn canonical_ontology_and_revision_conflicts() {
         .await
         .unwrap();
     }
-    let capped_context = search::search(&pool, None, "ranking eval", None, 50, true)
-        .await
-        .unwrap();
+    let capped_context = search::search(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "ranking eval",
+        None,
+        10,
+    )
+    .await
+    .unwrap();
     assert_eq!(capped_context.objects.len(), 10);
 
     let task = db::create_task(
@@ -1062,4 +1317,258 @@ async fn canonical_ontology_and_revision_conflicts() {
     let dm_task = db::get_task(&pool, dm_task_id).await.unwrap();
     assert_eq!(dm_task.status, "todo");
     assert_eq!(dm_task.due_at, Some(timestamp("2026-05-30T00:00:00Z")));
+    let graph_entity = db::create_object(
+        &pool,
+        &actor(),
+        NewObject {
+            kind: "entity".to_owned(),
+            title: "Northwind validation service".to_owned(),
+            description: "A validation system used by the migration verification workflow."
+                .to_owned(),
+            provenance: json!({"source_type": "human"}),
+        },
+        "create-context-graph-entity",
+    )
+    .await
+    .unwrap();
+    db::create_connection(
+        &pool,
+        &actor(),
+        NewConnection {
+            source_object_id: dm_task_id,
+            kind: "about".to_owned(),
+            target_object_id: graph_entity.id,
+            description: "The verification Task concerns this customer system.".to_owned(),
+            provenance: json!({"source_type": "human"}),
+            protected: false,
+        },
+        "connect-context-graph-entity",
+    )
+    .await
+    .unwrap();
+
+    let context_chat = db::get_context_chat(&pool, dm.chat_object_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        context_chat.thread_key().as_deref(),
+        Some("slack:T_PUBLIC:D_CONTEXT:1780200000.000100")
+    );
+    let context = search::context(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "customer import",
+        None,
+        dm.chat_object_id,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(context.objects.first().unwrap().id, dm.chat_object_id);
+    assert!(
+        dm.participant_object_ids
+            .iter()
+            .all(|participant_id| context
+                .objects
+                .iter()
+                .any(|object| object.id == *participant_id)),
+        "all current Chat participants must be deterministic context candidates"
+    );
+    let context_task = context
+        .objects
+        .iter()
+        .find(|object| object.id == dm_task_id)
+        .expect("the directly connected Task must be anchored");
+    assert_eq!(context_task.subtype.as_ref().unwrap()["status"], "todo");
+    assert_eq!(context_task.subtype.as_ref().unwrap()["priority"], "medium");
+    assert!(
+        context_task
+            .relevance
+            .rationale
+            .contains("Directly connected")
+    );
+    assert!(
+        context
+            .objects
+            .iter()
+            .find(|object| object.id == graph_entity.id)
+            .is_some_and(|object| object.relevance.rationale.starts_with("Connected by about")),
+        "one-hop graph expansion must explain why a neighboring Object was included"
+    );
+    let context_chat_result = context
+        .objects
+        .iter()
+        .find(|object| object.id == dm.chat_object_id)
+        .unwrap();
+    assert_eq!(
+        context_chat_result.subtype.as_ref().unwrap()["current_thread"],
+        true
+    );
+    assert!(context.objects.iter().all(|object| {
+        object
+            .subtype
+            .as_ref()
+            .and_then(|subtype| subtype["kind"].as_str())
+            == Some(object.kind.as_str())
+    }));
+    let entity_read = search::read_object(&pool, second.id).await.unwrap();
+    assert_eq!(
+        entity_read.subtype.as_ref().unwrap()["entity_kind"],
+        "general"
+    );
+    let memory_read = search::read_object(&pool, first.id).await.unwrap();
+    assert!(memory_read.subtype.as_ref().unwrap()["happened_at"].is_string());
+    let budget = context.budget.as_ref().unwrap();
+    assert!(context.objects.len() <= 10);
+    assert!(
+        serde_json::to_string(&context).unwrap().chars().count() <= budget.max_characters,
+        "the complete serialized packet must stay inside its declared budget"
+    );
+    assert_eq!(
+        budget.serialized_characters,
+        serde_json::to_string(&context).unwrap().chars().count()
+    );
+    let repeated_context = search::context(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "customer import",
+        None,
+        dm.chat_object_id,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        context
+            .objects
+            .iter()
+            .map(|object| object.id)
+            .collect::<Vec<_>>(),
+        repeated_context
+            .objects
+            .iter()
+            .map(|object| object.id)
+            .collect::<Vec<_>>()
+    );
+
+    let agent_state = AppState {
+        pool: pool.clone(),
+        embeddings: None,
+        text_search_config: TextSearchConfig::SIMPLE,
+    };
+    let router = agent_router(agent_state, "a".repeat(32));
+    let authorized_uri = format!(
+        "/api/v1/context?q=customer&chat_object_id={}",
+        dm.chat_object_id
+    );
+    let authorized = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorized_uri)
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header(
+                    "x-centaur-thread-key",
+                    "Slack:T_PUBLIC:D_CONTEXT:1780200000.000100",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), StatusCode::OK);
+    let authorized_body = authorized.into_body().collect().await.unwrap().to_bytes();
+    let authorized_json: serde_json::Value = serde_json::from_slice(&authorized_body).unwrap();
+    assert_eq!(
+        authorized_json["data"]["objects"][0]["id"],
+        dm.chat_object_id.to_string()
+    );
+
+    let mismatched = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&authorized_uri)
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header(
+                    "x-centaur-thread-key",
+                    "slack:T_PUBLIC:D_OTHER:1780200000.000100",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatched.status(), StatusCode::FORBIDDEN);
+
+    let wrong_type = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/context?q=customer&chat_object_id={}",
+                    second.id
+                ))
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header(
+                    "x-centaur-thread-key",
+                    "slack:T_PUBLIC:D_CONTEXT:1780200000.000100",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_type.status(), StatusCode::NOT_FOUND);
+
+    let search_without_chat = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/search/objects?q=customer")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header("x-centaur-thread-key", "any:valid:thread:key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(search_without_chat.status(), StatusCode::OK);
+
+    let dm_object = db::get_object(&pool, dm.chat_object_id).await.unwrap();
+    db::update_object(
+        &pool,
+        &actor(),
+        dm.chat_object_id,
+        dm_object.revision,
+        ObjectChanges {
+            archive: true,
+            ..Default::default()
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    let inactive = router
+        .oneshot(
+            Request::builder()
+                .uri(&authorized_uri)
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "principal-test")
+                .header(
+                    "x-centaur-thread-key",
+                    "slack:T_PUBLIC:D_CONTEXT:1780200000.000100",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inactive.status(), StatusCode::BAD_REQUEST);
 }

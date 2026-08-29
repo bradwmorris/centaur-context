@@ -139,12 +139,25 @@ class CentaurOsClient:
         except ValueError as exc:
             raise RuntimeError("Centaur OS returned invalid JSON") from exc
 
-    def get_context(self, query: str, kind: str | None = None, limit: int = 10) -> dict[str, Any]:
+    def get_context(
+        self,
+        query: str,
+        chat_object_id: str,
+        kind: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
         """Build a concise context packet of at most ten canonical Objects."""
         query = _clean(query)
         if not query:
             raise ValueError("query is required")
-        params: dict[str, Any] = {"q": query, "limit": min(_bounded_limit(limit), 10)}
+        chat_object_id = _clean(chat_object_id)
+        if not chat_object_id:
+            raise ValueError("chat_object_id is required")
+        params: dict[str, Any] = {
+            "q": query,
+            "chat_object_id": chat_object_id,
+            "limit": min(_bounded_limit(limit), 10),
+        }
         if _clean(kind):
             params["kind"] = _clean(kind)
         return self._request("GET", "/api/v1/context", params=params)

@@ -72,6 +72,12 @@ outside the cluster, review
 [`deploy/provider-egress.example.yaml`](../deploy/provider-egress.example.yaml)
 before allowing that traffic.
 
+`TEXT_SEARCH_CONFIG` defaults to the language-neutral `simple` configuration.
+Installers may select `dutch`, `english`, `french`, `german`, `italian`,
+`portuguese`, or `spanish`. Embedding providers use one shared request shape by
+default; set `EMBEDDING_INPUT_MODE=typed` only when the provider supports the
+`search_document` and `search_query` input types.
+
 ## 4. Install
 
 ```bash

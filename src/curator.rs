@@ -1405,6 +1405,7 @@ pub async fn run_worker(
     pool: PgPool,
     embeddings: Option<crate::embeddings::EmbeddingClient>,
     config: CuratorModelConfig,
+    text_search_config: crate::config::TextSearchConfig,
 ) {
     let worker_id = format!("context-curator-{}", Uuid::new_v4());
     let client = match reqwest::Client::builder()
@@ -1429,7 +1430,8 @@ pub async fn run_worker(
             }
         };
         let outcome = async {
-            let (messages, candidates) = worker_context(&pool, embeddings.as_ref(), &run).await?;
+            let (messages, candidates) =
+                worker_context(&pool, embeddings.as_ref(), text_search_config, &run).await?;
             let mut plan =
                 request_plan(&client, &config, &run, &messages, &candidates, None).await?;
             if let Err(error) = validate_plan(&mut plan) {
@@ -1506,6 +1508,7 @@ async fn claim_run(
 async fn worker_context(
     pool: &PgPool,
     embeddings: Option<&crate::embeddings::EmbeddingClient>,
+    text_search_config: crate::config::TextSearchConfig,
     run: &CuratorRun,
 ) -> Result<(Vec<WorkerMessage>, crate::search::SearchPacket), CuratorError> {
     let messages: Vec<WorkerMessage> = sqlx::query_as(
@@ -1537,9 +1540,12 @@ async fn worker_context(
         .chars()
         .take(1000)
         .collect::<String>();
-    let mut candidates = crate::search::search(pool, embeddings, &query, None, 20, false)
-        .await
-        .map_err(|error| CuratorError::Invalid(format!("candidate retrieval failed: {error}")))?;
+    let mut candidates =
+        crate::search::search(pool, embeddings, text_search_config, &query, None, 20)
+            .await
+            .map_err(|error| {
+                CuratorError::Invalid(format!("candidate retrieval failed: {error}"))
+            })?;
     let candidate_ids = candidates
         .objects
         .iter()

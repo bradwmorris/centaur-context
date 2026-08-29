@@ -54,12 +54,26 @@ def test_get_context_caps_the_packet_at_ten_objects() -> None:
             {"data": {"query": "shared", "retrieval": "full_text", "objects": []}}
         )
 
-    result = make_client(handler).get_context("shared", limit=500)
+    result = make_client(handler).get_context(
+        "shared", chat_object_id="11111111-1111-4111-8111-111111111111", limit=500
+    )
 
     assert result["query"] == "shared"
     assert requests[0].url.path == "/api/v1/context"
     assert requests[0].url.params["limit"] == "10"
+    assert (
+        requests[0].url.params["chat_object_id"]
+        == "11111111-1111-4111-8111-111111111111"
+    )
     assert requests[0].method == "GET"
+
+
+def test_get_context_requires_a_chat_object_before_request() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request should not be sent")
+
+    with pytest.raises(ValueError, match="chat_object_id is required"):
+        make_client(handler).get_context("shared", chat_object_id="  ")
 
 
 def test_resolves_principal_from_console_permissions() -> None:

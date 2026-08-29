@@ -62,6 +62,8 @@ spec:
                   key: APPROVED_SLACK_SURFACES
             - name: INTERACTION_INACTIVITY_SECONDS
               value: "600"
+            - name: TEXT_SEARCH_CONFIG
+              value: simple
             - name: EMBEDDING_API_URL
               valueFrom:
                 secretKeyRef:
@@ -86,6 +88,8 @@ spec:
                   name: centaur-os-env
                   key: EMBEDDING_DIMENSIONS
                   optional: true
+            - name: EMBEDDING_INPUT_MODE
+              value: shared
             - name: CURATOR_MODEL_API_URL
               valueFrom:
                 secretKeyRef:
