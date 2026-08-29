@@ -23,6 +23,36 @@ fn state() -> AppState {
 }
 
 #[tokio::test]
+async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
+    let static_dir = std::env::temp_dir().join(format!(
+        "centaur-context-spa-deep-link-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&static_dir).unwrap();
+    std::fs::write(
+        static_dir.join("index.html"),
+        "<main>Centaur Context</main>",
+    )
+    .unwrap();
+
+    let response = human_router(state(), static_dir.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/objects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    std::fs::remove_dir_all(static_dir).unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_ref(), b"<main>Centaur Context</main>");
+}
+
+#[tokio::test]
 async fn curator_listener_uses_its_own_credential_and_is_not_an_agent_surface() {
     let router = curator_router(state(), "c".repeat(32));
     let agent_credential = router

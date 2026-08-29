@@ -48,7 +48,7 @@ pub fn human_router(state: AppState, static_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
     Router::new()
         .merge(service_router(state))
-        .fallback_service(ServeDir::new(static_dir).not_found_service(ServeFile::new(index)))
+        .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index)))
         .layer(Extension(ActorContext::human()))
         .layer(TraceLayer::new_for_http())
 }
