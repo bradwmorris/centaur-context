@@ -81,7 +81,11 @@ describe("canonical Object identity across the application", () => {
   it("shows a compact copyable canonical Object ID in all six primary lists and Curator rows", async () => {
     window.history.replaceState({}, "", "/objects");
     render(<App />);
-    expect(await screen.findByRole("button", { name: `Copy Object ID ${ids.task}` })).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
+    const firstPill = await screen.findByRole("button", { name: `Copy Object ID ${ids.task}` });
+    expect(firstPill).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
+    const firstTitle = firstPill.parentElement?.nextElementSibling;
+    expect(firstTitle).toHaveTextContent("Canonical task");
+    expect(firstTitle?.nextElementSibling).toHaveTextContent("task");
     for (const [section, id] of [["Tasks", ids.task], ["Chats", ids.chat], ["Users", ids.user], ["Entities", ids.entity], ["Memories", ids.memory], ["Curator Runs", ids.chat]] as const) {
       await userEvent.click(screen.getByRole("button", { name: section }));
       expect(await screen.findByRole("button", { name: `Copy Object ID ${id}` })).toHaveTextContent(`ID: ${id.slice(0, 5)}`);

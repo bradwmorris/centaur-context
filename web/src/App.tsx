@@ -119,10 +119,10 @@ export default function App() {
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="row-grip">···</span>
-                  <span className={`kind ${itemBadge(item)}`}>{itemBadge(item)}</span>
-                  <strong>{itemTitle(item, objects)}</strong>
-                  <p>{itemDescription(item)}</p>
                   <ObjectId id={canonicalObjectId(item)} rowPill />
+                  <strong>{itemTitle(item, objects)}</strong>
+                  <span className={`kind ${itemBadge(item)}`}>{itemBadge(item)}</span>
+                  <p>{itemDescription(item)}</p>
                   <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
                 </div>
               ))}
