@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, QueryBuilder, Transaction};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -130,6 +131,100 @@ pub struct User {
     pub user_kind: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct Source {
+    pub object_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub provenance: Value,
+    pub protected: bool,
+    pub source_kind: String,
+    pub canonical_uri: Option<String>,
+    pub byline: Option<String>,
+    pub publisher: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub published_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub accessed_at: Option<OffsetDateTime>,
+    pub language: Option<String>,
+    pub media_type: Option<String>,
+    pub artifact_reference: Option<String>,
+    pub content_hash: Option<String>,
+    pub current_content_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct SourceContent {
+    pub id: Uuid,
+    pub source_object_id: Uuid,
+    pub version: i64,
+    pub content_kind: String,
+    #[serde(skip_serializing)]
+    pub normalized_text: String,
+    pub language: Option<String>,
+    pub extraction_method: Option<String>,
+    pub extraction_version: Option<String>,
+    pub content_hash: String,
+    pub size_bytes: i64,
+    pub artifact_reference: Option<String>,
+    pub locators: Value,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct SourceSearchResult {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub source: Source,
+    pub excerpt: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SourceContentWindow {
+    #[serde(flatten)]
+    pub content: SourceContent,
+    pub text: String,
+    pub offset: i64,
+    pub next_offset: Option<i64>,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct Note {
+    pub object_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub provenance: Value,
+    pub protected: bool,
+    pub content: String,
+    pub content_format: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct NoteSearchResult {
+    pub object_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub content_format: String,
+    pub excerpt: String,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -379,11 +474,83 @@ pub struct ObjectListFilter {
 }
 
 #[derive(Clone, Debug)]
+pub struct SourceListFilter {
+    pub query: Option<String>,
+    pub source_kind: Option<String>,
+    pub cursor: Option<Uuid>,
+    pub limit: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct NoteListFilter {
+    pub query: Option<String>,
+    pub cursor: Option<Uuid>,
+    pub limit: i64,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewObject {
     pub kind: String,
     pub title: String,
     pub description: String,
     pub provenance: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewSource {
+    pub title: String,
+    pub description: String,
+    pub provenance: Value,
+    pub source_kind: String,
+    pub canonical_uri: Option<String>,
+    pub byline: Option<String>,
+    pub publisher: Option<String>,
+    pub published_at: Option<OffsetDateTime>,
+    pub accessed_at: Option<OffsetDateTime>,
+    pub language: Option<String>,
+    pub media_type: Option<String>,
+    pub artifact_reference: Option<String>,
+    pub content_hash: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewNote {
+    pub title: String,
+    pub description: String,
+    pub provenance: Value,
+    pub content: String,
+    pub content_format: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SourceChanges {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub provenance: Option<Value>,
+    pub protected: Option<bool>,
+    pub archive: bool,
+    pub source_kind: Option<String>,
+    pub canonical_uri: Option<Option<String>>,
+    pub byline: Option<Option<String>>,
+    pub publisher: Option<Option<String>>,
+    pub published_at: Option<Option<OffsetDateTime>>,
+    pub accessed_at: Option<Option<OffsetDateTime>>,
+    pub language: Option<Option<String>>,
+    pub media_type: Option<Option<String>>,
+    pub artifact_reference: Option<Option<String>>,
+    pub content_hash: Option<Option<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewSourceContent {
+    pub expected_revision: i64,
+    pub content_kind: String,
+    pub normalized_text: String,
+    pub language: Option<String>,
+    pub extraction_method: Option<String>,
+    pub extraction_version: Option<String>,
+    pub artifact_reference: Option<String>,
+    pub locators: Value,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -520,6 +687,394 @@ pub async fn get_object(pool: &PgPool, id: Uuid) -> Result<Object, DbError> {
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::NotFound)
+}
+
+const SOURCE_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+       o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
+       s.published_at,s.accessed_at,s.language,s.media_type,s.artifact_reference,
+       s.content_hash,s.current_content_id,o.created_at,o.updated_at
+FROM sources s JOIN objects o ON o.id=s.object_id"#;
+
+pub async fn get_source(pool: &PgPool, id: Uuid) -> Result<Source, DbError> {
+    sqlx::query_as(&format!("{SOURCE_SELECT} WHERE o.id=$1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
+pub async fn get_note(pool: &PgPool, id: Uuid) -> Result<Note, DbError> {
+    sqlx::query_as(
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+        o.provenance,o.protected,n.content,n.content_format,o.created_at,o.updated_at
+        FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.id=$1"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
+pub async fn list_notes(
+    pool: &PgPool,
+    filter: NoteListFilter,
+) -> Result<Vec<NoteSearchResult>, DbError> {
+    let mut query = QueryBuilder::<Postgres>::new(
+        r#"SELECT o.id AS object_id,o.title,o.description,
+        o.lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.updated_at
+        FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.lifecycle='active'"#,
+    );
+    if let Some(cursor) = filter.cursor {
+        query.push(" AND o.id>").push_bind(cursor);
+    }
+    if let Some(search) = filter.query {
+        query.push(" AND to_tsvector('simple',concat_ws(' ',o.title,o.description,n.content)) @@ websearch_to_tsquery('simple',")
+            .push_bind(search).push(")");
+    }
+    query.push(" ORDER BY o.id LIMIT ").push_bind(filter.limit);
+    Ok(query.build_query_as().fetch_all(pool).await?)
+}
+
+pub async fn create_note(
+    pool: &PgPool,
+    actor: &ActorContext,
+    input: NewNote,
+    idempotency_key: &str,
+) -> Result<Note, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        return get_note(pool, id).await;
+    }
+    validate_object_description(&input.title, &input.description)?;
+    let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
+    sqlx::query(r#"INSERT INTO objects
+        (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+        VALUES ($1,'note',$2,$3,$4,$5,$4,$5,$6)"#)
+        .bind(id).bind(&input.title).bind(&input.description).bind(actor.actor_type).bind(&actor.actor_id)
+        .bind(&input.provenance).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO notes (object_id,content,content_format) VALUES ($1,$2,$3)")
+        .bind(id)
+        .bind(&input.content)
+        .bind(&input.content_format)
+        .execute(&mut *tx)
+        .await?;
+    insert_event(&mut tx,actor,"object",id,id,"created",Some(idempotency_key),None,1,
+        json!({"kind":"note","title":input.title,"content_format":input.content_format,"content_characters":input.content.chars().count()})).await?;
+    tx.commit().await?;
+    get_note(pool, id).await
+}
+
+pub async fn list_sources(
+    pool: &PgPool,
+    filter: SourceListFilter,
+) -> Result<Vec<SourceSearchResult>, DbError> {
+    let mut query = QueryBuilder::<Postgres>::new(
+        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+           o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
+           s.published_at,s.accessed_at,s.language,s.media_type,s.artifact_reference,
+           s.content_hash,s.current_content_id,o.created_at,o.updated_at,
+           CASE WHEN sc.id IS NULL THEN NULL ELSE substring(sc.normalized_text FROM 1 FOR 400) END AS excerpt
+           FROM sources s JOIN objects o ON o.id=s.object_id
+           LEFT JOIN source_contents sc ON sc.id=s.current_content_id
+           WHERE o.lifecycle='active'"#,
+    );
+    if let Some(kind) = filter.source_kind {
+        query.push(" AND s.source_kind=").push_bind(kind);
+    }
+    if let Some(cursor) = filter.cursor {
+        query.push(" AND o.id>").push_bind(cursor);
+    }
+    if let Some(search) = filter.query {
+        query.push(
+            " AND to_tsvector('simple',concat_ws(' ',o.title,o.description,s.byline,s.publisher,sc.normalized_text)) @@ websearch_to_tsquery('simple',",
+        )
+        .push_bind(search)
+        .push(")");
+    }
+    query.push(" ORDER BY o.id LIMIT ").push_bind(filter.limit);
+    Ok(query.build_query_as().fetch_all(pool).await?)
+}
+
+pub async fn create_source(
+    pool: &PgPool,
+    actor: &ActorContext,
+    input: NewSource,
+    idempotency_key: &str,
+) -> Result<Source, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        return get_source(pool, id).await;
+    }
+    validate_object_description(&input.title, &input.description)?;
+    let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"INSERT INTO objects
+           (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+           VALUES ($1,'source',$2,$3,$4,$5,$4,$5,$6)"#,
+    )
+    .bind(id)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(&input.provenance)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"INSERT INTO sources
+           (object_id,source_kind,canonical_uri,byline,publisher,published_at,accessed_at,
+            language,media_type,artifact_reference,content_hash)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
+    )
+    .bind(id)
+    .bind(&input.source_kind)
+    .bind(&input.canonical_uri)
+    .bind(&input.byline)
+    .bind(&input.publisher)
+    .bind(input.published_at)
+    .bind(input.accessed_at)
+    .bind(&input.language)
+    .bind(&input.media_type)
+    .bind(&input.artifact_reference)
+    .bind(&input.content_hash)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        "created",
+        Some(idempotency_key),
+        None,
+        1,
+        json!({"kind":"source","title":input.title,"source_kind":input.source_kind}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_source(pool, id).await
+}
+
+pub async fn update_source(
+    pool: &PgPool,
+    actor: &ActorContext,
+    id: Uuid,
+    expected_revision: i64,
+    changes: SourceChanges,
+    idempotency_key: Option<&str>,
+) -> Result<Source, DbError> {
+    if let Some(key) = idempotency_key
+        && let Some(existing_id) = idempotent_entity(pool, actor, key).await?
+    {
+        return get_source(pool, existing_id).await;
+    }
+    let current = get_source(pool, id).await?;
+    let title = changes.title.unwrap_or_else(|| current.title.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
+    validate_object_description(&title, &description)?;
+    let provenance = changes
+        .provenance
+        .unwrap_or_else(|| current.provenance.clone());
+    let protected = changes.protected.unwrap_or(current.protected);
+    let canonical_uri = changes.canonical_uri.unwrap_or(current.canonical_uri);
+    let byline = changes.byline.unwrap_or(current.byline);
+    let publisher = changes.publisher.unwrap_or(current.publisher);
+    let published_at = changes.published_at.unwrap_or(current.published_at);
+    let accessed_at = changes.accessed_at.unwrap_or(current.accessed_at);
+    let language = changes.language.unwrap_or(current.language);
+    let media_type = changes.media_type.unwrap_or(current.media_type);
+    let artifact_reference = changes
+        .artifact_reference
+        .unwrap_or(current.artifact_reference);
+    let content_hash = changes.content_hash.unwrap_or(current.content_hash);
+    let lifecycle = if changes.archive {
+        "archived"
+    } else {
+        &current.lifecycle
+    };
+    let archived_at = changes.archive.then(OffsetDateTime::now_utc);
+    let mut tx = pool.begin().await?;
+    let updated_revision: Option<i64> = sqlx::query_scalar(
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,lifecycle=$7,
+           archived_at=CASE WHEN $7='archived' THEN COALESCE(archived_at,$8) ELSE archived_at END,
+           revision=revision+1,updated_by_type=$9,updated_by_id=$10,updated_at=now()
+           WHERE id=$1 AND kind='source' AND revision=$2 RETURNING revision"#,
+    )
+    .bind(id)
+    .bind(expected_revision)
+    .bind(&title)
+    .bind(&description)
+    .bind(&provenance)
+    .bind(protected)
+    .bind(lifecycle)
+    .bind(archived_at)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let updated_revision = updated_revision.ok_or(DbError::Conflict)?;
+    sqlx::query(
+        r#"UPDATE sources SET source_kind=COALESCE($2,source_kind),canonical_uri=$3,
+           byline=$4,publisher=$5,published_at=$6,
+           accessed_at=$7,language=$8,media_type=$9,
+           artifact_reference=$10,content_hash=$11,updated_at=now()
+           WHERE object_id=$1"#,
+    )
+    .bind(id)
+    .bind(&changes.source_kind)
+    .bind(&canonical_uri)
+    .bind(&byline)
+    .bind(&publisher)
+    .bind(published_at)
+    .bind(accessed_at)
+    .bind(&language)
+    .bind(&media_type)
+    .bind(&artifact_reference)
+    .bind(&content_hash)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        if changes.archive {
+            "archived"
+        } else {
+            "updated"
+        },
+        idempotency_key,
+        Some(expected_revision),
+        updated_revision,
+        json!({"kind":"source","metadata_changed":true,"lifecycle":lifecycle}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_source(pool, id).await
+}
+
+pub async fn list_source_contents(
+    pool: &PgPool,
+    source_id: Uuid,
+) -> Result<Vec<SourceContent>, DbError> {
+    get_source(pool, source_id).await?;
+    Ok(sqlx::query_as(
+        "SELECT * FROM source_contents WHERE source_object_id=$1 ORDER BY version DESC",
+    )
+    .bind(source_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_source_content_window(
+    pool: &PgPool,
+    source_id: Uuid,
+    version: Option<i64>,
+    offset: i64,
+    limit: i64,
+) -> Result<SourceContentWindow, DbError> {
+    let content: SourceContent = if let Some(version) = version {
+        sqlx::query_as("SELECT * FROM source_contents WHERE source_object_id=$1 AND version=$2")
+            .bind(source_id).bind(version).fetch_optional(pool).await?
+    } else {
+        sqlx::query_as("SELECT sc.* FROM sources s JOIN source_contents sc ON sc.id=s.current_content_id WHERE s.object_id=$1")
+            .bind(source_id).fetch_optional(pool).await?
+    }.ok_or(DbError::NotFound)?;
+    let total = content.normalized_text.chars().count() as i64;
+    if offset > total {
+        return Err(DbError::Validation(ValidationError::Unsupported {
+            field: "offset",
+            value: offset.to_string(),
+        }));
+    }
+    let text: String = content
+        .normalized_text
+        .chars()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    let end = offset + text.chars().count() as i64;
+    Ok(SourceContentWindow {
+        content,
+        text,
+        offset,
+        next_offset: (end < total).then_some(end),
+    })
+}
+
+pub async fn append_source_content(
+    pool: &PgPool,
+    actor: &ActorContext,
+    source_id: Uuid,
+    input: NewSourceContent,
+    idempotency_key: &str,
+) -> Result<SourceContent, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        return sqlx::query_as("SELECT * FROM source_contents WHERE id=$1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or(DbError::NotFound);
+    }
+    if input.normalized_text.is_empty() {
+        return Err(DbError::Validation(ValidationError::Required(
+            "normalized_text",
+        )));
+    }
+    let id = Uuid::new_v4();
+    let content_hash = format!("{:x}", Sha256::digest(input.normalized_text.as_bytes()));
+    let size_bytes = input.normalized_text.len() as i64;
+    let mut tx = pool.begin().await?;
+    let current_revision: Option<i64> = sqlx::query_scalar(
+        "SELECT revision FROM objects WHERE id=$1 AND kind='source' AND lifecycle='active' FOR UPDATE",
+    ).bind(source_id).fetch_optional(&mut *tx).await?;
+    if current_revision != Some(input.expected_revision) {
+        return Err(DbError::Conflict);
+    }
+    let version: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(max(version),0)+1 FROM source_contents WHERE source_object_id=$1",
+    )
+    .bind(source_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let content: SourceContent = sqlx::query_as(
+        r#"INSERT INTO source_contents
+           (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,
+            extraction_version,content_hash,size_bytes,artifact_reference,locators)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *"#,
+    )
+    .bind(id)
+    .bind(source_id)
+    .bind(version)
+    .bind(&input.content_kind)
+    .bind(&input.normalized_text)
+    .bind(&input.language)
+    .bind(&input.extraction_method)
+    .bind(&input.extraction_version)
+    .bind(&content_hash)
+    .bind(size_bytes)
+    .bind(&input.artifact_reference)
+    .bind(&input.locators)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("UPDATE sources SET current_content_id=$2,updated_at=now() WHERE object_id=$1")
+        .bind(source_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let revision: i64 = sqlx::query_scalar(
+        "UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1 RETURNING revision",
+    ).bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;
+    insert_event(&mut tx,actor,"source_content",id,source_id,"content_version_created",
+        Some(idempotency_key),Some(input.expected_revision),revision,
+        json!({"version":version,"content_kind":input.content_kind,"content_hash":content_hash,"size_bytes":size_bytes})
+    ).await?;
+    tx.commit().await?;
+    Ok(content)
 }
 
 pub async fn create_object(
@@ -1260,6 +1815,14 @@ pub async fn context_subtypes(
                         'kind','entity','entity_kind','general')
                     WHEN 'memory' THEN jsonb_build_object(
                         'kind','memory','happened_at',m.happened_at)
+                    WHEN 'source' THEN jsonb_strip_nulls(jsonb_build_object(
+                        'kind','source','source_kind',s.source_kind,'canonical_uri',s.canonical_uri,
+                        'publisher',s.publisher,'published_at',s.published_at,
+                        'language',s.language,'media_type',s.media_type,
+                        'current_content_id',s.current_content_id))
+                    WHEN 'note' THEN jsonb_build_object(
+                        'kind','note','content_format',n.content_format,
+                        'content_excerpt',substring(n.content FROM 1 FOR 400))
                   END AS subtype
            FROM objects o
            LEFT JOIN tasks t ON t.object_id=o.id
@@ -1267,6 +1830,8 @@ pub async fn context_subtypes(
            LEFT JOIN chats ch ON ch.object_id=o.id
            LEFT JOIN users u ON u.object_id=o.id
            LEFT JOIN memories m ON m.object_id=o.id
+           LEFT JOIN sources s ON s.object_id=o.id
+           LEFT JOIN notes n ON n.object_id=o.id
            LEFT JOIN LATERAL (
                SELECT e.display_name FROM external_identities e
                WHERE e.user_object_id=o.id AND e.display_name IS NOT NULL

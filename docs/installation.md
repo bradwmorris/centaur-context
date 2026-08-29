@@ -9,7 +9,7 @@ database.
 - PostgreSQL 16 with pgvector
 - Docker, `kubectl`, `psql`, `pg_dump`, and `pg_restore`
 - An existing Kubernetes namespace
-- Three different random API tokens, each at least 32 characters
+- Four different random API tokens, each at least 32 characters
 - The Slack workspace and channel IDs Centaur Context may accept
 
 ## 1. Check and build
@@ -48,6 +48,7 @@ into a protected Secret named `centaur-context-env`:
 ```text
 DATABASE_URL
 AGENT_API_TOKEN
+NOTE_WRITE_API_TOKEN
 CHAT_INGEST_API_TOKEN
 CURATOR_API_TOKEN
 APPROVED_SLACK_SURFACES
@@ -118,6 +119,10 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 
 - Load this release's `tools` directory through Centaur's overlay mechanism.
 - Give iron-proxy `AGENT_API_TOKEN`. Do not give it to the sandbox.
+- Give the separately authorized Note-writing tool `NOTE_WRITE_API_TOKEN` and
+  route it to `centaur-context-note-write:8084`; the separate service hostname
+  prevents ambiguity with the read credential. Do not reuse the read token or
+  expose either credential to the sandbox.
 - Configure Slack ingestion and context injection using the
   [Slack guide](slack-integration.md).
 

@@ -16,3 +16,19 @@ spec:
     - name: ingest
       port: 8082
       targetPort: ingest
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-note-write
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.2.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: note-write
+      port: 8084
+      targetPort: note-write

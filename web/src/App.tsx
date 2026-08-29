@@ -6,14 +6,14 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
-const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory" } as const;
+const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
+const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
-const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories"]);
+const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes"]);
 type CreateSection = keyof typeof sectionSingular;
 const descriptionExamples: Record<ObjectKind, string> = {
   task: "Prepare and publish the approved launch notes for customers.",
@@ -21,7 +21,10 @@ const descriptionExamples: Record<ObjectKind, string> = {
   user: "A human product lead responsible for the customer migration program.",
   entity: "A customer organization participating in the August migration pilot.",
   memory: "The product team approved the customer migration during the August review.",
+  source: "A concise summary of the evidence and why it matters.",
+  note: "A short summary that helps people recognize what this note contains.",
 };
+const sourceKinds: SourceKind[] = ["article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page", "other"];
 
 export default function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
@@ -29,6 +32,8 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [objects, setObjects] = useState<SharedObject[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [curatorRuns, setCuratorRuns] = useState<CuratorRun[]>([]);
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -45,9 +50,11 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextObjects, nextTasks, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.curatorRuns(), api.objectVisuals()]);
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), api.curatorRuns(), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
+      setSources(nextSources.items);
+      setNotes(nextNotes.items);
       setCuratorRuns(nextCuratorRuns);
       setVisuals(nextVisuals);
     } catch (cause) {
@@ -75,7 +82,7 @@ export default function App() {
     navigate(sectionPath(next));
   };
 
-  const currentItems = itemsForSection(section, objects, tasks, curatorRuns);
+  const currentItems = itemsForSection(section, objects, tasks, sources, notes, curatorRuns);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
@@ -99,6 +106,8 @@ export default function App() {
           <NavButton active={section === "users"} compact={collapsed} icon="♙" label="Users" onClick={() => selectSection("users")} />
           <NavButton active={section === "entities"} compact={collapsed} icon="◎" label="Entities" onClick={() => selectSection("entities")} />
           <NavButton active={section === "memories"} compact={collapsed} icon="✦" label="Memories" onClick={() => selectSection("memories")} />
+          <NavButton active={section === "sources"} compact={collapsed} icon="▤" label="Sources" onClick={() => selectSection("sources")} />
+          <NavButton active={section === "notes"} compact={collapsed} icon="▱" label="Notes" onClick={() => selectSection("notes")} />
           <NavButton active={section === "curator"} compact={collapsed} icon="↻" label="Curator Runs" onClick={() => selectSection("curator")} />
           <NavButton active={section === "evals"} compact={collapsed} icon="≋" label="Evals" onClick={() => selectSection("evals")} />
           <NavButton active={section === "schema"} compact={collapsed} icon="⌘" label="Schema" onClick={() => selectSection("schema")} />
@@ -138,23 +147,27 @@ export default function App() {
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
 
       {createOpen && isCreateSection(section) && (section === "tasks"
         ? <NewTask onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
+        : section === "sources" ? <NewSource onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
+        : section === "notes" ? <NewNote onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : <NewObject fixedKind={fixedCreateKind(section)} label={sectionSingular[section]} onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.id, load, setCreateOpen)} />)}
     </main>
   );
 }
 
-type ListItem = SharedObject | Task | CuratorRun;
+type ListItem = SharedObject | Task | Source | NoteSummary | CuratorRun;
 
-function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], curatorRuns: CuratorRun[]): ListItem[] {
+function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], curatorRuns: CuratorRun[]): ListItem[] {
   if (section === "schema") return [];
   if (section === "tasks") return tasks;
+  if (section === "sources") return sources;
+  if (section === "notes") return notes;
   if (section === "curator") return curatorRuns;
   if (section === "objects") return objects;
   if (section === "evals") return [];
@@ -165,7 +178,7 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
 function itemRouteId(item: ListItem) { return "trigger" in item ? item.id : canonicalObjectId(item); }
 function canonicalObjectId(item: ListItem) { return "trigger" in item ? item.chat_object_id : "object_id" in item ? item.object_id : item.id; }
 
-function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "task"; }
+function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
 function itemTitle(item: ListItem, objects: SharedObject[]) { return "title" in item ? item.title : `Chat · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}`; }
 function itemDescription(item: ListItem) { return "description" in item ? item.description : `${item.trigger.replace("_", " ")} · ${item.message_count} message${item.message_count === 1 ? "" : "s"}`; }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
@@ -214,6 +227,201 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_eligible" /> Agent eligible</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
+}
+
+function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Note) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
+    try {
+      onCreated(await api.createNote({
+        title: String(data.get("title")),
+        description: String(data.get("description")),
+        content: String(data.get("content")),
+        content_format: String(data.get("content_format")),
+        provenance: { source_type: "human", note: "Created in Centaur Context" },
+      }));
+    } catch (cause) { setError(message(cause)); setBusy(false); }
+  };
+  return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
+    <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
+    <textarea className="create-description" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
+    <DescriptionHelp id="new-note-description-help" kind="note" />
+    <Field label="Content"><textarea className="create-body" name="content" rows={14} required placeholder="Write plain text or Markdown…" aria-label="Note content" /></Field>
+    {error && <p className="form-error">{error}</p>}
+    <div className="create-footer"><Field label="Format"><select name="content_format" aria-label="Note content format" defaultValue="markdown"><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Field><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create note"}</button></div></div>
+  </form></CreateModal>;
+}
+
+function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Source) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
+    try {
+      onCreated(await api.createSource({
+        title: String(data.get("title")), description: String(data.get("description")), source_kind: String(data.get("source_kind")),
+        canonical_uri: optional(data, "canonical_uri"), byline: optional(data, "byline"), publisher: optional(data, "publisher"),
+        published_at: optionalDate(data, "published_at"), accessed_at: optionalDate(data, "accessed_at"), language: optional(data, "language"),
+        media_type: optional(data, "media_type"), artifact_reference: optional(data, "artifact_reference"), content_hash: optional(data, "content_hash"),
+        provenance: { source_type: "human", note: "Created in Centaur Context" },
+      }));
+    } catch (cause) { setError(message(cause)); setBusy(false); }
+  };
+  return <CreateModal title="New source" onClose={onCancel}><form className="create-form source-create-form" onSubmit={submit}>
+    <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Source title" aria-label="Source title" />
+    <textarea className="create-body" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
+    <DescriptionHelp id="new-source-description-help" kind="source" />
+    <div className="source-fields">
+      <Field label="Kind"><select name="source_kind" aria-label="Source kind">{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
+      <Field label="Canonical URL"><input name="canonical_uri" type="url" maxLength={2048} placeholder="https://…" /></Field>
+      <Field label="Byline"><input name="byline" maxLength={500} /></Field>
+      <Field label="Publisher"><input name="publisher" maxLength={300} /></Field>
+      <Field label="Published"><input name="published_at" type="datetime-local" /></Field>
+      <Field label="Accessed"><input name="accessed_at" type="datetime-local" /></Field>
+      <Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field>
+      <Field label="Media type"><input name="media_type" maxLength={100} placeholder="text/html" /></Field>
+      <Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} /></Field>
+      <Field label="Content hash"><input name="content_hash" maxLength={64} pattern="[0-9a-f]{64}" placeholder="64-character lowercase SHA-256" /></Field>
+    </div>
+    {error && <p className="form-error">{error}</p>}
+    <div className="create-footer"><span className="property-chip">Source</span><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create source"}</button></div></div>
+  </form></CreateModal>;
+}
+
+function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+  const [source, setSource] = useState<Source | null>(null);
+  const [object, setObject] = useState<SharedObject | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [events, setEvents] = useState<ObjectEvent[]>([]);
+  const [versions, setVersions] = useState<SourceContentVersion[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const [nextSource, nextObject, nextConnections, nextEvents, nextVersions] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.sourceContents(id)]);
+      setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setVersions(nextVersions); setError(null);
+    } catch (cause) { setError(message(cause)); }
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  if (!source || !object) return <DetailLoading error={error} />;
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget); setError(null);
+    const canonicalUri = optional(data, "canonical_uri"); const byline = optional(data, "byline"); const publisher = optional(data, "publisher");
+    const publishedAt = optionalDate(data, "published_at"); const accessedAt = optionalDate(data, "accessed_at"); const language = optional(data, "language");
+    const mediaType = optional(data, "media_type"); const artifactReference = optional(data, "artifact_reference"); const contentHash = optional(data, "content_hash");
+    try {
+      await api.updateSource(id, {
+        expected_revision: source.revision, title: String(data.get("title")), description: String(data.get("description")), protected: source.protected,
+        source_kind: String(data.get("source_kind")), canonical_uri: canonicalUri, clear_canonical_uri: cleared(source.canonical_uri, canonicalUri),
+        byline, clear_byline: cleared(source.byline, byline), publisher, clear_publisher: cleared(source.publisher, publisher),
+        published_at: publishedAt, clear_published_at: cleared(source.published_at, publishedAt), accessed_at: accessedAt, clear_accessed_at: cleared(source.accessed_at, accessedAt),
+        language, clear_language: cleared(source.language, language), media_type: mediaType, clear_media_type: cleared(source.media_type, mediaType),
+        artifact_reference: artifactReference, clear_artifact_reference: cleared(source.artifact_reference, artifactReference),
+        content_hash: contentHash, clear_content_hash: cleared(source.content_hash, contentHash),
+      });
+      await Promise.all([load(), onChanged()]);
+    } catch (cause) { setError(conflictMessage(cause)); }
+  };
+  return <div className="record-page"><div className="record-primary">
+    <form className="detail-form source-detail-form" onSubmit={save}>
+      <div className="detail-heading"><ObjectId id={source.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Source title" defaultValue={source.title} key={`${source.object_id}-${source.revision}-title`} /></div>
+      <section className="properties-block" aria-label="Source properties"><h2>Properties</h2><div className="source-properties-grid">
+        <Field label="Kind"><select name="source_kind" aria-label="Source kind" defaultValue={source.source_kind}>{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
+        <Field label="Canonical URL"><input name="canonical_uri" type="url" maxLength={2048} defaultValue={source.canonical_uri ?? ""} /></Field>
+        <Field label="Byline"><input name="byline" maxLength={500} defaultValue={source.byline ?? ""} /></Field>
+        <Field label="Publisher"><input name="publisher" maxLength={300} defaultValue={source.publisher ?? ""} /></Field>
+        <Field label="Published"><input name="published_at" type="datetime-local" defaultValue={localDateTime(source.published_at)} /></Field>
+        <Field label="Accessed"><input name="accessed_at" type="datetime-local" defaultValue={localDateTime(source.accessed_at)} /></Field>
+        <Field label="Language"><input name="language" maxLength={35} defaultValue={source.language ?? ""} /></Field>
+        <Field label="Media type"><input name="media_type" maxLength={100} defaultValue={source.media_type ?? ""} /></Field>
+        <Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} defaultValue={source.artifact_reference ?? ""} /></Field>
+        <Field label="Content hash"><input name="content_hash" maxLength={64} pattern="[0-9a-f]{64}" defaultValue={source.content_hash ?? ""} /></Field>
+      </div></section>
+      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
+      <DescriptionHelp id="source-description-help" kind="source" />
+      <button className="secondary save-button">Save changes</button>
+    </form>
+    {error && <p className="form-error">{error}</p>}
+    <SourceContents sourceId={id} sourceRevision={source.revision} versions={versions} currentContentId={source.current_content_id} onCreated={load} />
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+    <ActivityTimeline events={events} visuals={visuals} />
+    <Provenance value={source.provenance} />
+  </div></div>;
+}
+
+function SourceContents({ sourceId, sourceRevision, versions, currentContentId, onCreated }: { sourceId: string; sourceRevision: number; versions: SourceContentVersion[]; currentContentId: string | null; onCreated: () => Promise<void> }) {
+  const currentVersion = versions.find((item) => item.id === currentContentId)?.version ?? versions[0]?.version ?? null;
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(currentVersion);
+  const [preview, setPreview] = useState<SourceContentWindow[]>([]);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setSelectedVersion(currentVersion); setPreview([]); }, [currentContentId, currentVersion]);
+  const read = async (offset: number) => {
+    if (selectedVersion === null) return; setBusy(true); setError(null);
+    try { const window = await api.sourceContent(sourceId, selectedVersion, offset); setPreview((items) => offset === 0 ? [window] : [...items, window]); }
+    catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  };
+  const append = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
+    try {
+      await api.createSourceContent(sourceId, { expected_revision: sourceRevision, content_kind: String(data.get("content_kind")), normalized_text: String(data.get("text")), language: optional(data, "language"), extraction_method: optional(data, "extraction_method"), extraction_version: optional(data, "extraction_version"), artifact_reference: optional(data, "artifact_reference") });
+      setPasteOpen(false); setPreview([]); await onCreated();
+    } catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  };
+  const nextOffset = preview.at(-1)?.next_offset ?? null;
+  return <Section title="Content" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Paste version</button>}>
+    {pasteOpen && <form className="form source-content-form" onSubmit={append}>
+      <div className="source-fields"><Field label="Content kind"><select name="content_kind" aria-label="Content kind"><option value="article_text">Article text</option><option value="transcript">Transcript</option><option value="paper_text">Paper text</option><option value="document_text">Document text</option><option value="dataset_description">Dataset description</option><option value="other">Other</option></select></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Extraction method"><input name="extraction_method" maxLength={200} defaultValue="human_paste" /></Field><Field label="Extraction version"><input name="extraction_version" maxLength={100} /></Field><Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} /></Field></div>
+      <Field label="Normalized text"><textarea name="text" aria-label="Normalized source text" rows={12} required placeholder="Paste the normalized article or transcript…" /></Field>
+      <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save new version"}</button></div>
+    </form>}
+    {versions.length > 0 ? <div className="content-preview">
+      <div className="content-toolbar"><label>Version <select aria-label="Content version" value={selectedVersion ?? ""} onChange={(event) => { setSelectedVersion(Number(event.target.value)); setPreview([]); }}>{versions.map((version) => <option value={version.version} key={version.id}>v{version.version}{version.id === currentContentId ? " · current" : ""}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
+      {selectedVersion !== null && <SourceVersionSummary version={versions.find((item) => item.version === selectedVersion)} />}
+      {preview.length > 0 && <pre className="source-text-preview" aria-label="Source content preview">{preview.map((item) => item.text).join("")}</pre>}
+      {nextOffset !== null && <button className="secondary" type="button" disabled={busy} onClick={() => void read(nextOffset)}>{busy ? "Loading…" : "Load next 8,000 characters"}</button>}
+    </div> : <p className="muted">No content versions yet. Metadata remains available without loading long-form text.</p>}
+    {error && <p className="form-error">{error}</p>}
+  </Section>;
+}
+
+function SourceVersionSummary({ version }: { version: SourceContentVersion | undefined }) {
+  if (!version) return null;
+  return <p className="content-version-summary">{version.content_kind.replaceAll("_", " ")} · {version.size_bytes.toLocaleString()} bytes · {version.language ?? "language unspecified"} · {relative(version.created_at)}</p>;
+}
+
+function NoteDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+  const [note, setNote] = useState<Note | null>(null);
+  const [object, setObject] = useState<SharedObject | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [events, setEvents] = useState<ObjectEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      const [nextNote, nextObject, nextConnections, nextEvents] = await Promise.all([api.note(id), api.object(id), api.connections(id), api.events(id)]);
+      setNote(nextNote); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null);
+    } catch (cause) { setError(message(cause)); }
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  if (!note || !object) return <DetailLoading error={error} />;
+  return <div className="record-page"><div className="record-primary">
+    <div className="detail-heading"><ObjectId id={note.object_id} rowPill navigate /><h1 className="detail-title">{note.title}</h1></div>
+    <section className="properties-block" aria-label="Note properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Type"><ObjectTypeBadge kind="note" /></Property>
+      <Property label="Format">{note.content_format === "markdown" ? "Markdown" : "Plain text"}</Property>
+      <Property label="Updated">{relative(note.updated_at)}</Property>
+      <Property label="Description"><span className="property-value-wrap">{note.description}</span></Property>
+    </div></section>
+    <Section title="Content"><pre className="note-content" aria-label="Note content">{note.content}</pre></Section>
+    {error && <p className="form-error">{error}</p>}
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+    <ActivityTimeline events={events} visuals={visuals} />
+    <Provenance value={note.provenance} />
+  </div></div>;
 }
 
 function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
@@ -597,3 +805,7 @@ function finishCreate(section: Section, id: string, load: () => Promise<void>, s
 function shortId(value: string) { return value.length > 12 ? `${value.slice(0, 8)}…` : value; }
 function textValue(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value : fallback; }
 function stringList(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+function optional(data: FormData, name: string) { const value = String(data.get(name) ?? "").trim(); return value || null; }
+function optionalDate(data: FormData, name: string) { const value = optional(data, name); return value ? new Date(value).toISOString() : null; }
+function localDateTime(value: string | null) { if (!value) return ""; const date = new Date(value); const offset = date.getTimezoneOffset() * 60_000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); }
+function cleared(previous: string | null, next: string | null) { return previous !== null && next === null; }

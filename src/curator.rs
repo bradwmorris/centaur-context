@@ -13,6 +13,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
@@ -67,6 +68,8 @@ pub struct CreateObject {
     pub supporting_message_ids: Vec<Uuid>,
     pub task: Option<TaskFields>,
     pub memory: Option<MemoryFields>,
+    #[serde(default)]
+    pub source: Option<SourceFields>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -113,6 +116,39 @@ pub struct MemoryFields {
     pub primary_event: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub happened_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceFields {
+    pub source_kind: String,
+    pub canonical_uri: Option<String>,
+    pub byline: Option<String>,
+    pub publisher: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub published_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub accessed_at: Option<OffsetDateTime>,
+    pub language: Option<String>,
+    pub media_type: Option<String>,
+    pub artifact_reference: Option<String>,
+    pub content_hash: Option<String>,
+    pub content: Option<SourceContentFields>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceContentFields {
+    pub content_kind: String,
+    pub normalized_text: String,
+    pub language: Option<String>,
+    pub extraction_method: Option<String>,
+    pub extraction_version: Option<String>,
+    pub artifact_reference: Option<String>,
+    #[serde(default = "empty_object")]
+    pub locators: Value,
+}
+
+fn empty_object() -> Value {
+    json!({})
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -781,7 +817,7 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         item.kind = allowed(
             std::mem::take(&mut item.kind),
             "kind",
-            &["task", "entity", "memory"],
+            &["task", "entity", "memory", "source"],
         )
         .map_err(invalid)?;
         item.title =
@@ -800,15 +836,30 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                         "Task creation cannot include memory fields".into(),
                     ));
                 }
+                if item.source.is_some() {
+                    return Err(CuratorError::Invalid(
+                        "Task creation cannot include source fields".into(),
+                    ));
+                }
             }
             "memory" => {
-                if item.memory.is_none() || item.task.is_some() {
+                if item.memory.is_none() || item.task.is_some() || item.source.is_some() {
                     return Err(CuratorError::Invalid(
                         "Memory creation requires only memory fields".into(),
                     ));
                 }
             }
-            _ if item.task.is_some() || item.memory.is_some() => {
+            "source" => {
+                if item.task.is_some() || item.memory.is_some() {
+                    return Err(CuratorError::Invalid(
+                        "Source creation requires only source fields".into(),
+                    ));
+                }
+                validate_source_fields(item.source.as_mut().ok_or_else(|| {
+                    CuratorError::Invalid("Source creation requires source fields".into())
+                })?)?;
+            }
+            _ if item.task.is_some() || item.memory.is_some() || item.source.is_some() => {
                 return Err(CuratorError::Invalid(
                     "Entity creation cannot include typed fields".into(),
                 ));
@@ -910,6 +961,80 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         if item.kind.is_none() && item.description.is_none() {
             return Err(CuratorError::Invalid(
                 "Connection update has no changes".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError> {
+    source.source_kind = allowed(
+        std::mem::take(&mut source.source_kind),
+        "source_kind",
+        crate::domain::SOURCE_KINDS,
+    )
+    .map_err(invalid)?;
+    source.canonical_uri =
+        optional_text(source.canonical_uri.take(), "canonical_uri", 2000).map_err(invalid)?;
+    if source
+        .canonical_uri
+        .as_ref()
+        .is_some_and(|uri| !(uri.starts_with("https://") || uri.starts_with("http://")))
+    {
+        return Err(CuratorError::Invalid(
+            "canonical_uri must use HTTP or HTTPS".into(),
+        ));
+    }
+    source.byline = optional_text(source.byline.take(), "byline", 500).map_err(invalid)?;
+    source.publisher = optional_text(source.publisher.take(), "publisher", 300).map_err(invalid)?;
+    source.language = optional_text(source.language.take(), "language", 35).map_err(invalid)?;
+    source.media_type =
+        optional_text(source.media_type.take(), "media_type", 255).map_err(invalid)?;
+    source.artifact_reference =
+        optional_text(source.artifact_reference.take(), "artifact_reference", 1000)
+            .map_err(invalid)?;
+    source.content_hash =
+        optional_text(source.content_hash.take(), "content_hash", 64).map_err(invalid)?;
+    if source.content_hash.as_ref().is_some_and(|hash| {
+        hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(CuratorError::Invalid(
+            "content_hash must be a lowercase SHA-256 hex digest".into(),
+        ));
+    }
+    if let Some(content) = &mut source.content {
+        content.content_kind = allowed(
+            std::mem::take(&mut content.content_kind),
+            "content_kind",
+            crate::domain::SOURCE_CONTENT_KINDS,
+        )
+        .map_err(invalid)?;
+        content.normalized_text = required_text(
+            std::mem::take(&mut content.normalized_text),
+            "normalized_text",
+            10_000_000,
+        )
+        .map_err(invalid)?;
+        content.language =
+            optional_text(content.language.take(), "language", 35).map_err(invalid)?;
+        content.extraction_method =
+            optional_text(content.extraction_method.take(), "extraction_method", 200)
+                .map_err(invalid)?;
+        content.extraction_version =
+            optional_text(content.extraction_version.take(), "extraction_version", 100)
+                .map_err(invalid)?;
+        content.artifact_reference = optional_text(
+            content.artifact_reference.take(),
+            "artifact_reference",
+            1000,
+        )
+        .map_err(invalid)?;
+        if !content.locators.is_object() {
+            return Err(CuratorError::Invalid(
+                "locators must be a JSON object".into(),
             ));
         }
     }
@@ -1108,6 +1233,32 @@ async fn insert_object(
                 .bind(item.memory.as_ref().expect("validated").happened_at)
                 .execute(&mut **tx)
                 .await?;
+        }
+        "source" => {
+            let source = item.source.as_ref().expect("validated");
+            sqlx::query(r#"INSERT INTO sources
+                (object_id,source_kind,canonical_uri,byline,publisher,published_at,accessed_at,language,media_type,artifact_reference,content_hash)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#)
+                .bind(id).bind(&source.source_kind).bind(&source.canonical_uri).bind(&source.byline)
+                .bind(&source.publisher).bind(source.published_at).bind(source.accessed_at)
+                .bind(&source.language).bind(&source.media_type).bind(&source.artifact_reference)
+                .bind(&source.content_hash).execute(&mut **tx).await?;
+            if let Some(content) = &source.content {
+                let content_id = Uuid::new_v4();
+                let hash = format!("{:x}", Sha256::digest(content.normalized_text.as_bytes()));
+                sqlx::query(r#"INSERT INTO source_contents
+                    (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,extraction_version,content_hash,size_bytes,artifact_reference,locators)
+                    VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#)
+                    .bind(content_id).bind(id).bind(&content.content_kind).bind(&content.normalized_text)
+                    .bind(&content.language).bind(&content.extraction_method).bind(&content.extraction_version)
+                    .bind(hash).bind(content.normalized_text.len() as i64).bind(&content.artifact_reference)
+                    .bind(&content.locators).execute(&mut **tx).await?;
+                sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
+                    .bind(id)
+                    .bind(content_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
         }
         _ => unreachable!("validated curator Object kind"),
     }
@@ -1631,8 +1782,9 @@ async fn request_plan(
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
 
 Every create_objects entry MUST contain all of these fields:
-{"client_id":"unique-local-name","kind":"memory|task|entity","title":"...","description":"...","supporting_message_ids":["UUID"],"task":null,"memory":null}.
+{"client_id":"unique-local-name","kind":"memory|task|entity|source","title":"...","description":"...","supporting_message_ids":["UUID"],"task":null,"memory":null,"source":null}.
 client_id is a short unique name used only to reference that new Object from create_connections. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"todo|doing|blocked|review|done","priority":"low|medium|high|urgent","owner_object_id":null,"agent_eligible":false,"due_at":null}.
+For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast|video|book|report|document|dataset|web_page|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"accessed_at":null,"language":null,"media_type":null,"artifact_reference":null,"content_hash":null,"content":null}. Optional content is {"content_kind":"article_text|transcript|paper_text|document_text|dataset_description|other","normalized_text":"...","language":null,"extraction_method":null,"extraction_version":null,"artifact_reference":null,"locators":{}}. Use only text explicitly present in the evidence; never fetch or invent source content.
 
 Every update_objects entry MUST contain all of these fields:
 {"object_id":"UUID","expected_revision":1,"title":null,"description":null,"supporting_message_ids":["UUID"],"task":null}.
@@ -1641,7 +1793,7 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must name the specific subject and state the concrete fact, event, responsibility, identity, or outcome in one or two plain-language sentences. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat or User. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must name the specific subject and state the concrete fact, event, responsibility, identity, or outcome in one or two plain-language sentences. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,

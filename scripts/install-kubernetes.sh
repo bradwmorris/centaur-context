@@ -37,7 +37,7 @@ elif [[ "$legacy_cutover" == true ]]; then
   die "--legacy-cutover requires an existing legacy deployment/centaur-os"
 fi
 
-for key in DATABASE_URL AGENT_API_TOKEN CHAT_INGEST_API_TOKEN CURATOR_API_TOKEN APPROVED_SLACK_SURFACES; do
+for key in DATABASE_URL AGENT_API_TOKEN NOTE_WRITE_API_TOKEN CHAT_INGEST_API_TOKEN CURATOR_API_TOKEN APPROVED_SLACK_SURFACES; do
   encoded="$(kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" --namespace "$CENTAUR_CONTEXT_NAMESPACE" \
     get secret centaur-context-env --output="jsonpath={.data.${key}}")"
   [[ -n "$encoded" ]] || die "centaur-context-env is missing $key"

@@ -1,6 +1,6 @@
 [project]
 name = "centaur-context"
-description = "Read shared context from Centaur Context through a constrained agent API"
+description = "Use the constrained Centaur Context agent API"
 version = "0.2.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -29,4 +29,5 @@ module = "client.py"
 secrets = [
     {type = "http", name = "CENTAUR_CONTEXT_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_OS_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-os.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-note-write.centaur.svc.cluster.local"]},
 ]

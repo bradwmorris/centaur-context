@@ -10,6 +10,8 @@ pub struct Config {
     pub human_addr: SocketAddr,
     pub agent_addr: SocketAddr,
     pub agent_api_token: String,
+    pub note_write_addr: SocketAddr,
+    pub note_write_api_token: String,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
     pub curator_addr: SocketAddr,
@@ -113,12 +115,23 @@ impl Config {
         if chat_ingest_api_token == agent_api_token {
             bail!("CHAT_INGEST_API_TOKEN must differ from AGENT_API_TOKEN");
         }
+        let note_write_api_token = required("NOTE_WRITE_API_TOKEN")?;
+        if note_write_api_token.len() < 32 {
+            bail!("NOTE_WRITE_API_TOKEN must be at least 32 characters");
+        }
+        if note_write_api_token == agent_api_token || note_write_api_token == chat_ingest_api_token
+        {
+            bail!("NOTE_WRITE_API_TOKEN must differ from the agent and ingestion tokens");
+        }
         let curator_api_token = required("CURATOR_API_TOKEN")?;
         if curator_api_token.len() < 32 {
             bail!("CURATOR_API_TOKEN must be at least 32 characters");
         }
-        if curator_api_token == agent_api_token || curator_api_token == chat_ingest_api_token {
-            bail!("CURATOR_API_TOKEN must differ from the agent and ingestion tokens");
+        if curator_api_token == agent_api_token
+            || curator_api_token == chat_ingest_api_token
+            || curator_api_token == note_write_api_token
+        {
+            bail!("CURATOR_API_TOKEN must differ from the agent, Note-write, and ingestion tokens");
         }
         let approved_slack_surfaces =
             ApprovedSlackSurfaces::parse(&required("APPROVED_SLACK_SURFACES")?)
@@ -131,6 +144,8 @@ impl Config {
             human_addr: parse_addr("HUMAN_ADDR", "0.0.0.0:8080")?,
             agent_addr: parse_addr("AGENT_ADDR", "0.0.0.0:8081")?,
             agent_api_token,
+            note_write_addr: parse_addr("NOTE_WRITE_ADDR", "0.0.0.0:8084")?,
+            note_write_api_token,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
             curator_addr: parse_addr("CURATOR_ADDR", "0.0.0.0:8083")?,

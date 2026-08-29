@@ -71,6 +71,6 @@ ALTER TABLE object_events
     ADD CONSTRAINT object_events_action_check
     CHECK (action IN (
         'created', 'updated', 'archived', 'connected', 'task_status_changed',
-        'message_ingested', 'curator_queued', 'curator_started',
+        'content_version_created', 'message_ingested', 'curator_queued', 'curator_started',
         'curator_committed', 'curator_failed', 'curator_undone'
     ));

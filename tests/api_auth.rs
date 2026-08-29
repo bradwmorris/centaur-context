@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, agent_router, human_router},
+    api::{AppState, agent_router, human_router, note_write_router},
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
 };
@@ -112,7 +112,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product"], "centaur-context");
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
-    assert_eq!(metadata["ontology_version"], "v1");
+    assert_eq!(metadata["ontology_version"], "v2");
     assert_eq!(metadata["database_schema_version"], 10);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
@@ -244,6 +244,118 @@ async fn agent_listener_does_not_expose_write_routes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
+    let router = agent_router(state(), "a".repeat(32));
+    let write = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sources")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test:test:test")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::NOT_FOUND);
+
+    for uri in [
+        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?offset=-1",
+        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?version=0",
+        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?limit=20001",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                    .header("x-centaur-principal-id", "prn_test")
+                    .header("x-centaur-thread-key", "slack:test:test:test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
+    let write_token = "w".repeat(32);
+    let body = r##"{"title":"Research note","description":"A bounded note created by an authorized research agent.","content":"# Evidence\nSynthetic evidence only.","content_format":"markdown","provenance":{"source_type":"human"}}"##;
+    let wrong = note_write_router(state(), write_token.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/notes")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", "note-1")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+
+    let missing_attribution = note_write_router(state(), write_token.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/notes")
+                .header("authorization", format!("Bearer {write_token}"))
+                .header("idempotency-key", "note-1")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_attribution.status(), StatusCode::BAD_REQUEST);
+
+    let missing_retry_key = note_write_router(state(), write_token)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/notes")
+                .header("authorization", format!("Bearer {}", "w".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_retry_key.status(), StatusCode::BAD_REQUEST);
+
+    let read_surface = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/notes")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", "note-1")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_surface.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

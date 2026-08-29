@@ -9,6 +9,8 @@ describe("durable application routes", () => {
     ["/users/user-id", "users", "user-id"],
     ["/entities/entity-id", "entities", "entity-id"],
     ["/memories/memory-id", "memories", "memory-id"],
+    ["/sources/source-id", "sources", "source-id"],
+    ["/notes/note-id", "notes", "note-id"],
     ["/curator-runs/run-id", "curator", "run-id"],
     ["/schema/objects/structure", "schema", "objects"],
   ])("parses %s", (path, section, selectedId) => {
@@ -26,6 +28,7 @@ describe("durable application routes", () => {
     expect(schemaRowPath("users", "object_id", "an id")).toBe("/schema/users/rows?focus_column=object_id&focus_value=an+id");
     expect(schemaView("/schema")).toBe("map");
     expect(schemaView("/schema/objects/rows")).toBe("rows");
+    expect(detailPath("notes", "note-id")).toBe("/notes/note-id");
   });
 
   it("fails closed for unknown and malformed paths", () => {

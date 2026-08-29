@@ -86,7 +86,7 @@ Current repository baseline:
 - The implemented sequence is: preserved POC baseline; canonical graph migration; deterministic Slack ingestion; read-only Context Builder; atomic Context Curator; completed MVP human surfaces; packaged operations.
 - `dev/` contains the tracked development workflow and backlog. Its RDs are
   plans and are not evidence that the described work has shipped.
-- Release contract: Centaur Context `0.2.0`, HTTP API `v1`, ontology `v1`, database schema version `8`, standard tool version `0.2.0`.
+- Release contract: Centaur Context `0.2.0`, HTTP API `v1`, ontology `v2`, database schema version `10`, standard tool version `0.2.0`.
 - Deployment profile: single organization, local machine or trusted private network. Verified container architecture is `linux/arm64`; builds declare `linux/amd64` and `linux/arm64` support.
 
 ### Product and ontology
@@ -172,8 +172,14 @@ The public standard agent tool lives in `tools/centaur_context` because it is pa
 - `centaur-context get-context`
 - `centaur-context search-objects`
 - `centaur-context read-object`
+- `centaur-context search-sources`
+- `centaur-context read-source`
+- `centaur-context read-source-content`
+- `centaur-context search-notes`
+- `centaur-context read-note`
+- `centaur-context create-note` (separate Note-write grant only)
 
-It has no write, deletion, SQL, arbitrary-request, or application-policy command. The server enforces the same restriction on the agent listener even if a sandbox bypasses the CLI. Requests carry the bearer placeholder plus Centaur principal and thread identity headers. The real credential is injected through Centaur's supported secret boundary.
+The general agent listener has no write, deletion, SQL, arbitrary-request, or application-policy command. A separate internal listener and credential grant only idempotent Note creation; it requires principal and thread attribution and does not grant other writes. The server enforces these restrictions even if a sandbox bypasses the CLI. Requests carry bearer placeholders plus Centaur principal and thread identity headers. Real credentials are injected through Centaur's supported secret boundary.
 
 The intended Centaur integration is a pinned overlay tool source plus authenticated Slack post-response ingestion. No Centaur semantic-version range is claimed yet; compatibility is contract-based.
 
@@ -196,7 +202,7 @@ The repository includes:
 - package-contract validation;
 - forward-only migration and rollback guidance.
 
-Installation requires an explicit Kubernetes context and namespace, a pinned image, PostgreSQL 16 with pgvector, three distinct API credentials of at least 32 characters, and exact approved Slack workspace/channel pairs. The local deployment gate expects context `kind-centaur-lab`, more than 15 GiB free disk, and a fresh validated backup before applying anything. Secrets must not be put into source, prompts, command arguments, or sandbox-visible DSNs.
+Installation requires an explicit Kubernetes context and namespace, a pinned image, PostgreSQL 16 with pgvector, four distinct API credentials of at least 32 characters, and exact approved Slack workspace/channel pairs. The local deployment gate expects context `kind-centaur-lab`, more than 15 GiB free disk, and a fresh validated backup before applying anything. Secrets must not be put into source, prompts, command arguments, or sandbox-visible DSNs.
 
 Never infer from the existence of deployment files that deployment, public ingress, publishing, or hosted mutation has been approved.
 
