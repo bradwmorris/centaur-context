@@ -10,15 +10,6 @@ const connectionKinds = ["involves", "about", "related_to", "depends_on", "deriv
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
 const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory" } as const;
-const sectionDescriptions: Record<Section, string> = {
-  objects: "The canonical record of everything in Centaur OS.",
-  tasks: "Work that can be tracked or handed to an agent.",
-  chats: "Canonical conversations shared across the system.",
-  users: "Humans and agents with one canonical identity in the graph.",
-  entities: "Organisations, places, products, projects, and named things.",
-  memories: "Simple event-shaped records of what happened.",
-  curator: "Atomic context updates produced after completed interactions.",
-};
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories"]);
 type CreateSection = keyof typeof sectionSingular;
@@ -111,10 +102,10 @@ export default function App() {
         <div className="workspace">
           {!selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
-              <div><div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}>+</button>}</div><p>{sectionDescriptions[section]}</p></div>
+              <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
             <div className="list-toolbar">
-              {section !== "tasks" && section !== "curator" && <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
+              {section !== "tasks" && section !== "curator" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
               <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
             </div>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
