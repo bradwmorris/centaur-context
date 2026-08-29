@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectVisual, SharedObject, Task, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Task, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -46,6 +46,18 @@ function write(method: "POST" | "PATCH", body: unknown): RequestInit {
 }
 
 export const api = {
+  schema() {
+    return request<SchemaSnapshot>("/api/v1/schema");
+  },
+  schemaRows(table: string, cursor?: string, focus?: { column: string; value: string }) {
+    const params = new URLSearchParams({ limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    if (focus) {
+      params.set("focus_column", focus.column);
+      params.set("focus_value", focus.value);
+    }
+    return request<SchemaRowPage>(`/api/v1/schema/tables/${encodeURIComponent(table)}/rows?${params}`);
+  },
   objects(query = "") {
     const params = new URLSearchParams({ lifecycle: "active" });
     if (query.trim()) params.set("q", query.trim());

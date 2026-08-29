@@ -3,13 +3,14 @@ import { ApiError, api } from "./api";
 import { DescriptionSnippet } from "./DescriptionSnippet";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
 import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Task, TaskStatus, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs", evals: "Evals" };
+const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories"]);
@@ -36,6 +37,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (section === "schema") {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -49,7 +55,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, [query, section]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute(window.location.pathname));
@@ -95,6 +101,7 @@ export default function App() {
           <NavButton active={section === "memories"} compact={collapsed} icon="✦" label="Memories" onClick={() => selectSection("memories")} />
           <NavButton active={section === "curator"} compact={collapsed} icon="↻" label="Curator Runs" onClick={() => selectSection("curator")} />
           <NavButton active={section === "evals"} compact={collapsed} icon="≋" label="Evals" onClick={() => selectSection("evals")} />
+          <NavButton active={section === "schema"} compact={collapsed} icon="⌘" label="Schema" onClick={() => selectSection("schema")} />
         </nav>
         <div className="nav-foot" title="Running locally"><span className="status-dot" />{!collapsed && "Local workspace"}</div>
       </aside>
@@ -103,13 +110,13 @@ export default function App() {
         <header className="topbar">
           <div className="page-path">
             <button className="path-root" onClick={() => navigate(sectionPath(section))}>{sectionLabel}</button>
-            {(selectedId || connectionId) && <><span>›</span><strong>{connectionId ? `Connection ${shortId(connectionId)}` : selectedItem ? itemTitle(selectedItem, objects) : shortId(selectedId ?? "")}</strong></>}
+            {(selectedId || connectionId) && <><span>›</span><strong>{connectionId ? `Connection ${shortId(connectionId)}` : section === "schema" ? selectedId : selectedItem ? itemTitle(selectedItem, objects) : shortId(selectedId ?? "")}</strong></>}
           </div>
         </header>
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "evals" ? (selectedId ? <section className="detail-page"><EvalDetailView id={selectedId} /></section> : <EvalsList />) : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : section === "evals" ? (selectedId ? <section className="detail-page"><EvalDetailView id={selectedId} /></section> : <EvalsList />) : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
@@ -146,6 +153,7 @@ export default function App() {
 type ListItem = SharedObject | Task | CuratorRun;
 
 function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], curatorRuns: CuratorRun[]): ListItem[] {
+  if (section === "schema") return [];
   if (section === "tasks") return tasks;
   if (section === "curator") return curatorRuns;
   if (section === "objects") return objects;

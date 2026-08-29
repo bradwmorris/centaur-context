@@ -35,7 +35,9 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
     )
     .unwrap();
 
-    let response = human_router(state(), static_dir.clone())
+    let router = human_router(state(), static_dir.clone());
+    let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/objects")
@@ -44,12 +46,21 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
         )
         .await
         .unwrap();
-    let status = response.status();
+    assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.as_ref(), b"<main>Centaur Context</main>");
+    let schema = router
+        .oneshot(
+            Request::builder()
+                .uri("/schema/objects/rows")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     std::fs::remove_dir_all(static_dir).unwrap();
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.as_ref(), b"<main>Centaur Context</main>");
+    assert_eq!(schema.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -102,7 +113,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v1");
-    assert_eq!(metadata["database_schema_version"], 9);
+    assert_eq!(metadata["database_schema_version"], 10);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -310,6 +321,65 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
         invalid_human_annotation.status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
+}
+
+#[tokio::test]
+async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
+    let agent = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schema")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent.status(), StatusCode::NOT_FOUND);
+
+    let curator = curator_router(state(), "c".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/schema")
+                .header("authorization", format!("Bearer {}", "c".repeat(32)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(curator.status(), StatusCode::NOT_FOUND);
+
+    let ingestion = ingest_router(
+        state(),
+        "i".repeat(32),
+        ApprovedSlackSurfaces::parse("T1:C1").unwrap(),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/api/v1/schema")
+            .header("authorization", format!("Bearer {}", "i".repeat(32)))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
+
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        let response = human_router(state(), PathBuf::from("web/dist"))
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/api/v1/schema")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }
 
 #[tokio::test]

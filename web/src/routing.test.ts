@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { connectionPath, detailPath, navigate, objectPath, parseRoute, sectionPath } from "./routing";
+import { connectionPath, detailPath, navigate, objectPath, parseRoute, schemaPath, schemaRowPath, schemaView, sectionPath } from "./routing";
 
 describe("durable application routes", () => {
   it.each([
@@ -10,6 +10,7 @@ describe("durable application routes", () => {
     ["/entities/entity-id", "entities", "entity-id"],
     ["/memories/memory-id", "memories", "memory-id"],
     ["/curator-runs/run-id", "curator", "run-id"],
+    ["/schema/objects/structure", "schema", "objects"],
   ])("parses %s", (path, section, selectedId) => {
     expect(parseRoute(path)).toEqual({ section, selectedId, connectionId: null });
   });
@@ -20,6 +21,11 @@ describe("durable application routes", () => {
     expect(connectionPath("connection id")).toBe("/connections/connection%20id");
     expect(sectionPath("curator")).toBe("/curator-runs");
     expect(detailPath("tasks", "task-id")).toBe("/tasks/task-id");
+    expect(schemaPath()).toBe("/schema");
+    expect(schemaPath("objects", "rows")).toBe("/schema/objects/rows");
+    expect(schemaRowPath("users", "object_id", "an id")).toBe("/schema/users/rows?focus_column=object_id&focus_value=an+id");
+    expect(schemaView("/schema")).toBe("map");
+    expect(schemaView("/schema/objects/rows")).toBe("rows");
   });
 
   it("fails closed for unknown and malformed paths", () => {
