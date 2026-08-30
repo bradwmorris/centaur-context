@@ -10,7 +10,7 @@ ALTER TABLE objects ADD COLUMN protected boolean NOT NULL DEFAULT false;
 UPDATE objects
 SET provenance = provenance || jsonb_build_object('migrated_from_kind', kind),
     kind = 'memory'
-WHERE kind = 'decision';
+WHERE kind IN ('note', 'source', 'decision');
 
 INSERT INTO memories (object_id, object_kind, created_at, updated_at)
 SELECT id, 'memory', created_at, updated_at
@@ -20,7 +20,7 @@ ON CONFLICT (object_id) DO NOTHING;
 
 ALTER TABLE objects
     ADD CONSTRAINT objects_kind_check
-    CHECK (kind IN ('task', 'chat', 'user', 'entity', 'memory', 'source', 'note'));
+    CHECK (kind IN ('task', 'chat', 'user', 'entity', 'memory'));
 
 ALTER TABLE memories
     ADD COLUMN happened_at timestamptz NOT NULL DEFAULT now();
@@ -186,10 +186,6 @@ BEGIN
         RAISE EXCEPTION 'entity Object % requires an entities subtype row', NEW.id;
     ELSIF NEW.kind = 'memory' AND NOT EXISTS (SELECT 1 FROM memories WHERE object_id = NEW.id) THEN
         RAISE EXCEPTION 'memory Object % requires a memories subtype row', NEW.id;
-    ELSIF NEW.kind = 'source' AND NOT EXISTS (SELECT 1 FROM sources WHERE object_id = NEW.id) THEN
-        RAISE EXCEPTION 'source Object % requires a sources subtype row', NEW.id;
-    ELSIF NEW.kind = 'note' AND NOT EXISTS (SELECT 1 FROM notes WHERE object_id = NEW.id) THEN
-        RAISE EXCEPTION 'note Object % requires a notes subtype row', NEW.id;
     END IF;
     RETURN NEW;
 END
@@ -230,13 +226,5 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION prevent_canonical_subtype_removal();
 CREATE CONSTRAINT TRIGGER memories_preserve_subtype
 AFTER DELETE OR UPDATE OF object_id ON memories
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION prevent_canonical_subtype_removal();
-CREATE CONSTRAINT TRIGGER sources_preserve_subtype
-AFTER DELETE OR UPDATE OF object_id ON sources
-DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION prevent_canonical_subtype_removal();
-CREATE CONSTRAINT TRIGGER notes_preserve_subtype
-AFTER DELETE OR UPDATE OF object_id ON notes
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION prevent_canonical_subtype_removal();

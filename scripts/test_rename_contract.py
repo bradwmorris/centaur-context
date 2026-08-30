@@ -54,7 +54,7 @@ def test_backup_metadata_accepts_canonical_and_legacy_products(tmp_path: Path) -
                     "product": product,
                     "product_version": "0.2.0" if product == "centaur-context" else "0.1.0",
                     "database": database,
-                    "schema_version": 10,
+                    "schema_version": 11,
                     "format": "pg_dump-custom",
                 }
             ),
@@ -96,7 +96,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 11,
+                "schema_version": 12,
                 "format": "pg_dump-custom",
             }
         ),
