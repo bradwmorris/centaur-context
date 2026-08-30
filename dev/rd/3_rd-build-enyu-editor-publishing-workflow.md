@@ -1,7 +1,10 @@
 # 3 — RD: Build the Enyu Editor Publishing Workflow
 
-**Status:** `in_progress`
+**Status:** `review`
 **GitHub Issue:** [#47](https://github.com/bradwmorris/centaur-context/issues/47)
+**Pull Requests:** [Context #49](https://github.com/bradwmorris/centaur-context/pull/49),
+[Enyu Site #1](https://github.com/bradwmorris/enyu-site/pull/1), and
+[Centaur Enyu #15](https://github.com/bradwmorris/centaur-enyu/pull/15)
 **Created:** 2026-08-30
 
 ## Execution Plan
@@ -101,7 +104,9 @@ Local verification on 2026-08-30: Enyu Site `npm run check` passed with nine
 content-contract tests and a production build; Centaur Enyu passed 35 unit and
 contract tests plus Python compilation; Centaur Context passed formatting,
 clippy, 58 Rust tests, web type-check/build, 49 client tests, and Python
-compilation. The live acceptance and all GitHub/Vercel actions remain pending.
+compilation. Enyu Site PR CI and its automatically linked Vercel preview passed.
+GitHub App/secret setup, overlay deployment, merges, and live acceptance remain
+pending approval.
 
 ## Approval Boundary
 
