@@ -1,6 +1,6 @@
 # RD: Expand the POC Context from Recaps, Entities, and Themes
 
-**Status:** `in_progress`
+**Status:** `complete`
 **GitHub Issue:** [#39](https://github.com/bradwmorris/centaur-context/issues/39)
 **Created:** 2026-08-30
 
@@ -122,17 +122,16 @@ auditable but never enter retrieval. Only Brad initially has `approve_themes`.
   edge with no orphan endpoint.
 - [x] Disposable-database validate-only writes zero rows; commit and full replay create
   no duplicate Object, subtype, content, Connection, or event.
-- [ ] Target counts, provenance, hashes, Brad/Codex attribution, lexical/body
+- [x] Target counts, provenance, hashes, Brad/Codex attribution, lexical/body
   search, graph traversal, and live authenticated retrieval canaries pass.
 - [x] Repository-root verification commands and `git diff --check` pass.
 
 ## Approval Boundary
 
-Execution is authorized through local implementation, private manifest work,
-and verification. Merge, live schema deployment, and Enyu data writes remain
-held until the active Source-ingestion deployment finishes and the requester
-confirms. Source-database writes, public ingress, publishing, spending, and any
-other database remain unauthorized.
+The requester confirmed the Source-ingestion deployment was complete and
+authorized the live schema deployment, Enyu migration, and repository closeout.
+Execution stayed within that boundary. Supabase remained read-only; no public
+ingress, paid embeddings, reset, or unrelated database mutation occurred.
 
 ## Local Execution Audit
 
@@ -148,5 +147,29 @@ The content audit accepted 26 of 47 ready capture artifacts and rejected or
 collapsed 21 workflow documents, working notes, placeholders, and duplicates.
 All 26 accepted bodies are privately materialized, byte-hash verified, and pass
 content-inclusive intake plus lexical retrieval canaries on the disposable
-database. The final live target reconciliation, manifest hash, deployment, and
-live import remain deliberately pending under the approval boundary above.
+database.
+
+The final source drift audit matched all selected row counts, revision sums,
+relationships, identifiers, and the 26 accepted artifact hashes. The private
+manifest was sealed reproducibly as
+`d4a080e68f862098b55be2581f626f27af76051df803e93f16d7dcdb4a446cac`.
+A verified pre-deployment public-schema backup has SHA-256
+`cfdd3ac041aaaac859ca8c247609366f5c055ded4a84edbb806dbfbd55afa8c7`.
+
+Schema 12 deployed with fingerprint `325a99ed4b2f1f4a`. The three dependency-
+ordered live batches validated with zero writes immediately before commit,
+committed atomically, and replayed without creating duplicates. They added 290
+Objects, 26 exact Source contents, 1,075 Connections, and 1,391 Object Events.
+The retained live database now has 366 Objects: 159 Entities, 133 Sources, 10
+Themes, 51 Notes, 8 Memories, 3 Users, 1 Chat, and 1 Task. One pre-existing
+Source remains archived, so 365 Objects are active.
+
+Reconciliation matched every imported canonical Object, subtype, protected
+flag, provenance record, content hash and byte count, and Connection. The live
+graph has 1,262 active Connections: 203 `about`, 62 `derived_from`, 698
+`involves`, and 299 `themed`. All Theme endpoints are valid, every reverse Theme
+listing reconciles, Brad is the sole initial Theme approver, no duplicate active
+edge exists, and Object, body, graph, and authenticated retrieval canaries pass.
+The temporary port-8085 intake token and manifest pin were removed and the
+listener is closed. The permanent Source listener, Theme proposal listener,
+human UI, and both Slack writers are healthy on the reviewed image.
