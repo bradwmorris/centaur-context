@@ -79,12 +79,12 @@ ALTER TABLE chats
 ALTER TABLE object_events DROP CONSTRAINT object_events_entity_type_check;
 ALTER TABLE object_events
     ADD CONSTRAINT object_events_entity_type_check
-    CHECK (entity_type IN ('object', 'connection', 'task', 'source_content', 'chat_message', 'curator_run'));
+    CHECK (entity_type IN ('object', 'connection', 'task', 'chat_message', 'curator_run'));
 
 ALTER TABLE object_events DROP CONSTRAINT object_events_action_check;
 ALTER TABLE object_events
     ADD CONSTRAINT object_events_action_check
     CHECK (action IN (
         'created', 'updated', 'archived', 'connected', 'task_status_changed',
-        'content_version_created', 'message_ingested', 'curator_queued'
+        'message_ingested', 'curator_queued'
     ));
