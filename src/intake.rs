@@ -233,6 +233,7 @@ pub(crate) struct PreparedBatch {
     identity_ids: HashMap<String, Uuid>,
     content_ids: HashMap<String, Uuid>,
     connection_ids: HashMap<String, Uuid>,
+    adopted_object_ids: HashSet<Uuid>,
 }
 
 impl PreparedBatch {
@@ -259,6 +260,38 @@ impl PreparedBatch {
             "source_contents":self.content_ids,
             "connections":self.connection_ids,
         })
+    }
+
+    pub(crate) fn adopt_object(
+        &mut self,
+        client_key: &str,
+        object_id: Uuid,
+    ) -> Result<(), IntakeError> {
+        let previous_id = self
+            .object_ids
+            .insert(client_key.to_owned(), object_id)
+            .ok_or_else(|| {
+                IntakeError::Internal(format!("unknown object client key {client_key}"))
+            })?;
+        self.adopted_object_ids.insert(object_id);
+        for content in &mut self.request.source_contents {
+            if content.source.object_id == Some(previous_id) {
+                content.source.object_id = Some(object_id);
+            }
+        }
+        for connection in &mut self.request.connections {
+            if connection.source.object_id == Some(previous_id) {
+                connection.source.object_id = Some(object_id);
+            }
+            if connection.target.object_id == Some(previous_id) {
+                connection.target.object_id = Some(object_id);
+            }
+        }
+        self.payload_sha256 = hex_sha256(
+            &serde_json::to_vec(&self.request)
+                .map_err(|error| IntakeError::Internal(error.to_string()))?,
+        );
+        Ok(())
     }
 }
 
@@ -583,6 +616,7 @@ pub(crate) async fn prepare_batch_for_app(
         identity_ids,
         content_ids,
         connection_ids,
+        adopted_object_ids: HashSet::new(),
     })
 }
 
@@ -732,6 +766,77 @@ pub(crate) async fn write_batch(
     let mut tx = pool.begin().await?;
     for object in &batch.request.objects {
         let id = batch.object_ids[&object.client_key];
+        if batch.adopted_object_ids.contains(&id) {
+            let source = object.source.as_ref().expect("validated adopted Source");
+            let current: Option<(i64, Value)> = sqlx::query_as(
+                r#"SELECT o.revision,o.provenance FROM objects o JOIN sources s ON s.object_id=o.id
+                   WHERE o.id=$1 AND o.kind='source' AND o.lifecycle='active' AND NOT o.protected
+                     AND s.current_content_id IS NULL AND s.content_hash IS NULL
+                   FOR UPDATE"#,
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some((revision, prior_provenance)) = current else {
+                return Err(IntakeError::Conflict(
+                    "the curator Source placeholder is no longer eligible for workflow adoption"
+                        .into(),
+                ));
+            };
+            let mut provenance = object
+                .provenance
+                .clone()
+                .expect("validated adopted Source provenance");
+            provenance
+                .as_object_mut()
+                .expect("validated provenance object")
+                .insert("adopted_curator_provenance".into(), prior_provenance);
+            sqlx::query(
+                r#"UPDATE objects SET title=$2,description=$3,protected=true,provenance=$4,
+                   revision=revision+1,updated_by_type=$5,updated_by_id=$6,updated_at=now()
+                   WHERE id=$1"#,
+            )
+            .bind(id)
+            .bind(&object.title)
+            .bind(&object.description)
+            .bind(&provenance)
+            .bind(actor.actor_type)
+            .bind(actor.actor_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"UPDATE sources SET source_kind=$2,canonical_uri=$3,byline=$4,publisher=$5,
+                   published_at=$6,accessed_at=$7,language=$8,media_type=$9,
+                   artifact_reference=$10,updated_at=now() WHERE object_id=$1"#,
+            )
+            .bind(id)
+            .bind(&source.source_kind)
+            .bind(&source.canonical_uri)
+            .bind(&source.byline)
+            .bind(&source.publisher)
+            .bind(parse_time(source.published_at.as_deref(), "published_at")?)
+            .bind(parse_time(source.accessed_at.as_deref(), "accessed_at")?)
+            .bind(&source.language)
+            .bind(&source.media_type)
+            .bind(&source.artifact_reference)
+            .execute(&mut *tx)
+            .await?;
+            insert_intake_event(
+                &mut tx,
+                actor,
+                "object",
+                id,
+                id,
+                "updated",
+                revision + 1,
+                batch,
+                "object",
+                &object.client_key,
+                json!({"kind":"source","title":object.title,"protected":true,"adopted_from":"context_curator"}),
+            )
+            .await?;
+            continue;
+        }
         sqlx::query(r#"INSERT INTO objects
             (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,$8)"#)
