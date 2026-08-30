@@ -69,11 +69,27 @@ or text file into one protected, connected, searchable canonical Context Source.
 - Enyu PR #4 merged as `e392efb3134d6d64325dc9d9b03ea0468f11171c`.
 - The shared migration checkpoint `c5bed94` remains exact shared ancestry for
   migration closeout PR #32.
-- The permanent port 8086 adapter was not deployed or used by the completed
-  migration; its live deployment and credentials remain separately approved work.
+- Live deployment was subsequently approved and completed at Enyu Helm revision
+  39, with durable Slack ingress at `https://slack.enyu.org` and two Cloudflare
+  tunnel replicas.
+- Centaur PR #9 merged as `7fcc2d032641898e04df05d59072ddf65fafa41f`,
+  enabling the YouTube caption host used by the standard extraction tool.
+- Enyu PR #12 merged as `9e3a0d7ebbd714456b85984731c7b1d64b7223c0`;
+  stable deployment repin PR #13 merged as
+  `d6e83a4d6e92838d6d9f1d5ea6d47df32ad35dc6`.
+- Context PR #41 merged as `c076b496b52d7d82619482123b18f0bb3f5a5a91`,
+  reconciling concurrent Curator and Source-ingestion ownership.
+- Live YouTube acceptance passed in workflow run
+  `01a051cf-4c22-7b01-abc2-4d9f2fd18a44`: Source
+  `7ac65959-201a-5539-87dc-219f9ce5277a` contains a transcript with 869 cues
+  and 29,352 bytes. The earlier metadata-only Source was archived and its
+  canonical URI cleared.
+- The permanent port 8086 adapter remains distinct from the removed temporary
+  migration listener on port 8085.
 
 ## Approval boundary
 
-This implementation does not deploy, create live credentials, invoke a paid model,
-change Slack configuration, or write to the hosted Context database. Those live
-actions remain separately approval-gated.
+The original implementation PR did not perform live actions. Deployment,
+credential creation, Slack configuration, model invocation, and hosted Context
+writes were subsequently performed only after the requester explicitly approved
+them. Any future live mutation remains separately approval-gated.

@@ -4,6 +4,10 @@
 **Created:** 2026-08-29
 **GitHub Issue:** `#15`
 **Prerequisite Issues:** Centaur `#3`, `#4`
+**Follow-on:** `rd-build-enyu-source-ingestion-overlay.md` extends the existing
+Enyu overlay with its first concrete workflow; this RD still owns named Slack
+instances, shared-context handshakes, deployment, and cross-agent dogfood
+acceptance.
 
 ## Execution Plan
 
@@ -42,7 +46,7 @@ the Enyu overlay is deployed.
 | 0. Pin and baseline | Record passing Centaur and Centaur Context commits, verify the current singleton path, and record an Enyu gap ledger. | Both products pass their targeted checks. |
 | 1. Repair the context handshake | In reusable product work, ingest/upsert the current Slack snapshot before context retrieval, parse and persist the returned opaque `chat_object_id`, pass it to Context Builder, and repeat ingestion after the response. Keep failure non-blocking and idempotent. | A first turn, retry, and restart resolve the same canonical Chat; a later turn gets bounded context. |
 | 2. Add generic multi-Slack support | Add named Slackbot instances while preserving the singleton values contract. Isolate app secrets, webhook Services/routes, bot identity, persona, state/recovery prefix, session namespace, permission principal, metrics, and policies. | Two fixture-driven bots run concurrently; duplicate events, restarts, and one-bot failure do not collide. |
-| 3. Build `centaur-enyu` | Scaffold Editor and Researcher personas, skills, prompt policy, configuration, test fixtures, role/grant manifest, and the pinned standard Context client. | Static tests prove correct persona selection, least privilege, and no duplicated product code or secrets. |
+| 3. Build `centaur-enyu` | Scaffold Editor and Researcher personas, skills, prompt policy, configuration, test fixtures, role/grant manifest, and the pinned standard Context client. The first real organization workflow is a separate follow-on RD. | Static tests prove correct persona selection, least privilege, and no duplicated product code or secrets. |
 | 4. Deploy privately | Deploy pinned products plus the overlay, a fresh Context database, approved synthetic surfaces, Curator configuration, and private UI access. | Health, migrations, authenticated ingestion/context, denial tests, Curator, and UI inspection pass. |
 | 5. Prove the story locally | Replay signed Slack fixtures through both webhook routes and verify the two directional handoffs below. | All acceptance evidence is captured without a live Slack mutation. |
 | 6. Live Slack trial | After approval, create/configure the two apps, expose narrowly scoped HTTPS callback routes, apply credentials/grants, and repeat the smoke test. | Both real mentions and both cross-agent retrievals succeed. |
