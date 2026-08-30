@@ -1,10 +1,16 @@
 # 3 — RD: Build the Enyu Editor Publishing Workflow
 
-**Status:** `review`
+**Status:** `complete`
 **GitHub Issue:** [#47](https://github.com/bradwmorris/centaur-context/issues/47)
 **Pull Requests:** [Context #49](https://github.com/bradwmorris/centaur-context/pull/49),
-[Enyu Site #1](https://github.com/bradwmorris/enyu-site/pull/1), and
-[Centaur Enyu #15](https://github.com/bradwmorris/centaur-enyu/pull/15)
+[#52](https://github.com/bradwmorris/centaur-context/pull/52),
+[#56](https://github.com/bradwmorris/centaur-context/pull/56),
+[#57](https://github.com/bradwmorris/centaur-context/pull/57), and
+[#58](https://github.com/bradwmorris/centaur-context/pull/58);
+[Enyu Site #1](https://github.com/bradwmorris/enyu-site/pull/1) and
+[#2](https://github.com/bradwmorris/enyu-site/pull/2); and Centaur Enyu
+[#15](https://github.com/bradwmorris/centaur-enyu/pull/15) through
+[#24](https://github.com/bradwmorris/centaur-enyu/pull/24)
 **Created:** 2026-08-30
 
 ## Execution Plan
@@ -19,8 +25,7 @@ tests; and `enyu-site`'s private GitHub/Vercel linkage, Markdown loader,
 validator, publishing guide, routes, metadata, sitemap, sample article, and
 passing content check.
 
-**Missing:** separate approval for the required GitHub Issue/branch/PR writes and live acceptance. Local implementation is isolated and underway. Live GitHub/Vercel actions,
-credential creation, deployment, and publication remain explicit approval gates.
+**Missing:** none.
 
 1. In `/Users/bradleymorris/Desktop/dev/enyu-site`, make one authoritative,
    testable research-content contract shared by build and validation. Keep
@@ -60,10 +65,10 @@ credential creation, deployment, and publication remain explicit approval gates.
 
 ## What We Are Doing
 
-- [ ] Let the Enyu Editor prepare, review, and publish one cited research article
+- [x] Let the Enyu Editor prepare, review, and publish one cited research article
   through a durable, least-privilege workflow while Source ingestion remains a
   separate Researcher-owned workflow.
-- [ ] Prove one approved candidate becomes exactly one validated Markdown change,
+- [x] Prove one approved candidate becomes exactly one validated Markdown change,
   reviewed PR, production article, and auditable publication record; retries do
   not duplicate it and unapproved or changed candidates cannot go live.
 
@@ -101,19 +106,25 @@ credential creation, deployment, and publication remain explicit approval gates.
 - [x] `git diff --check` passes.
 
 Local verification on 2026-08-30: Enyu Site `npm run check` passed with nine
-content-contract tests and a production build; Centaur Enyu passed 35 unit and
-contract tests plus Python compilation; Centaur Context passed formatting,
-clippy, 58 Rust tests, web type-check/build, 49 client tests, and Python
-compilation. Enyu Site PR CI and its automatically linked Vercel preview passed.
-GitHub App/secret setup, overlay deployment, merges, and live acceptance remain
-pending approval.
+content-contract tests and a production build; Centaur Enyu passed its unit and
+contract suite plus focused publication tests; Centaur Context passed formatting,
+clippy, Rust tests, web type-check/build, 51 client tests, and Python compilation.
+
+Live acceptance run `01a052d8-c58f-7c9e-8d87-518523f9b9d8` completed with
+`status: published`. It read approved Source Object
+`a17dcd4f-69ff-572e-9f23-d25161064b55`, created and approved
+[Enyu Site PR #2](https://github.com/bradwmorris/enyu-site/pull/2), bound approval
+to head `85bc4710f3d0a905bea6a87752d47a14465134a2` and candidate SHA-256
+`c18148c42ac1c3df0c10f651cc33ce68832db5e29c7bc8e0af4a45208e163c0c`,
+merged publication commit `ef234fdc30bebe7230ba3a432181d6a2861de454`, and
+verified the production deployment and canonical article at
+<https://enyu.org/research/durable-editor-publication-acceptance>.
 
 ## Approval Boundary
 
-The requester's execution approval authorizes isolated local changes and
-synthetic checks. Draft PR creation, any
-other GitHub write, GitHub App or secret creation, hosted workflow event, overlay
-deployment, Vercel action, merge, live publication/readback, and correction or
-rollback each require explicit requester approval. Reuse existing private Centaur
-and GitHub/Vercel paths; add no public ingress or new external integration without
-separate approval.
+The requester explicitly approved the GitHub writes, repository-scoped GitHub
+App and secret setup, overlay deployment, hosted approval event, merge, Vercel
+activity, and live publication/readback used for this acceptance. Future
+publication, correction, rollback, credential, deployment, or external-integration
+actions remain separate approval boundaries. Reuse existing private Centaur and
+GitHub/Vercel paths; add no public ingress without separate approval.
