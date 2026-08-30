@@ -725,6 +725,8 @@ def test_default_transport_uses_stdlib_without_runtime_packages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests = []
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
 
     class FakeResponse:
         status = 200
@@ -755,6 +757,46 @@ def test_default_transport_uses_stdlib_without_runtime_packages(
     request, timeout = requests[0]
     assert request.full_url == "http://centaur-context.test:8081/api/v1/objects/object-1"
     assert request.get_header("Authorization") == "Bearer placeholder-token"
+    assert timeout == 12
+
+
+def test_default_transport_explicitly_uses_http_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"data":{"id":"object-1"}}'
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            requests.append((request, timeout))
+            return FakeResponse()
+
+    monkeypatch.setenv("HTTP_PROXY", "http://iron-proxy:80")
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.setattr(client_module, "build_opener", lambda *_args: FakeOpener())
+    client = CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
+        token="placeholder-token",
+        principal_id="principal-1",
+        thread_key="thread-1",
+        timeout=12,
+    )
+
+    assert client.read_object("object-1") == {"id": "object-1"}
+    request, timeout = requests[0]
+    assert request.host == "iron-proxy:80"
+    assert request.selector == "http://centaur-context.test:8081/api/v1/objects/object-1"
     assert timeout == 12
 
 
