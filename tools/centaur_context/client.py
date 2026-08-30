@@ -516,15 +516,18 @@ class CentaurContextClient:
         source_id: str,
         *,
         thread_key: str | None = None,
+        base_url: str | None = None,
     ) -> dict[str, Any]:
         """Read canonical Source metadata without loading long-form content."""
         source_id = _clean(source_id)
         if not source_id:
             raise ValueError("source_id is required")
+        target_url = _clean(base_url).rstrip("/") or None
         return self._request(
             "GET",
             f"/api/v1/sources/{quote(source_id, safe='')}",
             thread_key=thread_key,
+            base_url=target_url,
         )
 
     def read_source_content(

@@ -215,6 +215,25 @@ def test_read_source_reads_metadata_without_content() -> None:
     assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-123"
 
 
+def test_read_source_can_target_an_explicit_context_service() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"id": "source-1"}})
+
+    result = make_client(handler).read_source(
+        "source-1",
+        thread_key="workflow:run-123",
+        base_url="http://centaur-context-enyu.test:8081/",
+    )
+
+    assert result["id"] == "source-1"
+    assert requests[0].url == httpx.URL(
+        "http://centaur-context-enyu.test:8081/api/v1/sources/source-1"
+    )
+
+
 def test_read_source_content_sends_a_bounded_window() -> None:
     requests: list[httpx.Request] = []
 
