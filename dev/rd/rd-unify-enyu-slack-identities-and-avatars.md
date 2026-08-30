@@ -39,19 +39,24 @@ dimensions/hashes.
    the canonical store.
 3. Extend reusable Centaur Slackbot v2 to resolve/cache bounded `users.info`
    profile data for snapshot participants and send compatible optional display
-   name/provider-avatar fields. Refresh on a documented TTL and on stale-cache
-   failure; Slack/API failure stays non-blocking. Enyu configuration overrides
-   Brad, Ed, and Rez with the canonical overlay asset references: Brad's Slack
-   user ID/name/profile metadata is still imported, but `brad.jpg`, not Slack's
-   current avatar URL, is his image source of truth.
+   name/provider-avatar fields. Refresh unknown users immediately and cached
+   profiles on the first interaction after a six-hour TTL; retain last-known
+   data when Slack fails and retry next interaction. Enyu configuration
+   overrides Brad, Ed, and Rez with the canonical overlay asset references:
+   Brad's Slack user ID/name/profile metadata is still imported, but
+   `brad.jpg`, not Slack's current avatar URL, is his image source of truth.
 4. Extend Context's identity contract compatibly: retain nullable legacy
    `avatar_url`, add an optional safe same-origin asset reference and provenance/
    refresh metadata as required by migration, ingestion, API, visual query, and
    standard-client types/tests. Upserts update Slack names and freshness without
    changing canonical User IDs; the Enyu asset override wins over Slack URLs.
-   Serve only allowlisted mounted files with correct MIME, immutable hash-based
-   cache headers, no directory traversal, uploads, remote fetching, or sandbox
-   access. Sandboxes receive authenticated HTTP context only, never a DSN.
+   Serve only allowlisted mounted files at
+   `/api/v1/identity-assets/{sha256}/{filename}` with correct MIME, ETag and
+   immutable cache headers. Never server-fetch remote URLs; render only the
+   same-origin asset route by default, keeping legacy provider URLs readable
+   but inactive unless a deployment explicitly allowlists them. Reject path
+   traversal and uploads. Sandboxes receive authenticated HTTP context only,
+   never a DSN.
 5. Render the resolved avatar/name through the reusable avatar component on all
    actual identity surfaces: record/search-result lists; User identity detail;
    generic Object, Task owner/users, and Note users; chat and Curator
@@ -92,7 +97,8 @@ dimensions/hashes.
 - **Agent owns:** Approved local code/data migrations, asset copy during later
   execution, fixture tests, UI verification, and compatibility documentation.
 - **Requester owns:** Slack workspace/app/profile changes, channel membership,
-  credentials, live ingress/deployment, and approval to use the supplied images.
+  live workspace/channel/user IDs and mappings, credentials, ingress/deployment,
+  and approval to use the supplied images.
 - **Out of scope:** Multiple required MVP channels, changing stable IDs/persona
   policy, public ingress, arbitrary avatar proxying, external uploads, DB access
   from agents, or Enyu-specific reusable-product logic.
