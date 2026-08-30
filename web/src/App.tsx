@@ -6,7 +6,7 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, Theme, ThemeProposal, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, Entity, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, Theme, ThemeProposal, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
@@ -267,10 +267,16 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
     event.preventDefault(); setBusy(true); setError(null);
     const data = new FormData(event.currentTarget);
     try {
-      onCreated(await api.createObject({
-        kind, title: String(data.get("title")), description: String(data.get("description")),
+      const body = {
+        title: String(data.get("title")), description: String(data.get("description")),
         provenance: { source_type: "human", note: "Created in Centaur Context" },
-      }));
+      };
+      if (kind === "entity") {
+        const entity = await api.createEntity({ ...body, image_url: String(data.get("image_url") || "") || null });
+        onCreated(await api.object(entity.object_id));
+      } else {
+        onCreated(await api.createObject({ kind, ...body }));
+      }
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
   const name = label.charAt(0).toUpperCase() + label.slice(1);
@@ -278,6 +284,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
     <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
     <DescriptionHelp id="new-object-description-help" kind={kind} />
+    {kind === "entity" && <Field label="Image URL (optional)"><input name="image_url" type="url" inputMode="url" maxLength={2048} pattern="https://.*" placeholder="https://…" /></Field>}
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
@@ -540,12 +547,54 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
       </form>
       {error && <p className="form-error">{error}</p>}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} />}
+      {item.kind === "entity" && <EntityImagePanel id={item.id} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} />}
       <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
       <ActivityTimeline events={events} visuals={visuals} includeThread />
       <Provenance value={item.provenance} />
     </div>
   </div>;
+}
+
+function EntityImagePanel({ id }: { id: string }) {
+  const [entity, setEntity] = useState<Entity | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try { setEntity(await api.entity(id)); setFailed(false); setError(null); }
+    catch (cause) { setError(message(cause)); }
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!entity) return;
+    const imageUrl = String(new FormData(event.currentTarget).get("image_url") || "").trim();
+    try {
+      setEntity(await api.updateEntity(id, imageUrl
+        ? { expected_revision: entity.revision, image_url: imageUrl }
+        : { expected_revision: entity.revision, clear_image_url: true }));
+      setFailed(false); setError(null);
+    } catch (cause) { setError(conflictMessage(cause)); }
+  };
+  return <Section title="Image">
+    {entity && <div className="entity-image-row">
+      <span className="entity-avatar" role="img" aria-label={`${entity.title} image`}>
+        {entity.image_url && !failed
+          ? <img src={entity.image_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+          : <span aria-hidden="true">{entityInitials(entity.title)}</span>}
+      </span>
+      <form className="entity-image-form" onSubmit={save}>
+        <input name="image_url" type="url" inputMode="url" maxLength={2048} pattern="https://.*" defaultValue={entity.image_url ?? ""} key={`${entity.object_id}-${entity.revision}`} placeholder="https://…" aria-label="Entity image URL" />
+        <button className="secondary">Save image</button>
+      </form>
+    </div>}
+    {error && <p className="form-error">{error}</p>}
+  </Section>;
+}
+
+function entityInitials(value: string) {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}` : parts[0]?.slice(0, 2) ?? "?").toUpperCase();
 }
 
 function UserIdentityPanel({ id, visual }: { id: string; visual: ObjectVisual | undefined }) {

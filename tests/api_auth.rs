@@ -305,7 +305,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v2");
-    assert_eq!(metadata["database_schema_version"], 13);
+    assert_eq!(metadata["database_schema_version"], 14);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -354,6 +354,43 @@ async fn human_api_rejects_a_weak_object_description_before_database_access() {
             .as_str()
             .unwrap()
             .contains("add concrete context")
+    );
+}
+
+#[tokio::test]
+async fn human_entity_api_rejects_non_https_images_before_database_access() {
+    let response = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/entities")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "invalid-entity-image")
+            .body(Body::from(
+                r#"{
+                    "title":"Northwind",
+                    "description":"A customer organization participating in the migration pilot.",
+                    "image_url":"http://example.test/northwind.png"
+                }"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["code"], "validation_error");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("image_url")
     );
 }
 

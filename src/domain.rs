@@ -88,6 +88,22 @@ pub fn optional_text(
         .transpose()
 }
 
+pub fn optional_https_url(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<String>, ValidationError> {
+    let value = optional_text(value, field, 2048)?;
+    if let Some(url) = value.as_deref()
+        && (!url.starts_with("https://") || url.len() <= "https://".len())
+    {
+        return Err(ValidationError::Unsupported {
+            field,
+            value: url.to_owned(),
+        });
+    }
+    Ok(value)
+}
+
 pub fn object_description(title: &str, value: String) -> Result<String, ValidationError> {
     let value = required_text(value, "description", 1000)?;
     validate_object_description(title, &value)?;
@@ -335,6 +351,25 @@ mod tests {
         );
         assert!(required_text("   ".to_owned(), "title", 10).is_err());
         assert!(required_text("too long".to_owned(), "title", 3).is_err());
+    }
+
+    #[test]
+    fn entity_image_urls_are_optional_https_references() {
+        assert_eq!(
+            optional_https_url(
+                Some(" https://example.test/person.jpg ".into()),
+                "image_url"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://example.test/person.jpg")
+        );
+        assert_eq!(optional_https_url(None, "image_url").unwrap(), None);
+        assert!(
+            optional_https_url(Some("http://example.test/person.jpg".into()), "image_url").is_err()
+        );
+        assert!(optional_https_url(Some("file:///tmp/person.jpg".into()), "image_url").is_err());
+        assert!(optional_https_url(Some("https://".into()), "image_url").is_err());
     }
 
     #[test]

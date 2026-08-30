@@ -96,7 +96,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 12,
+                "schema_version": 15,
                 "format": "pg_dump-custom",
             }
         ),

@@ -38,6 +38,11 @@ provider/workspace key, display name, and an optional HTTP(S) avatar reference.
 The UI always has a deterministic local fallback avatar, so the canonical User
 does not depend on an external image remaining available.
 
+An Entity may carry one optional, human-curated HTTPS image reference. Context
+stores only the bounded URL and its provenance; it never fetches or stores the
+remote image bytes. Human clients render a deterministic local fallback when the
+reference is absent or cannot be loaded.
+
 ## Supporting records
 
 These are not Objects:

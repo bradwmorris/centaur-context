@@ -67,6 +67,13 @@ the same time against one database.
 Migrations are forward-only. Do not treat changing the container image as a
 database rollback.
 
+Schema 14 adds only the nullable `entities.image_url` reference. Before applying
+it to an existing Context database, complete and verify a custom-format backup,
+prove the migration and Entity create/update/clear contract against a disposable
+database whose name contains `centaur_context_test`, then run the reviewed
+application image so SQLx applies the forward migration. The value must be a
+bounded HTTPS URL. Context does not fetch the image or copy its bytes.
+
 ## Bounded bootstrap intake
 
 The optional bootstrap listener exists for reviewed, one-time imports. It is

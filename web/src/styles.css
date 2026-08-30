@@ -231,6 +231,11 @@ button { color: inherit; }
 .identity span { color: #65676e; font-size: 9px; text-transform: uppercase; }
 .identity strong { color: #b8bac0; font-size: 11px; font-weight: 520; }
 .identity small { color: #696b72; font-size: 9px; overflow-wrap: anywhere; }
+.entity-image-row { display: flex; align-items: center; gap: 14px; }
+.entity-avatar { width: 54px; height: 54px; display: inline-grid; place-items: center; flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.1); border-radius: 50%; background: #24262b; color: #d8d9dc; font-size: 15px; font-weight: 650; }
+.entity-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.entity-image-form { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+.entity-image-form input { min-width: 0; flex: 1; }
 .timeline { display: grid; }
 .event { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.025); overflow: hidden; }
 .event-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: #5c5e65; }

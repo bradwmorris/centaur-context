@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, Theme, ThemeProposal, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, Entity, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, Theme, ThemeProposal, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -80,6 +80,18 @@ export const api = {
   },
   updateObject(id: string, body: Record<string, unknown>) {
     return request<SharedObject>(`/api/v1/objects/${id}`, write("PATCH", body));
+  },
+  entities() {
+    return request<Entity[]>("/api/v1/entities?limit=500");
+  },
+  entity(id: string) {
+    return request<Entity>(`/api/v1/entities/${id}`);
+  },
+  createEntity(body: Record<string, unknown>) {
+    return request<Entity>("/api/v1/entities", write("POST", body));
+  },
+  updateEntity(id: string, body: Record<string, unknown>) {
+    return request<Entity>(`/api/v1/entities/${id}`, write("PATCH", body));
   },
   connections(id: string) {
     return request<Connection[]>(`/api/v1/objects/${id}/connections`);

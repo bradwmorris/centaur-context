@@ -23,14 +23,14 @@ use uuid::Uuid;
 
 use crate::{
     db::{
-        self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, NewTheme, NewThemeProposal, ObjectChanges, SourceChanges,
-        TaskChanges,
+        self, ConnectionChanges, DbError, EntityChanges, NewConnection, NewEntity, NewNote,
+        NewObject, NewSource, NewSourceContent, NewTask, NewTheme, NewThemeProposal, ObjectChanges,
+        SourceChanges, TaskChanges,
     },
     domain::{
         ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, OBJECT_KINDS, SOURCE_CONTENT_KINDS,
-        SOURCE_KINDS, TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_text,
-        provenance, required_preserved_text, required_text,
+        SOURCE_KINDS, TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_https_url,
+        optional_text, provenance, required_preserved_text, required_text,
     },
     embeddings::EmbeddingClient,
     schema, search,
@@ -202,6 +202,8 @@ fn service_router(state: AppState) -> Router {
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/object-visuals", get(list_object_visuals))
                 .route("/objects/{id}", get(read_object).patch(update_object))
+                .route("/entities", get(list_entities).post(create_entity))
+                .route("/entities/{id}", get(read_entity).patch(update_entity))
                 .route("/sources", get(list_sources).post(create_source))
                 .route("/sources/{id}", get(read_source).patch(update_source))
                 .route(
@@ -1417,6 +1419,157 @@ async fn update_object(
     )
     .await?;
     Ok(Json(json!({"data": object})))
+}
+
+#[derive(Debug, Deserialize)]
+struct EntityListQuery {
+    limit: Option<i64>,
+}
+
+async fn list_entities(
+    State(state): State<AppState>,
+    Query(query): Query<EntityListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({
+        "data": db::list_entities(&state.pool, bounded_object_limit(query.limit)).await?
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateEntityRequest {
+    title: String,
+    description: String,
+    provenance: Option<Value>,
+    image_url: Option<String>,
+}
+
+async fn create_entity(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateEntityRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let image_url = optional_https_url(input.image_url, "image_url")?;
+    let provenance = entity_image_provenance(input.provenance, image_url.as_deref(), true)?;
+    let entity = db::create_entity(
+        &state.pool,
+        &actor,
+        NewEntity {
+            description: crate::domain::object_description(&title, input.description)?,
+            title,
+            provenance,
+            image_url,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":entity}))))
+}
+
+async fn read_entity(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":db::get_entity(&state.pool,id).await?})))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateEntityRequest {
+    expected_revision: i64,
+    title: Option<String>,
+    description: Option<String>,
+    provenance: Option<Value>,
+    protected: Option<bool>,
+    image_url: Option<String>,
+    #[serde(default)]
+    clear_image_url: bool,
+    #[serde(default)]
+    archive: bool,
+}
+
+async fn update_entity(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<UpdateEntityRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if input.clear_image_url && input.image_url.is_some() {
+        return Err(ApiError::BadRequest(
+            "clear_image_url cannot be combined with image_url".to_owned(),
+        ));
+    }
+    let image_url = if input.clear_image_url {
+        Some(None)
+    } else {
+        input
+            .image_url
+            .map(|value| optional_https_url(Some(value), "image_url"))
+            .transpose()?
+            .flatten()
+            .map(Some)
+    };
+    let provenance = if image_url.is_some() {
+        Some(entity_image_provenance(
+            input.provenance,
+            image_url.as_ref().and_then(|value| value.as_deref()),
+            false,
+        )?)
+    } else {
+        input
+            .provenance
+            .map(|value| provenance(Some(value)))
+            .transpose()?
+    };
+    let key = idempotency_key(&headers, actor.is_agent, &actor)?;
+    let entity = db::update_entity(
+        &state.pool,
+        &actor,
+        id,
+        input.expected_revision,
+        EntityChanges {
+            title: input
+                .title
+                .map(|value| required_text(value, "title", 300))
+                .transpose()?,
+            description: input
+                .description
+                .map(|value| required_text(value, "description", 1000))
+                .transpose()?,
+            provenance,
+            protected: input.protected,
+            image_url,
+            archive: input.archive,
+        },
+        key.as_deref(),
+    )
+    .await?;
+    Ok(Json(json!({"data":entity})))
+}
+
+fn entity_image_provenance(
+    supplied: Option<Value>,
+    image_url: Option<&str>,
+    creating: bool,
+) -> Result<Value, ValidationError> {
+    if let Some(value) = supplied {
+        return provenance(Some(value));
+    }
+    let value = match image_url {
+        Some(url) => json!({
+            "source_type":"human",
+            "source_ref":url,
+            "note":if creating { "Entity and image created in the human UI" } else { "Entity image updated in the human UI" }
+        }),
+        None if creating => json!({}),
+        None => json!({
+            "source_type":"human",
+            "note":"Entity image cleared in the human UI"
+        }),
+    };
+    provenance(Some(value))
 }
 
 async fn list_connections(

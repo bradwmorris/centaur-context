@@ -259,6 +259,19 @@ export interface User {
   updated_at: string;
 }
 
+export interface Entity {
+  object_id: string;
+  title: string;
+  description: string;
+  lifecycle: "active" | "archived";
+  revision: number;
+  provenance: Record<string, unknown>;
+  protected: boolean;
+  image_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExternalIdentity {
   id: string;
   user_object_id: string;

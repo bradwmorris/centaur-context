@@ -6,7 +6,9 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{ActorContext, ValidationError, theme_slug, validate_object_description};
+use crate::domain::{
+    ActorContext, ValidationError, optional_https_url, theme_slug, validate_object_description,
+};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -131,6 +133,22 @@ pub struct User {
     pub revision: i64,
     pub provenance: Value,
     pub user_kind: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct Entity {
+    pub object_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub provenance: Value,
+    pub protected: bool,
+    pub image_url: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -548,6 +566,14 @@ pub struct NewObject {
 }
 
 #[derive(Clone, Debug)]
+pub struct NewEntity {
+    pub title: String,
+    pub description: String,
+    pub provenance: Value,
+    pub image_url: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct NewSource {
     pub title: String,
     pub description: String,
@@ -638,6 +664,16 @@ pub struct ObjectChanges {
     pub description: Option<String>,
     pub provenance: Option<Value>,
     pub protected: Option<bool>,
+    pub archive: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct EntityChanges {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub provenance: Option<Value>,
+    pub protected: Option<bool>,
+    pub image_url: Option<Option<String>>,
     pub archive: bool,
 }
 
@@ -766,6 +802,161 @@ pub async fn get_object(pool: &PgPool, id: Uuid) -> Result<Object, DbError> {
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::NotFound)
+}
+
+const ENTITY_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,
+       o.revision,o.provenance,o.protected,e.image_url,o.created_at,o.updated_at
+FROM entities e JOIN objects o ON o.id=e.object_id"#;
+
+pub async fn list_entities(pool: &PgPool, limit: i64) -> Result<Vec<Entity>, DbError> {
+    Ok(sqlx::query_as(&format!(
+        "{ENTITY_SELECT} WHERE o.lifecycle='active' ORDER BY o.updated_at DESC,o.id LIMIT $1"
+    ))
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_entity(pool: &PgPool, id: Uuid) -> Result<Entity, DbError> {
+    sqlx::query_as(&format!("{ENTITY_SELECT} WHERE o.id=$1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
+pub async fn create_entity(
+    pool: &PgPool,
+    actor: &ActorContext,
+    input: NewEntity,
+    idempotency_key: &str,
+) -> Result<Entity, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        return get_entity(pool, id).await;
+    }
+    validate_object_description(&input.title, &input.description)?;
+    let image_url = optional_https_url(input.image_url, "image_url")?;
+    let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"INSERT INTO objects
+           (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+           VALUES ($1,'entity',$2,$3,$4,$5,$4,$5,$6)"#,
+    )
+    .bind(id)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(&input.provenance)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO entities (object_id,image_url) VALUES ($1,$2)")
+        .bind(id)
+        .bind(&image_url)
+        .execute(&mut *tx)
+        .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        "created",
+        Some(idempotency_key),
+        None,
+        1,
+        json!({"kind":"entity","title":input.title,"image_url_present":image_url.is_some()}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_entity(pool, id).await
+}
+
+pub async fn update_entity(
+    pool: &PgPool,
+    actor: &ActorContext,
+    id: Uuid,
+    expected_revision: i64,
+    changes: EntityChanges,
+    idempotency_key: Option<&str>,
+) -> Result<Entity, DbError> {
+    if let Some(key) = idempotency_key
+        && let Some(existing_id) = idempotent_entity(pool, actor, key).await?
+    {
+        return get_entity(pool, existing_id).await;
+    }
+    let current = get_entity(pool, id).await?;
+    let title = changes.title.unwrap_or_else(|| current.title.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
+    validate_object_description(&title, &description)?;
+    let provenance = changes
+        .provenance
+        .unwrap_or_else(|| current.provenance.clone());
+    let protected = changes.protected.unwrap_or(current.protected);
+    let image_url = optional_https_url(
+        changes
+            .image_url
+            .unwrap_or_else(|| current.image_url.clone()),
+        "image_url",
+    )?;
+    let lifecycle = if changes.archive {
+        "archived"
+    } else {
+        &current.lifecycle
+    };
+    let mut tx = pool.begin().await?;
+    let updated_revision: Option<i64> = sqlx::query_scalar(
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,lifecycle=$7,
+           archived_at=CASE WHEN $7='archived' THEN now() ELSE archived_at END,
+           revision=revision+1,updated_by_type=$8,updated_by_id=$9,updated_at=now()
+           WHERE id=$1 AND revision=$2 AND kind='entity' RETURNING revision"#,
+    )
+    .bind(id)
+    .bind(expected_revision)
+    .bind(&title)
+    .bind(&description)
+    .bind(&provenance)
+    .bind(protected)
+    .bind(lifecycle)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let updated_revision = updated_revision.ok_or(DbError::Conflict)?;
+    sqlx::query("UPDATE entities SET image_url=$2,updated_at=now() WHERE object_id=$1")
+        .bind(id)
+        .bind(&image_url)
+        .execute(&mut *tx)
+        .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        if changes.archive {
+            "archived"
+        } else {
+            "updated"
+        },
+        idempotency_key,
+        Some(expected_revision),
+        updated_revision,
+        json!({
+            "title":title,
+            "description_changed":description != current.description,
+            "image_url_changed":image_url != current.image_url,
+            "image_url_present":image_url.is_some(),
+            "protected":protected,
+            "lifecycle":lifecycle
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    get_entity(pool, id).await
 }
 
 const SOURCE_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,

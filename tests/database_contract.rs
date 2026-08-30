@@ -10,9 +10,9 @@ use centaur_context::{
         ObjectRef, ReconciliationPlan, TaskFields,
     },
     db::{
-        self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, NewTheme, NewThemeProposal, NoteChanges, NoteListFilter,
-        ObjectChanges, ObjectListFilter, SourceListFilter, TaskChanges,
+        self, ConnectionChanges, DbError, EntityChanges, NewConnection, NewEntity, NewNote,
+        NewObject, NewSource, NewSourceContent, NewTask, NewTheme, NewThemeProposal, NoteChanges,
+        NoteListFilter, ObjectChanges, ObjectListFilter, SourceListFilter, TaskChanges,
     },
     domain::ActorContext,
     embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
@@ -48,6 +48,122 @@ async fn test_pool() -> Option<PgPool> {
 
 fn actor() -> ActorContext {
     ActorContext::human()
+}
+
+#[tokio::test]
+async fn entity_images_are_canonical_revisioned_and_audited() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping database contract: TEST_DATABASE_URL is not set");
+        return;
+    };
+    let _test_guard = DB_TEST_LOCK.lock().await;
+    db::migrate(&pool).await.unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let create_key = format!("entity-image-create-{suffix}");
+    let entity = db::create_entity(
+        &pool,
+        &actor(),
+        NewEntity {
+            title: format!("Entity image {suffix}"),
+            description:
+                "A representative person profile used to verify canonical Entity image behavior."
+                    .into(),
+            provenance: json!({"source_type":"test","source_ref":"https://example.test/source"}),
+            image_url: Some("https://example.test/person.jpg".into()),
+        },
+        &create_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(entity.revision, 1);
+    assert_eq!(
+        entity.image_url.as_deref(),
+        Some("https://example.test/person.jpg")
+    );
+    let replay = db::create_entity(
+        &pool,
+        &actor(),
+        NewEntity {
+            title: "Ignored replay".into(),
+            description: "This replay body is ignored because the idempotency key already exists."
+                .into(),
+            provenance: json!({}),
+            image_url: None,
+        },
+        &create_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.object_id, entity.object_id);
+
+    let updated = db::update_entity(
+        &pool,
+        &actor(),
+        entity.object_id,
+        entity.revision,
+        EntityChanges {
+            image_url: Some(Some("https://example.test/person-new.jpg".into())),
+            ..Default::default()
+        },
+        Some(&format!("entity-image-update-{suffix}")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.revision, 2);
+    assert!(matches!(
+        db::update_entity(
+            &pool,
+            &actor(),
+            entity.object_id,
+            1,
+            EntityChanges::default(),
+            None,
+        )
+        .await,
+        Err(DbError::Conflict)
+    ));
+    let cleared = db::update_entity(
+        &pool,
+        &actor(),
+        entity.object_id,
+        updated.revision,
+        EntityChanges {
+            image_url: Some(None),
+            ..Default::default()
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared.revision, 3);
+    assert_eq!(cleared.image_url, None);
+    assert!(matches!(
+        db::create_entity(
+            &pool,
+            &actor(),
+            NewEntity {
+                title: format!("Invalid image {suffix}"),
+                description: "An invalid Entity image fixture that must never be persisted.".into(),
+                provenance: json!({}),
+                image_url: Some("http://example.test/person.jpg".into()),
+            },
+            &format!("entity-image-invalid-{suffix}"),
+        )
+        .await,
+        Err(DbError::Validation(_))
+    ));
+    let events = db::list_events(&pool, entity.object_id).await.unwrap();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].actor_id, "local-human");
+    assert_eq!(events[0].changes["image_url_changed"], true);
+    let eval_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM evals e JOIN eval_objects eo ON eo.eval_id=e.id WHERE e.kind='human_mutation' AND eo.object_id=$1",
+    )
+    .bind(entity.object_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(eval_count, 3);
 }
 
 #[tokio::test]
@@ -2326,7 +2442,19 @@ async fn canonical_ontology_and_revision_conflicts() {
     let baseline_schema = schema::inspect_schema(&pool).await.unwrap();
     assert_eq!(baseline_schema.tables.len(), 23);
     let mut application_tables = sqlx::query_scalar::<_, String>(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('_sqlx_migrations', 'schema_visualizer_tables') ORDER BY tablename",
+        r#"SELECT c.relname
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public'
+             AND c.relkind IN ('r', 'p')
+             AND c.relname NOT IN ('_sqlx_migrations', 'schema_visualizer_tables')
+             AND NOT EXISTS (
+                 SELECT 1 FROM pg_depend d
+                 WHERE d.classid = 'pg_class'::regclass
+                   AND d.objid = c.oid
+                   AND d.deptype = 'e'
+             )
+           ORDER BY c.relname"#,
     )
     .fetch_all(&pool)
     .await

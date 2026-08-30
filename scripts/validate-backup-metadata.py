@@ -34,7 +34,7 @@ def main() -> None:
     if not allowed_database(metadata.get("database")):
         fail("unexpected source database")
     schema = metadata.get("schema_version")
-    if not isinstance(schema, int) or isinstance(schema, bool) or not 1 <= schema <= 12:
+    if not isinstance(schema, int) or isinstance(schema, bool) or not 1 <= schema <= 14:
         fail("unsupported schema version")
     if not isinstance(metadata.get("product_version"), str) or not metadata["product_version"]:
         fail("missing product version")
