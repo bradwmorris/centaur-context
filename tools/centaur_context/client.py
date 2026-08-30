@@ -243,12 +243,14 @@ class CentaurContextClient:
         idempotency_key: str | None = None,
         *,
         token: str | None = None,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
     ) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {token or self._token()}",
-            "X-Centaur-Principal-Id": self._principal_id(),
-            "X-Centaur-Thread-Key": self._thread_key(),
+            "X-Centaur-Principal-Id": _clean(principal_id) or self._principal_id(),
+            "X-Centaur-Thread-Key": _clean(thread_key) or self._thread_key(),
         }
         if idempotency_key is not None:
             key = _clean(idempotency_key)
@@ -267,6 +269,8 @@ class CentaurContextClient:
         idempotency_key: str | None = None,
         token: str | None = None,
         base_url: str | None = None,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
     ) -> Any:
         try:
             response = self._http.request(
@@ -274,7 +278,12 @@ class CentaurContextClient:
                 f"{base_url or self.base_url}{path}",
                 params=params,
                 json=json,
-                headers=self._headers(idempotency_key, token=token),
+                headers=self._headers(
+                    idempotency_key,
+                    token=token,
+                    principal_id=principal_id,
+                    thread_key=thread_key,
+                ),
             )
         except Exception as exc:
             raise RuntimeError(f"Centaur Context request failed: {exc}") from exc
@@ -497,20 +506,46 @@ class CentaurContextClient:
             base_url=self.intake_url,
         )
 
-    def source_intake_validate(self, manifest: dict[str, Any]) -> dict[str, Any]:
+    def source_intake_validate(
+        self,
+        manifest: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
         """Validate one Enyu Source manifest without writing rows."""
-        return self._source_intake_request("validate", manifest)
+        return self._source_intake_request(
+            "validate", manifest, principal_id=principal_id, thread_key=thread_key
+        )
 
-    def source_intake_commit(self, manifest: dict[str, Any]) -> dict[str, Any]:
+    def source_intake_commit(
+        self,
+        manifest: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
         """Atomically commit or replay one Enyu Source manifest."""
-        return self._source_intake_request("commit", manifest)
+        return self._source_intake_request(
+            "commit", manifest, principal_id=principal_id, thread_key=thread_key
+        )
 
-    def source_intake_status(self, manifest: dict[str, Any]) -> dict[str, Any]:
+    def source_intake_status(
+        self,
+        manifest: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
         """Check commit and retrieval readiness for one Enyu Source manifest."""
-        return self._source_intake_request("status", manifest)
+        return self._source_intake_request(
+            "status", manifest, principal_id=principal_id, thread_key=thread_key
+        )
 
     def _source_intake_request(
-        self, action: str, manifest: dict[str, Any]
+        self,
+        action: str,
+        manifest: dict[str, Any],
+        *,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(manifest, dict):
             raise ValueError("manifest must be a JSON object")
@@ -520,6 +555,8 @@ class CentaurContextClient:
             json=manifest,
             token=self._source_intake_token(),
             base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
         )
 
     @staticmethod

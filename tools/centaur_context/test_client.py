@@ -415,6 +415,28 @@ def test_source_intake_methods_use_only_the_enyu_workflow_credential() -> None:
     )
 
 
+def test_source_intake_accepts_explicit_workflow_identity() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"valid": True}})
+
+    client = make_client(
+        handler, source_intake_token="source-intake-placeholder-token"
+    )
+    client.source_intake_validate(
+        {"version": "centaur-context-source-intake-v1"},
+        principal_id="workflow-enyu-source-ingestion",
+        thread_key="workflow:run-1",
+    )
+
+    assert requests[0].headers["x-centaur-principal-id"] == (
+        "workflow-enyu-source-ingestion"
+    )
+    assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-1"
+
+
 def test_source_intake_never_falls_back_to_other_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
