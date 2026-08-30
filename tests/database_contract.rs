@@ -17,7 +17,7 @@ use centaur_context::{
     domain::ActorContext,
     embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
     ingest::{
-        SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
+        SlackAvatarAssetInput, SlackInteractionInput, SlackMessageInput, SlackSenderInput, ingest,
         queue_inactive_interactions,
     },
     schema, search,
@@ -1145,17 +1145,21 @@ async fn canonical_ontology_and_revision_conflicts() {
     );
 
     let timestamp = |value: &str| OffsetDateTime::parse(value, &Rfc3339).unwrap();
-    let human = SlackSenderInput {
+    let mut human = SlackSenderInput {
         provider_user_id: "U_HUMAN".to_owned(),
         display_name: "Example Human".to_owned(),
         user_kind: "human".to_owned(),
         avatar_url: Some("https://avatars.slack-edge.example/U_HUMAN.png".to_owned()),
+        avatar_asset: None,
+        profile_refreshed_at: None,
     };
     let agent = SlackSenderInput {
         provider_user_id: "U_AGENT".to_owned(),
         display_name: "Centaur Agent".to_owned(),
         user_kind: "agent".to_owned(),
         avatar_url: None,
+        avatar_asset: None,
+        profile_refreshed_at: None,
     };
     let message = |id: &str, sender: SlackSenderInput, content: &str, at: &str| SlackMessageInput {
         provider_message_id: id.to_owned(),
@@ -1211,6 +1215,56 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(replay.chat_object_id, first_ingest.chat_object_id);
     assert_eq!(replay.inserted_message_count, 0);
     assert_eq!(replay.duplicate_message_count, 2);
+
+    let refreshed_at = timestamp("2026-05-27T00:05:00Z");
+    let refreshed_human = SlackSenderInput {
+        display_name: "Brad".to_owned(),
+        avatar_url: Some("https://avatars.slack-edge.example/changed.png".to_owned()),
+        avatar_asset: Some(SlackAvatarAssetInput {
+            sha256: "a".repeat(64),
+            filename: "brad.jpg".to_owned(),
+            provenance: json!({"source":"enyu_overlay","license":"supplied"}),
+        }),
+        profile_refreshed_at: Some(refreshed_at),
+        ..human.clone()
+    };
+    let refreshed = ingest(
+        &pool,
+        interaction(
+            vec![message(
+                "1780000000.000100",
+                refreshed_human.clone(),
+                "Please summarize the project.",
+                "2026-05-27T00:00:00Z",
+            )],
+            false,
+        )
+        .validate()
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refreshed.inserted_message_count, 0);
+    assert_eq!(refreshed.participant_object_ids.len(), 1);
+    assert!(
+        first_ingest
+            .participant_object_ids
+            .contains(&refreshed.participant_object_ids[0])
+    );
+    let refreshed_user = db::get_user(&pool, refreshed.participant_object_ids[0])
+        .await
+        .unwrap();
+    assert_eq!(refreshed_user.title, "Brad");
+    assert_eq!(refreshed_user.revision, 2);
+    let rename_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE object_id=$1 AND action='updated'",
+    )
+    .bind(refreshed.participant_object_ids[0])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rename_events, 1);
+    human = refreshed_human;
 
     let mut finished_input = interaction(
         vec![message(
@@ -1345,12 +1399,19 @@ async fn canonical_ontology_and_revision_conflicts() {
         users[0].object_id.to_string()
     );
     assert!(user_api_contract.get("id").is_none());
-    assert_eq!(
-        db::list_external_identities(&pool, first_ingest.participant_object_ids[0])
+    let refreshed_identity =
+        db::list_external_identities(&pool, refreshed.participant_object_ids[0])
             .await
-            .unwrap()
-            .len(),
-        1
+            .unwrap();
+    assert_eq!(refreshed_identity.len(), 1);
+    assert_eq!(refreshed_identity[0].display_name.as_deref(), Some("Brad"));
+    assert_eq!(
+        refreshed_identity[0].avatar_asset_filename.as_deref(),
+        Some("brad.jpg")
+    );
+    assert_eq!(
+        refreshed_identity[0].profile_refreshed_at,
+        Some(refreshed_at)
     );
     let chat_visuals = db::list_object_visuals(&pool).await.unwrap();
     let chat_visual = chat_visuals
@@ -1366,7 +1427,9 @@ async fn canonical_ontology_and_revision_conflicts() {
             .all(|user| user.role == "participant")
     );
     assert!(chat_visual.users.iter().any(|user| {
-        user.avatar_url.as_deref() == Some("https://avatars.slack-edge.example/U_HUMAN.png")
+        user.avatar_url.as_deref() == Some("https://avatars.slack-edge.example/changed.png")
+            && user.avatar_asset_url.as_deref()
+                == Some("/api/v1/identity-assets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/brad.jpg")
     }));
 
     let run_id = finished.curator_run_id.unwrap();
@@ -1721,18 +1784,24 @@ async fn canonical_ontology_and_revision_conflicts() {
         display_name: "Alex Example".to_owned(),
         user_kind: "human".to_owned(),
         avatar_url: None,
+        avatar_asset: None,
+        profile_refreshed_at: None,
     };
     let dm_human_b = SlackSenderInput {
         provider_user_id: "U_DM_B".to_owned(),
         display_name: "Alex Example".to_owned(),
         user_kind: "human".to_owned(),
         avatar_url: None,
+        avatar_asset: None,
+        profile_refreshed_at: None,
     };
     let dm_agent = SlackSenderInput {
         provider_user_id: "U_DM_AGENT".to_owned(),
         display_name: "Centaur Assistant".to_owned(),
         user_kind: "agent".to_owned(),
         avatar_url: None,
+        avatar_asset: None,
+        profile_refreshed_at: None,
     };
     let dm = ingest(
         &pool,
@@ -2532,6 +2601,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             text_search_config: TextSearchConfig::SIMPLE,
         },
         PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
     );
     let schema_response = human
         .clone()

@@ -9,6 +9,7 @@ const user = {
   user_kind: "human" as const,
   role: "source author" as const,
   avatar_url: "https://example.test/avatar.png",
+  avatar_asset_url: "/api/v1/identity-assets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example.png",
 };
 
 describe("record visual language", () => {
@@ -35,6 +36,12 @@ describe("record visual language", () => {
     const { container } = render(<AttributionStack users={[user]} />);
     fireEvent.error(container.querySelector("img")!);
     expect(screen.getByRole("img", { name: "Example Human, Human, source author" })).toHaveTextContent("EH");
+  });
+
+  it("renders only the same-origin asset route and leaves provider URLs inactive", () => {
+    const { container } = render(<AttributionStack users={[user]} />);
+    expect(container.querySelector("img")).toHaveAttribute("src", user.avatar_asset_url);
+    expect(container.querySelector("img")).not.toHaveAttribute("src", user.avatar_url);
   });
 
   it("shows the evidence-backed attribution role in detail contexts", () => {

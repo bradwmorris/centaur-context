@@ -26,6 +26,7 @@ pub struct Config {
     pub text_search_config: TextSearchConfig,
     pub curator_model: Option<CuratorModelConfig>,
     pub static_dir: PathBuf,
+    pub identity_assets_dir: PathBuf,
 }
 
 #[derive(Clone)]
@@ -205,6 +206,17 @@ impl Config {
             bail!("THEME_PROPOSAL_API_TOKEN must differ from every other service credential");
         }
 
+        let static_dir = env::var("STATIC_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("web/dist"));
+        let identity_assets_dir = env::var("IDENTITY_ASSETS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                static_dir
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("identity-assets")
+            });
         Ok(Self {
             database_url,
             human_addr: parse_addr("HUMAN_ADDR", "0.0.0.0:8080")?,
@@ -231,9 +243,8 @@ impl Config {
                 &env::var("TEXT_SEARCH_CONFIG").unwrap_or_else(|_| "simple".to_owned()),
             )?,
             curator_model,
-            static_dir: env::var("STATIC_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("web/dist")),
+            static_dir,
+            identity_assets_dir,
         })
     }
 }

@@ -1,8 +1,9 @@
-# RD: Unify Enyu Slack Identities and Avatars
+# 2 — RD: Unify Enyu Slack Identities and Avatars
 
-**Status:** `scoped`
+**Status:** `complete`
 **Created:** 2026-08-30
-**Dependency:** `rd-fork-centaur-context-multi-agent-poc.md` phases 1-2 provide
+**Issue:** [#53](https://github.com/bradwmorris/centaur-context/issues/53)
+**Dependency:** `complete/rd-fork-centaur-context-multi-agent-poc.md` phases 1-2 provide
 the shared Context handshake and generic multi-Slack instances. This RD
 supersedes that RD's dedicated-per-agent MVP channel expectation and owns only
 the Enyu names, identity media, one-channel acceptance, and UI presentation.
@@ -18,7 +19,8 @@ interaction-sink/profile and multi-instance/chart contracts; and the private
 Enyu overlay manifests, values, fixtures, deployment, tests, and supplied image
 dimensions/hashes.
 
-**Missing:** none. Live Slack mutations remain approval-gated.
+**Missing:** none. The requester approved and the agent completed the live Slack
+mutations and one-channel acceptance on 2026-08-30.
 
 1. In the private Enyu overlay, use one approved shared MVP channel for both
    instances. Rename app/bot presentation to `Ed (enyu editor)` and
@@ -70,12 +72,12 @@ dimensions/hashes.
 
 ## What We Are Doing
 
-- [ ] One shared Slack channel shows Ed and Rez with the exact clean names and
+- [x] One shared Slack channel shows Ed and Rez with the exact clean names and
   chosen images; no second channel is required for MVP.
-- [ ] Context has stable Brad, Ed, and Rez Users whose canonical images render
+- [x] Context has stable Brad, Ed, and Rez Users whose canonical images render
   on every applicable UI identity surface, survive Slack URL expiry/change,
   and refresh names/profile metadata without duplicating Users.
-- [ ] Missing, unreadable, private, wrong-type, or broken media falls back to
+- [x] Missing, unreadable, private, wrong-type, or broken media falls back to
   deterministic initials/colour with accessible identity text and no broken
   image, secret, token, or private Slack URL exposure.
 
@@ -105,14 +107,42 @@ dimensions/hashes.
 
 ## Checks
 
-- [ ] Context migration upgrade preserves existing identities/API clients;
+- [x] Context migration upgrade preserves existing identities/API clients;
   ingestion replay, rename/refresh, asset priority, traversal/wrong-MIME/private-
   URL rejection, caching, and fallback tests pass.
-- [ ] UI tests cover all enumerated surfaces for Brad, Ed, and Rez plus broken
+- [x] UI tests cover all enumerated surfaces for Brad, Ed, and Rez plus broken
   media; Centaur sink tests cover profile TTL/failure and one-channel two-bot
   snapshots; Enyu tests assert exact names, hashes, mapping, and no `&#x20;`.
-- [ ] Context root verification, Slackbot v2 type/tests, Enyu overlay tests, and
+- [x] Context root verification, Slackbot v2 type/tests, Enyu overlay tests, and
   `git diff --check` pass in each changed repository.
+
+## Verification
+
+- Context: formatting, Clippy, Rust unit/API/database integration tests against
+  a disposable `centaur_context_test` database, web type-check/build/tests, and
+  the packaged Python client suite passed.
+- Slackbot v2: type-check and 266 tests passed with one existing stress test
+  skipped on Bun 1.3.14; the focused identity suite passed 6 tests.
+- Enyu: 36 overlay tests, Python compile checks, YAML parsing, Helm lint, exact
+  asset hashes, and the non-root asset carrier image build passed.
+- Live Slack acceptance: both apps and bots present as `Ed (enyu editor)` and
+  `Rez (enyu researcher)` with the supplied icons; Bradley's profile uses the
+  supplied `brad.jpg`; both bots are members of the same private `#enyu-poc`
+  channel. A synthetic root message with both real Slack mentions received one
+  reply from each bot in the same thread (`Editor ready` and `Researcher
+  ready`). No live workspace, channel, user, or token value was committed.
+- Live Context acceptance through the authenticated/HTTP surfaces (never a
+  database DSN) found one shared Chat and the same stable Brad, Ed, and Rez User
+  object IDs. Refreshed external identities expose `Brad`, `Ed (enyu editor)`,
+  and `Rez (enyu researcher)` with the three canonical asset hashes; object
+  visuals use same-origin `/api/v1/identity-assets/...` URLs. Each served asset
+  matched its committed SHA-256 and returned the correct MIME type, immutable
+  one-year caching, and digest ETag.
+- Live rollout: the Context and both Slackbot deployments were Ready. A
+  concurrent Helm upgrade was allowed to finish, then the identity-aware chart
+  was reapplied from the current release values so the other task's settings
+  remained intact; the resulting release rendered the profile TTL, bot
+  identity, and identity-override environment contract for both instances.
 
 ## Approval Boundary
 
@@ -120,5 +150,6 @@ Local implementation and signed fixtures do not authorize Slack app/bot/profile
 renames, avatar uploads (including Brad's), workspace/channel changes,
 credentials, live callbacks, deployment, publication, spending, or deletion.
 Each external Slack mutation and live rollout requires explicit requester
-approval; credentials stay out of repositories, logs, fixtures, Context URLs,
+approval. The requester supplied that approval for this execution on
+2026-08-30; credentials remained out of repositories, fixtures, Context URLs,
 and sandboxes.

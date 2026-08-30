@@ -69,8 +69,8 @@ function UserAvatar({ user }: { user: UserAttribution }) {
   const label = `${user.title}, ${readable(user.user_kind)}, ${user.role}`;
   const style = { "--avatar-hue": avatarHue(user.user_object_id) } as React.CSSProperties;
   return <span className={`user-avatar ${user.user_kind}`} role="img" aria-label={label} title={label} style={style}>
-    {user.avatar_url && !failed
-      ? <img src={user.avatar_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+    {user.avatar_asset_url && !failed
+      ? <img src={user.avatar_asset_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
       : <span aria-hidden="true">{initials(user.title)}</span>}
   </span>;
 }

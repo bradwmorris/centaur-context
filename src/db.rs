@@ -283,6 +283,11 @@ pub struct ExternalIdentity {
     pub provider_user_id: String,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
+    pub avatar_asset_sha256: Option<String>,
+    pub avatar_asset_filename: Option<String>,
+    pub avatar_provenance: Value,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub profile_refreshed_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -304,6 +309,7 @@ pub struct UserAttribution {
     pub user_kind: String,
     pub role: String,
     pub avatar_url: Option<String>,
+    pub avatar_asset_url: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -2157,7 +2163,8 @@ pub async fn list_external_identities(
     get_user(pool, user_object_id).await?;
     Ok(sqlx::query_as(
         r#"SELECT id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url,
-                  created_at,updated_at
+                  avatar_asset_sha256,avatar_asset_filename,avatar_provenance,
+                  profile_refreshed_at,created_at,updated_at
            FROM external_identities WHERE user_object_id=$1
            ORDER BY provider,workspace_id,provider_user_id"#,
     )
@@ -2229,14 +2236,20 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
              JOIN chat_messages m ON m.id=message_ref.value::uuid
            )
            SELECT a.object_id,a.user_object_id,uo.title,u.user_kind,a.role,
-                  avatar.avatar_url
+                  avatar.avatar_url,
+                  CASE WHEN avatar.avatar_asset_sha256 IS NOT NULL THEN
+                    '/api/v1/identity-assets/' || avatar.avatar_asset_sha256 || '/' || avatar.avatar_asset_filename
+                  ELSE NULL END AS avatar_asset_url
            FROM attribution a
            JOIN users u ON u.object_id=a.user_object_id
            JOIN objects uo ON uo.id=u.object_id
            LEFT JOIN LATERAL (
-             SELECT e.avatar_url FROM external_identities e
-             WHERE e.user_object_id=u.object_id AND e.avatar_url IS NOT NULL
-             ORDER BY (e.provider='slack') DESC,e.updated_at DESC LIMIT 1
+             SELECT e.avatar_url,e.avatar_asset_sha256,e.avatar_asset_filename
+             FROM external_identities e
+             WHERE e.user_object_id=u.object_id
+               AND (e.avatar_url IS NOT NULL OR e.avatar_asset_sha256 IS NOT NULL)
+             ORDER BY (e.avatar_asset_sha256 IS NOT NULL) DESC,
+                      (e.provider='slack') DESC,e.updated_at DESC LIMIT 1
            ) avatar ON true
            ORDER BY a.object_id,
              CASE a.role WHEN 'owner' THEN 1 WHEN 'source author' THEN 2
