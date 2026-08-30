@@ -171,6 +171,9 @@ export const api = {
   note(id: string) {
     return request<Note>(`/api/v1/notes/${id}`);
   },
+  updateNote(id: string, body: Record<string, unknown>) {
+    return request<Note>(`/api/v1/notes/${id}`, write("PATCH", body));
+  },
   createNote(body: Record<string, unknown>) {
     return request<Note>("/api/v1/notes", write("POST", body));
   },

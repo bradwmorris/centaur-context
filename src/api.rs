@@ -115,7 +115,7 @@ fn service_router(state: AppState) -> Router {
                 )
                 .route("/sources/{id}/content", get(read_source_content))
                 .route("/notes", get(list_notes).post(create_note))
-                .route("/notes/{id}", get(read_note))
+                .route("/notes/{id}", get(read_note).patch(update_note))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
@@ -849,6 +849,56 @@ async fn create_note(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(json!({"data":note}))))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateNoteRequest {
+    expected_revision: i64,
+    title: Option<String>,
+    description: Option<String>,
+    content: Option<String>,
+    content_format: Option<String>,
+    protected: Option<bool>,
+}
+
+async fn update_note(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<UpdateNoteRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let title = input
+        .title
+        .map(|value| required_text(value, "title", 300))
+        .transpose()?;
+    let description = match (title.as_deref(), input.description) {
+        (Some(title), Some(value)) => Some(crate::domain::object_description(title, value)?),
+        (None, Some(value)) => Some(required_text(value, "description", 1000)?),
+        (_, None) => None,
+    };
+    let note = db::update_note(
+        &state.pool,
+        &actor,
+        id,
+        input.expected_revision,
+        db::NoteChanges {
+            title,
+            description,
+            protected: input.protected,
+            content: input
+                .content
+                .map(|value| required_text(value, "content", 100_000))
+                .transpose()?,
+            content_format: input
+                .content_format
+                .map(|value| allowed(value, "content_format", NOTE_CONTENT_FORMATS))
+                .transpose()?,
+        },
+        idempotency_key(&headers, false, &actor)?.as_deref(),
+    )
+    .await?;
+    Ok(Json(json!({"data":note})))
 }
 
 #[derive(Debug, Deserialize)]

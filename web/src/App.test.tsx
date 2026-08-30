@@ -78,12 +78,12 @@ const evalSummary = {
 const visuals = objects.map((object) => ({
   object_id: object.id,
   source_provider: object.id === ids.chat || object.id === ids.memory ? "slack" : null,
-  users: object.id === ids.chat || object.id === ids.memory || object.id === ids.user ? [{
+  users: object.id === ids.chat || object.id === ids.memory || object.id === ids.note || object.id === ids.user ? [{
     object_id: object.id,
     user_object_id: ids.user,
     title: "Canonical user",
     user_kind: "human",
-    role: object.id === ids.user ? "identity" : object.id === ids.chat ? "participant" : "source author",
+    role: object.id === ids.user ? "identity" : object.id === ids.chat || object.id === ids.note ? "participant" : "source author",
     avatar_url: null,
   }] : [],
 }));
@@ -136,6 +136,7 @@ function installApiMock() {
     if (path.startsWith("/api/v1/sources?")) return json({ items: [source], next_cursor: null });
     if (path.startsWith("/api/v1/notes?")) return json({ items: [note], next_cursor: null });
     if (path === "/api/v1/notes" && method === "POST") return json(note);
+    if (path === `/api/v1/notes/${ids.note}` && method === "PATCH") return json({ ...note, revision: 2 });
     if (path === `/api/v1/notes/${ids.note}`) return json(note);
     if (path === `/api/v1/sources/${ids.source}`) return json(source);
     if (path === `/api/v1/sources/${ids.source}/contents` && method === "POST") return json({ ...sourceContent, version: 2 });
@@ -311,12 +312,22 @@ describe("canonical Object identity across the application", () => {
     }
   });
 
-  it("shows Note content separately from its short Object description", async () => {
+  it("shows Note attribution and lets a human edit full content", async () => {
     window.history.replaceState({}, "", `/notes/${ids.note}`);
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Canonical note" })).toBeVisible();
-    expect(screen.getByLabelText("Note properties")).toHaveTextContent("Canonical note description");
-    expect(screen.getByLabelText("Note content")).toHaveTextContent("Useful plain text and **Markdown** stay here.");
+    expect(await screen.findByDisplayValue("Canonical note")).toBeVisible();
+    expect(screen.getByLabelText("Note properties")).toHaveTextContent("Users");
+    expect((await screen.findAllByRole("img", { name: "Canonical user, Human, participant" })).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Note description")).toHaveValue("Canonical note description");
+    const content = screen.getByLabelText("Note content");
+    expect(content).toHaveValue("# Working note\n\nUseful plain text and **Markdown** stay here.");
+    await userEvent.clear(content);
+    await userEvent.type(content, "# Revised note\n\nEdited from the UI.");
+    await userEvent.click(screen.getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/v1/notes/${ids.note}`, expect.objectContaining({
+      method: "PATCH",
+      body: expect.stringContaining('"content":"# Revised note\\n\\nEdited from the UI."'),
+    })));
     expect(screen.getByRole("button", { name: "+ Connect" })).toBeVisible();
   });
 
@@ -340,8 +351,11 @@ describe("canonical Object identity across the application", () => {
     window.history.replaceState({}, "", `/sources/${ids.source}`);
     render(<App />);
     expect(await screen.findByDisplayValue("Canonical source")).toBeVisible();
-    expect(screen.getByRole("combobox", { name: "Source kind" })).toHaveValue("podcast");
-    expect(screen.getByDisplayValue("https://example.com/podcast")).toBeVisible();
+    const properties = screen.getByLabelText("Source properties");
+    expect(properties).toHaveTextContent("podcast");
+    expect(within(properties).getByRole("link", { name: "https://example.com/podcast" })).toBeVisible();
+    expect(within(properties).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(properties).queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByText("Bounded transcript preview")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Load preview" }));
     expect(await screen.findByText("Bounded transcript preview")).toBeVisible();
@@ -368,17 +382,16 @@ describe("canonical Object identity across the application", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/v1/sources/${ids.source}/contents`, expect.objectContaining({ method: "POST", body: expect.stringContaining('"normalized_text":"A synthetic transcript."') })));
   });
 
-  it("explicitly clears optional Source metadata that a human empties", async () => {
+  it("updates Source title and description without exposing metadata editors", async () => {
     window.history.replaceState({}, "", `/sources/${ids.source}`);
     render(<App />);
-    const canonicalUri = await screen.findByDisplayValue("https://example.com/podcast");
-    const byline = screen.getByDisplayValue("Example Host");
-    await userEvent.clear(canonicalUri);
-    await userEvent.clear(byline);
+    const title = await screen.findByDisplayValue("Canonical source");
+    await userEvent.clear(title);
+    await userEvent.type(title, "Updated source title");
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(`/api/v1/sources/${ids.source}`, expect.objectContaining({
       method: "PATCH",
-      body: expect.stringMatching(/"clear_canonical_uri":true.*"clear_byline":true/),
+      body: expect.stringContaining('"title":"Updated source title"'),
     })));
   });
 

@@ -147,7 +147,7 @@ export default function App() {
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
@@ -307,18 +307,9 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
   if (!source || !object) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); const data = new FormData(event.currentTarget); setError(null);
-    const canonicalUri = optional(data, "canonical_uri"); const byline = optional(data, "byline"); const publisher = optional(data, "publisher");
-    const publishedAt = optionalDate(data, "published_at"); const accessedAt = optionalDate(data, "accessed_at"); const language = optional(data, "language");
-    const mediaType = optional(data, "media_type"); const artifactReference = optional(data, "artifact_reference"); const contentHash = optional(data, "content_hash");
     try {
       await api.updateSource(id, {
         expected_revision: source.revision, title: String(data.get("title")), description: String(data.get("description")), protected: source.protected,
-        source_kind: String(data.get("source_kind")), canonical_uri: canonicalUri, clear_canonical_uri: cleared(source.canonical_uri, canonicalUri),
-        byline, clear_byline: cleared(source.byline, byline), publisher, clear_publisher: cleared(source.publisher, publisher),
-        published_at: publishedAt, clear_published_at: cleared(source.published_at, publishedAt), accessed_at: accessedAt, clear_accessed_at: cleared(source.accessed_at, accessedAt),
-        language, clear_language: cleared(source.language, language), media_type: mediaType, clear_media_type: cleared(source.media_type, mediaType),
-        artifact_reference: artifactReference, clear_artifact_reference: cleared(source.artifact_reference, artifactReference),
-        content_hash: contentHash, clear_content_hash: cleared(source.content_hash, contentHash),
       });
       await Promise.all([load(), onChanged()]);
     } catch (cause) { setError(conflictMessage(cause)); }
@@ -326,17 +317,17 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
   return <div className="record-page"><div className="record-primary">
     <form className="detail-form source-detail-form" onSubmit={save}>
       <div className="detail-heading"><ObjectId id={source.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Source title" defaultValue={source.title} key={`${source.object_id}-${source.revision}-title`} /></div>
-      <section className="properties-block" aria-label="Source properties"><h2>Properties</h2><div className="source-properties-grid">
-        <Field label="Kind"><select name="source_kind" aria-label="Source kind" defaultValue={source.source_kind}>{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
-        <Field label="Canonical URL"><input name="canonical_uri" type="url" maxLength={2048} defaultValue={source.canonical_uri ?? ""} /></Field>
-        <Field label="Byline"><input name="byline" maxLength={500} defaultValue={source.byline ?? ""} /></Field>
-        <Field label="Publisher"><input name="publisher" maxLength={300} defaultValue={source.publisher ?? ""} /></Field>
-        <Field label="Published"><input name="published_at" type="datetime-local" defaultValue={localDateTime(source.published_at)} /></Field>
-        <Field label="Accessed"><input name="accessed_at" type="datetime-local" defaultValue={localDateTime(source.accessed_at)} /></Field>
-        <Field label="Language"><input name="language" maxLength={35} defaultValue={source.language ?? ""} /></Field>
-        <Field label="Media type"><input name="media_type" maxLength={100} defaultValue={source.media_type ?? ""} /></Field>
-        <Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} defaultValue={source.artifact_reference ?? ""} /></Field>
-        <Field label="Content hash"><input name="content_hash" maxLength={64} pattern="[0-9a-f]{64}" defaultValue={source.content_hash ?? ""} /></Field>
+      <section className="properties-block" aria-label="Source properties"><h2>Properties</h2><div className="properties-grid">
+        <Property label="Kind"><ObjectTypeBadge kind="source" /> <span className="property-value-wrap">{source.source_kind.replaceAll("_", " ")}</span></Property>
+        <Property label="Canonical URL">{source.canonical_uri ? <a href={source.canonical_uri} target="_blank" rel="noreferrer">{source.canonical_uri}</a> : "Not set"}</Property>
+        <Property label="Byline"><span className="property-value-wrap">{source.byline ?? "Not set"}</span></Property>
+        <Property label="Publisher"><span className="property-value-wrap">{source.publisher ?? "Not set"}</span></Property>
+        <Property label="Published">{source.published_at ? new Date(source.published_at).toLocaleString() : "Not set"}</Property>
+        <Property label="Accessed">{source.accessed_at ? new Date(source.accessed_at).toLocaleString() : "Not set"}</Property>
+        <Property label="Language">{source.language ?? "Not set"}</Property>
+        <Property label="Media type">{source.media_type ?? "Not set"}</Property>
+        <Property label="Artifact reference"><span className="property-value-wrap">{source.artifact_reference ?? "Not set"}</span></Property>
+        <Property label="Content hash"><span className="property-value-wrap">{source.content_hash ?? "Not set"}</span></Property>
       </div></section>
       <textarea className="body-input" name="description" required maxLength={1000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
       <DescriptionHelp id="source-description-help" kind="source" />
@@ -394,7 +385,7 @@ function SourceVersionSummary({ version }: { version: SourceContentVersion | und
   return <p className="content-version-summary">{version.content_kind.replaceAll("_", " ")} · {version.size_bytes.toLocaleString()} bytes · {version.language ?? "language unspecified"} · {relative(version.created_at)}</p>;
 }
 
-function NoteDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
   const [note, setNote] = useState<Note | null>(null);
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -408,15 +399,33 @@ function NoteDetail({ id, objects, visuals }: { id: string; objects: SharedObjec
   }, [id]);
   useEffect(() => { void load(); }, [load]);
   if (!note || !object) return <DetailLoading error={error} />;
+  const save = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget); setError(null);
+    try {
+      await api.updateNote(id, {
+        expected_revision: note.revision,
+        title: String(data.get("title")),
+        description: String(data.get("description")),
+        content: String(data.get("content")),
+        content_format: String(data.get("content_format")),
+        protected: note.protected,
+      });
+      await Promise.all([load(), onChanged()]);
+    } catch (cause) { setError(conflictMessage(cause)); }
+  };
   return <div className="record-page"><div className="record-primary">
-    <div className="detail-heading"><ObjectId id={note.object_id} rowPill navigate /><h1 className="detail-title">{note.title}</h1></div>
-    <section className="properties-block" aria-label="Note properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Type"><ObjectTypeBadge kind="note" /></Property>
-      <Property label="Format">{note.content_format === "markdown" ? "Markdown" : "Plain text"}</Property>
-      <Property label="Updated">{relative(note.updated_at)}</Property>
-      <Property label="Description"><span className="property-value-wrap">{note.description}</span></Property>
-    </div></section>
-    <Section title="Content"><pre className="note-content" aria-label="Note content">{note.content}</pre></Section>
+    <form className="detail-form note-detail-form" onSubmit={save}>
+      <div className="detail-heading"><ObjectId id={note.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Note title" defaultValue={note.title} key={`${note.object_id}-${note.revision}-title`} /><AttributionStack users={visuals.get(note.object_id)?.users ?? []} /></div>
+      <section className="properties-block" aria-label="Note properties"><h2>Properties</h2><div className="properties-grid">
+        <Property label="Type"><ObjectTypeBadge kind="note" /></Property>
+        <Property label="Users">{(visuals.get(note.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(note.object_id)?.users ?? []} /> : "None"}</Property>
+        <Property label="Format"><select name="content_format" aria-label="Note content format" defaultValue={note.content_format} key={`${note.object_id}-${note.revision}-format`}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
+        <Property label="Updated">{relative(note.updated_at)}</Property>
+      </div></section>
+      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
+      <Section title="Content"><textarea className="note-content note-content-editor" name="content" aria-label="Note content" required maxLength={100000} defaultValue={note.content} key={`${note.object_id}-${note.revision}-content`} rows={16} /></Section>
+      <button className="secondary save-button">Save note</button>
+    </form>
     {error && <p className="form-error">{error}</p>}
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
     <ActivityTimeline events={events} visuals={visuals} />
@@ -807,5 +816,3 @@ function textValue(value: unknown, fallback = "") { return typeof value === "str
 function stringList(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function optional(data: FormData, name: string) { const value = String(data.get(name) ?? "").trim(); return value || null; }
 function optionalDate(data: FormData, name: string) { const value = optional(data, name); return value ? new Date(value).toISOString() : null; }
-function localDateTime(value: string | null) { if (!value) return ""; const date = new Date(value); const offset = date.getTimezoneOffset() * 60_000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); }
-function cleared(previous: string | null, next: string | null) { return previous !== null && next === null; }

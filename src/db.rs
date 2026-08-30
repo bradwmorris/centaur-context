@@ -523,6 +523,15 @@ pub struct NewNote {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct NoteChanges {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub protected: Option<bool>,
+    pub content: Option<String>,
+    pub content_format: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct SourceChanges {
     pub title: Option<String>,
     pub description: Option<String>,
@@ -760,6 +769,79 @@ pub async fn create_note(
         .await?;
     insert_event(&mut tx,actor,"object",id,id,"created",Some(idempotency_key),None,1,
         json!({"kind":"note","title":input.title,"content_format":input.content_format,"content_characters":input.content.chars().count()})).await?;
+    tx.commit().await?;
+    get_note(pool, id).await
+}
+
+pub async fn update_note(
+    pool: &PgPool,
+    actor: &ActorContext,
+    id: Uuid,
+    expected_revision: i64,
+    changes: NoteChanges,
+    idempotency_key: Option<&str>,
+) -> Result<Note, DbError> {
+    if let Some(key) = idempotency_key
+        && let Some(existing_id) = idempotent_entity(pool, actor, key).await?
+    {
+        return get_note(pool, existing_id).await;
+    }
+    let current = get_note(pool, id).await?;
+    let title = changes.title.unwrap_or_else(|| current.title.clone());
+    let description = changes
+        .description
+        .unwrap_or_else(|| current.description.clone());
+    validate_object_description(&title, &description)?;
+    let protected = changes.protected.unwrap_or(current.protected);
+    let content = changes.content.unwrap_or_else(|| current.content.clone());
+    let content_format = changes
+        .content_format
+        .unwrap_or_else(|| current.content_format.clone());
+    let mut tx = pool.begin().await?;
+    let updated_revision: Option<i64> = sqlx::query_scalar(
+        r#"UPDATE objects SET title=$3,description=$4,protected=$5,revision=revision+1,
+           updated_by_type=$6,updated_by_id=$7,updated_at=now()
+           WHERE id=$1 AND kind='note' AND revision=$2 AND lifecycle='active'
+           RETURNING revision"#,
+    )
+    .bind(id)
+    .bind(expected_revision)
+    .bind(&title)
+    .bind(&description)
+    .bind(protected)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let updated_revision = updated_revision.ok_or(DbError::Conflict)?;
+    sqlx::query(
+        "UPDATE notes SET content=$2,content_format=$3,updated_at=now() WHERE object_id=$1",
+    )
+    .bind(id)
+    .bind(&content)
+    .bind(&content_format)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        "updated",
+        idempotency_key,
+        Some(expected_revision),
+        updated_revision,
+        json!({
+            "kind":"note",
+            "title":title,
+            "description_changed":description != current.description,
+            "content_changed":content != current.content,
+            "content_format":content_format,
+            "content_characters":content.chars().count()
+        }),
+    )
+    .await?;
     tx.commit().await?;
     get_note(pool, id).await
 }

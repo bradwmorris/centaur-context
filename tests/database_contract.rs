@@ -11,7 +11,7 @@ use centaur_context::{
     },
     db::{
         self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, NoteListFilter, ObjectChanges, ObjectListFilter,
+        NewSourceContent, NewTask, NoteChanges, NoteListFilter, ObjectChanges, ObjectListFilter,
         SourceListFilter, TaskChanges,
     },
     domain::ActorContext,
@@ -909,12 +909,35 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     assert_eq!(note_search.len(), 1);
     assert_eq!(note_search[0].object_id, note.object_id);
+    let updated_note = db::update_note(
+        &pool,
+        &actor(),
+        note.object_id,
+        note.revision,
+        NoteChanges {
+            content: Some(
+                "# Revised thesis\nThe Note content was edited through the human UI path."
+                    .to_owned(),
+            ),
+            content_format: Some("markdown".to_owned()),
+            ..NoteChanges::default()
+        },
+        Some("update-synthetic-note"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated_note.revision, 2);
+    assert!(updated_note.content.contains("edited through the human UI"));
     let note_events = db::list_events(&pool, note.object_id).await.unwrap();
-    assert_eq!(note_events.len(), 1);
-    assert_eq!(note_events[0].actor_type, "centaur_agent");
-    assert_eq!(note_events[0].actor_id, "researcher-agent");
+    assert_eq!(note_events.len(), 2);
+    let created_note_event = note_events
+        .iter()
+        .find(|event| event.action == "created")
+        .unwrap();
+    assert_eq!(created_note_event.actor_type, "centaur_agent");
+    assert_eq!(created_note_event.actor_id, "researcher-agent");
     assert_eq!(
-        note_events[0].centaur_thread_key.as_deref(),
+        created_note_event.centaur_thread_key.as_deref(),
         Some("slack:T_PUBLIC:C_RESEARCH:thread-1")
     );
 
