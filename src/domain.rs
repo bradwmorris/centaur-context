@@ -64,6 +64,20 @@ pub fn required_text(
     Ok(value)
 }
 
+pub fn required_preserved_text(
+    value: String,
+    field: &'static str,
+    max: usize,
+) -> Result<String, ValidationError> {
+    if value.trim().is_empty() {
+        return Err(ValidationError::Required(field));
+    }
+    if value.chars().count() > max {
+        return Err(ValidationError::TooLong { field, max });
+    }
+    Ok(value)
+}
+
 pub fn optional_text(
     value: Option<String>,
     field: &'static str,
@@ -186,13 +200,16 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
     Ok(value)
 }
 
-pub const OBJECT_KINDS: &[&str] = &["task", "chat", "user", "entity", "memory", "source", "note"];
+pub const OBJECT_KINDS: &[&str] = &[
+    "task", "chat", "user", "entity", "memory", "source", "note", "theme",
+];
 pub const CONNECTION_KINDS: &[&str] = &[
     "involves",
     "about",
     "related_to",
     "depends_on",
     "derived_from",
+    "themed",
 ];
 pub const TASK_STATUSES: &[&str] = &["todo", "doing", "blocked", "review", "done"];
 pub const TASK_PRIORITIES: &[&str] = &["low", "medium", "high"];
@@ -210,6 +227,26 @@ pub const SOURCE_CONTENT_KINDS: &[&str] = &[
     "other",
 ];
 pub const NOTE_CONTENT_FORMATS: &[&str] = &["plain_text", "markdown"];
+
+pub fn theme_slug(value: String) -> Result<String, ValidationError> {
+    let value = required_text(value, "slug", 100)?.to_ascii_lowercase();
+    let valid = value.bytes().enumerate().all(|(index, byte)| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || (byte == b'-'
+                && index > 0
+                && index + 1 < value.len()
+                && value.as_bytes()[index - 1] != b'-')
+    });
+    if valid {
+        Ok(value)
+    } else {
+        Err(ValidationError::Unsupported {
+            field: "slug",
+            value,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProvenanceInput {
@@ -259,6 +296,17 @@ mod tests {
     }
 
     #[test]
+    fn validates_theme_slugs() {
+        assert_eq!(
+            theme_slug("AI-Infrastructure".into()).unwrap(),
+            "ai-infrastructure"
+        );
+        for invalid in ["-agents", "agents-", "agents--tools", "agents tools"] {
+            assert!(theme_slug(invalid.into()).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn provenance_rejects_unknown_keys() {
         assert!(provenance(Some(json!({"source_type": "human"}))).is_ok());
         assert!(provenance(Some(json!({"secret": "no"}))).is_err());
@@ -273,6 +321,16 @@ mod tests {
         );
         assert!(required_text("   ".to_owned(), "title", 10).is_err());
         assert!(required_text("too long".to_owned(), "title", 3).is_err());
+    }
+
+    #[test]
+    fn required_preserved_text_validates_without_changing_evidence_bytes() {
+        assert_eq!(
+            required_preserved_text("  evidence\n".to_owned(), "content", 20).unwrap(),
+            "  evidence\n"
+        );
+        assert!(required_preserved_text(" \n ".to_owned(), "content", 20).is_err());
+        assert!(required_preserved_text("too long".to_owned(), "content", 3).is_err());
     }
 
     #[test]

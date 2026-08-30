@@ -17,6 +17,8 @@ def make_client(handler, **overrides) -> CentaurContextClient:
         note_write_url="http://centaur-context.test:8084",
         intake_url="http://centaur-context.test:8085",
         source_intake_url="http://centaur-context.test:8086",
+        theme_proposal_url="http://centaur-context.test:8087",
+        theme_proposal_token="theme-proposal-token",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         principal_id="principal-1",
@@ -69,6 +71,48 @@ def test_get_context_caps_the_packet_at_ten_objects() -> None:
         == "11111111-1111-4111-8111-111111111111"
     )
     assert requests[0].method == "GET"
+
+
+def test_theme_reads_use_the_standard_scoped_agent_api() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": []})
+
+    client = make_client(handler)
+    assert client.list_themes(slug="research-ai") == []
+    assert client.list_theme_objects("theme/id", kind="source", limit=500) == []
+
+    assert requests[0].url.path == "/api/v1/themes"
+    assert requests[0].url.params["slug"] == "research-ai"
+    assert requests[1].url.raw_path.split(b"?", 1)[0] == b"/api/v1/themes/theme%2Fid/objects"
+    assert requests[1].url.params["kind"] == "source"
+    assert requests[1].url.params["limit"] == "100"
+
+
+def test_theme_proposal_uses_the_narrow_credential_and_idempotency() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"status": "pending"}}, 201)
+
+    result = make_client(handler).propose_theme(
+        title="AI Infrastructure",
+        slug="ai-infrastructure",
+        description="Research about infrastructure used to build and operate AI systems.",
+        rationale="A recurring research vertical needs a stable retrieval boundary.",
+        evidence={"source_ids": ["source-1"]},
+        idempotency_key="proposal-1",
+    )
+
+    assert result["status"] == "pending"
+    request = requests[0]
+    assert request.url.port == 8087
+    assert request.url.path == "/api/v1/theme-proposals"
+    assert request.headers["authorization"] == "Bearer theme-proposal-token"
+    assert request.headers["idempotency-key"] == "proposal-1"
 
 
 def test_get_context_requires_a_chat_object_before_request() -> None:
@@ -561,6 +605,42 @@ def test_create_note_cli_parses_provenance_and_forwards_idempotency(
         )
     ]
     assert capsys.readouterr().out.strip() == '{\n  "id": "note-1"\n}'
+
+
+def test_propose_theme_cli_parses_evidence_and_provenance(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeClient:
+        def propose_theme(self, **kwargs):
+            calls.append(kwargs)
+            return {"id": "proposal-1", "status": "pending"}
+
+    monkeypatch.setattr(cli, "_client", FakeClient)
+
+    cli.propose_theme(
+        "AI Infrastructure",
+        "ai-infrastructure",
+        "Research about infrastructure for AI systems.",
+        "A recurring vertical needs a stable retrieval boundary.",
+        '{"source_ids":["source-1"]}',
+        '{"source_type":"agent"}',
+        "proposal-1",
+    )
+
+    assert calls == [
+        {
+            "title": "AI Infrastructure",
+            "slug": "ai-infrastructure",
+            "description": "Research about infrastructure for AI systems.",
+            "rationale": "A recurring vertical needs a stable retrieval boundary.",
+            "evidence": {"source_ids": ["source-1"]},
+            "provenance": {"source_type": "agent"},
+            "idempotency_key": "proposal-1",
+        }
+    ]
+    assert '"status": "pending"' in capsys.readouterr().out
 
 
 def test_missing_thread_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

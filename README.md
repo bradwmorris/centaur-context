@@ -67,6 +67,9 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `create-note` (requires the separate `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`)
 - `source-intake-validate`, `source-intake-commit`, and `source-intake-status`
   (permanent Enyu workflow only; requires its separate Source-intake token)
+- `list-themes`, `read-theme`, and `list-theme-objects`
+- `propose-theme` and `read-theme-proposal`, plus `assign-theme` and
+  `unassign-theme` (requires the separate Theme listener token)
 
 All reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation never falls back to
 that read token: configure the separately scoped
@@ -83,6 +86,14 @@ bootstrap intake listener and credential. The tool uses
 `CENTAUR_CONTEXT_SOURCE_INTAKE_URL` and
 `CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN`; neither falls back to another Context
 credential.
+
+The optional Theme listener is disabled unless `THEME_PROPOSAL_API_TOKEN` is
+configured. It defaults to port `8087` and uses
+`CENTAUR_CONTEXT_THEME_PROPOSAL_URL` and
+`CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN`. Agents can assign or unassign existing
+approved Themes and submit new Theme proposals, but cannot approve proposals.
+Approval requires the `approve_themes` permission on the human API; schema 12
+grants it only to the initial local human administrator identity (`local-human`).
 
 ## Status
 

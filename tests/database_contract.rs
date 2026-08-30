@@ -11,8 +11,8 @@ use centaur_context::{
     },
     db::{
         self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, NoteChanges, NoteListFilter, ObjectChanges, ObjectListFilter,
-        SourceListFilter, TaskChanges,
+        NewSourceContent, NewTask, NewTheme, NewThemeProposal, NoteChanges, NoteListFilter,
+        ObjectChanges, ObjectListFilter, SourceListFilter, TaskChanges,
     },
     domain::ActorContext,
     embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
@@ -28,6 +28,8 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{path::PathBuf, time::Duration};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
+
+static DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn test_pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
@@ -49,14 +51,156 @@ fn actor() -> ActorContext {
 }
 
 #[tokio::test]
+async fn themes_are_canonical_and_agent_vocabulary_requires_human_approval() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping database contract: TEST_DATABASE_URL is not set");
+        return;
+    };
+    let _test_guard = DB_TEST_LOCK.lock().await;
+    db::migrate(&pool).await.unwrap();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let theme = db::create_theme(
+        &pool,
+        &actor(),
+        NewTheme {
+            title: format!("Research Theme {suffix}"),
+            description: "A bounded research vertical used to retrieve related evidence and work."
+                .into(),
+            slug: format!("research-{suffix}"),
+            provenance: json!({"source_type":"test"}),
+            protected: true,
+        },
+        &format!("theme-{suffix}"),
+    )
+    .await
+    .unwrap();
+    let entity = db::create_object(
+        &pool,
+        &actor(),
+        NewObject {
+            kind: "entity".into(),
+            title: format!("Theme subject {suffix}"),
+            description: "A specific organization used to verify Theme relationship rules.".into(),
+            provenance: json!({"source_type":"test"}),
+        },
+        &format!("theme-subject-{suffix}"),
+    )
+    .await
+    .unwrap();
+    let assignment = db::create_connection(
+        &pool,
+        &actor(),
+        NewConnection {
+            source_object_id: entity.id,
+            kind: "themed".into(),
+            target_object_id: theme.object_id,
+            description: "This organization is directly relevant to the approved research Theme."
+                .into(),
+            provenance: json!({"source_type":"test"}),
+            protected: true,
+        },
+        &format!("theme-assignment-{suffix}"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(assignment.kind, "themed");
+    assert_eq!(
+        db::list_theme_objects(&pool, theme.object_id, Some("entity"), 10)
+            .await
+            .unwrap()[0]
+            .id,
+        entity.id
+    );
+    let invalid = db::create_connection(
+        &pool,
+        &actor(),
+        NewConnection {
+            source_object_id: theme.object_id,
+            kind: "themed".into(),
+            target_object_id: entity.id,
+            description: "This invalid reverse relationship must be rejected by the ontology."
+                .into(),
+            provenance: json!({"source_type":"test"}),
+            protected: false,
+        },
+        &format!("invalid-theme-assignment-{suffix}"),
+    )
+    .await;
+    assert!(matches!(invalid, Err(DbError::Invalid(_))));
+
+    let agent = ActorContext {
+        actor_type: "centaur_agent",
+        actor_id: format!("theme-agent-{suffix}"),
+        centaur_thread_key: Some(format!("codex:issue:39:{suffix}")),
+        centaur_execution_id: Some(format!("execution-{suffix}")),
+        is_agent: true,
+    };
+    let proposal = db::create_theme_proposal(
+        &pool,
+        &agent,
+        NewThemeProposal {
+            title: format!("Proposed Theme {suffix}"),
+            slug: format!("proposed-{suffix}"),
+            description: "A proposed research vertical supported by recurring, cited evidence."
+                .into(),
+            rationale: "The agent found a stable grouping that does not match an approved Theme."
+                .into(),
+            evidence: json!({"object_ids":[entity.id]}),
+            provenance: json!({"source_type":"test"}),
+        },
+        &format!("proposal-{suffix}"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(proposal.status, "pending");
+    assert_eq!(
+        db::create_theme_proposal(
+            &pool,
+            &agent,
+            NewThemeProposal {
+                title: proposal.title.clone(),
+                slug: proposal.slug.clone(),
+                description: proposal.description.clone(),
+                rationale: proposal.rationale.clone(),
+                evidence: proposal.evidence.clone(),
+                provenance: proposal.provenance.clone(),
+            },
+            &format!("proposal-{suffix}"),
+        )
+        .await
+        .unwrap()
+        .id,
+        proposal.id
+    );
+    let approved = db::approve_theme_proposal(
+        &pool,
+        &actor(),
+        proposal.id,
+        "The authorized human approved this bounded vocabulary entry for research retrieval.",
+        &format!("approve-{suffix}"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(approved.slug, proposal.slug);
+    assert_eq!(
+        db::get_theme_proposal(&pool, proposal.id)
+            .await
+            .unwrap()
+            .status,
+        "approved"
+    );
+}
+
+#[tokio::test]
 async fn canonical_ontology_and_revision_conflicts() {
     let Some(pool) = test_pool().await else {
         eprintln!("skipping database contract: TEST_DATABASE_URL is not set");
         return;
     };
+    let _test_guard = DB_TEST_LOCK.lock().await;
     db::migrate(&pool).await.unwrap();
     sqlx::query(
-        "TRUNCATE eval_trace_entries, eval_objects, evals, object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, external_identities, source_contents, sources, notes, tasks, chats, users, entities, memories, objects RESTART IDENTITY",
+        "TRUNCATE eval_trace_entries, eval_objects, evals, object_events, curator_run_changes, curator_runs, chat_messages, object_embeddings, object_embedding_jobs, connections, theme_proposals, external_identities, source_contents, sources, notes, tasks, chats, users, entities, memories, themes, objects RESTART IDENTITY",
     )
         .execute(&pool)
         .await
@@ -2111,7 +2255,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(inactive.status(), StatusCode::BAD_REQUEST);
 
     let baseline_schema = schema::inspect_schema(&pool).await.unwrap();
-    assert_eq!(baseline_schema.tables.len(), 20);
+    assert_eq!(baseline_schema.tables.len(), 23);
     let mut application_tables = sqlx::query_scalar::<_, String>(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('_sqlx_migrations', 'schema_visualizer_tables') ORDER BY tablename",
     )

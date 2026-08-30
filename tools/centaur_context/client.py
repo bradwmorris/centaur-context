@@ -12,6 +12,7 @@ DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
 DEFAULT_INTAKE_URL = "http://centaur-context-intake.centaur.svc.cluster.local:8085"
 DEFAULT_SOURCE_INTAKE_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8086"
+DEFAULT_THEME_PROPOSAL_URL = "http://centaur-context-theme-proposals.centaur.svc.cluster.local:8087"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 TOKEN_NAME = "CENTAUR_CONTEXT_API_TOKEN"
@@ -19,6 +20,7 @@ LEGACY_TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 NOTE_WRITE_TOKEN_NAME = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN"
 INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
 SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
+THEME_PROPOSAL_TOKEN_NAME = "CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
 
@@ -125,6 +127,8 @@ class CentaurContextClient:
         intake_token: str | None = None,
         source_intake_url: str | None = None,
         source_intake_token: str | None = None,
+        theme_proposal_url: str | None = None,
+        theme_proposal_token: str | None = None,
         principal_id: str | None = None,
         thread_key: str | None = None,
         console_url: str | None = None,
@@ -149,6 +153,10 @@ class CentaurContextClient:
             _clean(source_intake_url or os.getenv("CENTAUR_CONTEXT_SOURCE_INTAKE_URL"))
             or DEFAULT_SOURCE_INTAKE_URL
         ).rstrip("/")
+        self.theme_proposal_url = (
+            _clean(theme_proposal_url or os.getenv("CENTAUR_CONTEXT_THEME_PROPOSAL_URL"))
+            or DEFAULT_THEME_PROPOSAL_URL
+        ).rstrip("/")
         self.console_url = (
             _clean(console_url or os.getenv("CENTAUR_CONSOLE_URL")) or DEFAULT_CONSOLE_URL
         ).rstrip("/")
@@ -156,6 +164,7 @@ class CentaurContextClient:
         self._explicit_note_write_token = _clean(note_write_token)
         self._explicit_intake_token = _clean(intake_token)
         self._explicit_source_intake_token = _clean(source_intake_token)
+        self._explicit_theme_proposal_token = _clean(theme_proposal_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
         if transport is None:
@@ -209,6 +218,18 @@ class CentaurContextClient:
         if not value:
             raise RuntimeError(
                 f"{SOURCE_INTAKE_TOKEN_NAME} is required for Enyu Source intake"
+            )
+        return value
+
+    def _theme_proposal_token(self) -> str:
+        value = self._explicit_theme_proposal_token or _clean(
+            os.getenv(THEME_PROPOSAL_TOKEN_NAME)
+        )
+        if not value:
+            value = _tool_secret(THEME_PROPOSAL_TOKEN_NAME)
+        if not value:
+            raise RuntimeError(
+                f"{THEME_PROPOSAL_TOKEN_NAME} is required to propose Themes"
             )
         return value
 
@@ -337,6 +358,135 @@ class CentaurContextClient:
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""
         return self._request("GET", f"/api/v1/objects/{quote(id, safe='')}")
+
+    def list_themes(self, slug: str | None = None) -> list[dict[str, Any]]:
+        """List approved Themes, optionally selecting one exact slug."""
+        params = {"slug": _clean(slug)} if _clean(slug) else None
+        return self._request("GET", "/api/v1/themes", params=params)
+
+    def read_theme(self, theme_id: str) -> dict[str, Any]:
+        """Read one approved Theme."""
+        theme_id = _clean(theme_id)
+        if not theme_id:
+            raise ValueError("theme_id is required")
+        return self._request("GET", f"/api/v1/themes/{quote(theme_id, safe='')}")
+
+    def list_theme_objects(
+        self, theme_id: str, *, kind: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """List active Objects assigned to an approved Theme."""
+        theme_id = _clean(theme_id)
+        if not theme_id:
+            raise ValueError("theme_id is required")
+        params: dict[str, Any] = {"limit": _bounded_limit(limit)}
+        if _clean(kind):
+            params["kind"] = _clean(kind)
+        return self._request(
+            "GET", f"/api/v1/themes/{quote(theme_id, safe='')}/objects", params=params
+        )
+
+    def propose_theme(
+        self,
+        *,
+        title: str,
+        slug: str,
+        description: str,
+        rationale: str,
+        evidence: dict[str, Any] | None = None,
+        provenance: dict[str, Any] | None = None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Propose a new Theme for human approval; this never creates a Theme directly."""
+        values = {
+            "title": _clean(title),
+            "slug": _clean(slug),
+            "description": _clean(description),
+            "rationale": _clean(rationale),
+        }
+        for field, value in values.items():
+            if not value:
+                raise ValueError(f"{field} is required")
+        if evidence is not None and not isinstance(evidence, dict):
+            raise ValueError("evidence must be a JSON object")
+        if provenance is not None and not isinstance(provenance, dict):
+            raise ValueError("provenance must be a JSON object")
+        return self._request(
+            "POST",
+            "/api/v1/theme-proposals",
+            json={**values, "evidence": evidence or {}, "provenance": provenance or {}},
+            idempotency_key=idempotency_key,
+            token=self._theme_proposal_token(),
+            base_url=self.theme_proposal_url,
+        )
+
+    def read_theme_proposal(self, proposal_id: str) -> dict[str, Any]:
+        """Read the approval status of one Theme proposal."""
+        proposal_id = _clean(proposal_id)
+        if not proposal_id:
+            raise ValueError("proposal_id is required")
+        return self._request(
+            "GET",
+            f"/api/v1/theme-proposals/{quote(proposal_id, safe='')}",
+            token=self._theme_proposal_token(),
+            base_url=self.theme_proposal_url,
+        )
+
+    def assign_theme(
+        self,
+        *,
+        object_id: str,
+        theme_id: str,
+        description: str,
+        provenance: dict[str, Any] | None = None,
+        protected: bool = False,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Assign an existing approved Theme to a non-Theme Object."""
+        object_id = _clean(object_id)
+        theme_id = _clean(theme_id)
+        description = _clean(description)
+        if not object_id:
+            raise ValueError("object_id is required")
+        if not theme_id:
+            raise ValueError("theme_id is required")
+        if not description:
+            raise ValueError("description is required")
+        if provenance is not None and not isinstance(provenance, dict):
+            raise ValueError("provenance must be a JSON object")
+        return self._request(
+            "POST",
+            "/api/v1/theme-assignments",
+            json={
+                "object_id": object_id,
+                "theme_id": theme_id,
+                "description": description,
+                "provenance": provenance or {},
+                "protected": bool(protected),
+            },
+            idempotency_key=idempotency_key,
+            token=self._theme_proposal_token(),
+            base_url=self.theme_proposal_url,
+        )
+
+    def unassign_theme(
+        self,
+        assignment_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Archive one existing themed Connection."""
+        assignment_id = _clean(assignment_id)
+        if not assignment_id:
+            raise ValueError("assignment_id is required")
+        return self._request(
+            "POST",
+            f"/api/v1/theme-assignments/{quote(assignment_id, safe='')}/archive",
+            json={"expected_revision": int(expected_revision)},
+            idempotency_key=idempotency_key,
+            token=self._theme_proposal_token(),
+            base_url=self.theme_proposal_url,
+        )
 
     def search_sources(
         self,

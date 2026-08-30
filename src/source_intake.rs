@@ -337,6 +337,7 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
                 content_hash: Some(content_hash.clone()),
             }),
             note: None,
+            theme: None,
         }],
         external_identities: Vec::new(),
         source_contents: vec![IntakeSourceContent {

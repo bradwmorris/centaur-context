@@ -9,6 +9,7 @@ const typeVisuals: Record<ObjectKind, { icon: string; label: string }> = {
   memory: { icon: "✦", label: "Memory" },
   source: { icon: "▤", label: "Source" },
   note: { icon: "▱", label: "Note" },
+  theme: { icon: "#", label: "Theme" },
 };
 
 const statusVisuals: Record<TaskStatus, { icon: string; label: string }> = {

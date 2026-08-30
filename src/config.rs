@@ -14,6 +14,7 @@ pub struct Config {
     pub note_write_api_token: String,
     pub intake: Option<IntakeConfig>,
     pub source_intake: Option<SourceIntakeConfig>,
+    pub theme_proposals: Option<ThemeProposalConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
     pub curator_addr: SocketAddr,
@@ -36,6 +37,12 @@ pub struct IntakeConfig {
 
 #[derive(Clone)]
 pub struct SourceIntakeConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
+}
+
+#[derive(Clone)]
+pub struct ThemeProposalConfig {
     pub addr: SocketAddr,
     pub api_token: String,
 }
@@ -163,6 +170,7 @@ impl Config {
         let curator_model = curator_model_config()?;
         let intake = intake_config()?;
         let source_intake = source_intake_config()?;
+        let theme_proposals = theme_proposal_config()?;
         if intake.as_ref().is_some_and(|intake| {
             intake.api_token == agent_api_token
                 || intake.api_token == note_write_api_token
@@ -182,6 +190,20 @@ impl Config {
         }) {
             bail!("SOURCE_INTAKE_API_TOKEN must differ from every other service credential");
         }
+        if theme_proposals.as_ref().is_some_and(|theme_proposals| {
+            theme_proposals.api_token == agent_api_token
+                || theme_proposals.api_token == note_write_api_token
+                || theme_proposals.api_token == chat_ingest_api_token
+                || theme_proposals.api_token == curator_api_token
+                || intake
+                    .as_ref()
+                    .is_some_and(|intake| intake.api_token == theme_proposals.api_token)
+                || source_intake.as_ref().is_some_and(|source_intake| {
+                    source_intake.api_token == theme_proposals.api_token
+                })
+        }) {
+            bail!("THEME_PROPOSAL_API_TOKEN must differ from every other service credential");
+        }
 
         Ok(Self {
             database_url,
@@ -192,6 +214,7 @@ impl Config {
             note_write_api_token,
             intake,
             source_intake,
+            theme_proposals,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
             curator_addr: parse_addr("CURATOR_ADDR", "0.0.0.0:8083")?,
@@ -251,6 +274,19 @@ fn source_intake_config() -> Result<Option<SourceIntakeConfig>> {
     }
     Ok(Some(SourceIntakeConfig {
         addr: parse_addr("SOURCE_INTAKE_ADDR", "0.0.0.0:8086")?,
+        api_token,
+    }))
+}
+
+fn theme_proposal_config() -> Result<Option<ThemeProposalConfig>> {
+    let Some(api_token) = optional("THEME_PROPOSAL_API_TOKEN") else {
+        return Ok(None);
+    };
+    if api_token.len() < 32 {
+        bail!("THEME_PROPOSAL_API_TOKEN must be at least 32 characters");
+    }
+    Ok(Some(ThemeProposalConfig {
+        addr: parse_addr("THEME_PROPOSAL_ADDR", "0.0.0.0:8087")?,
         api_token,
     }))
 }

@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, agent_router, human_router, note_write_router},
+    api::{AppState, agent_router, human_router, note_write_router, theme_proposal_router},
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
     intake::router as intake_router,
@@ -22,6 +22,38 @@ fn state() -> AppState {
         embeddings: None,
         text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
     }
+}
+
+#[tokio::test]
+async fn theme_proposal_listener_uses_a_distinct_agent_credential() {
+    let router = theme_proposal_router(state(), "p".repeat(32));
+    let wrong = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "agent-researcher")
+                .header("x-centaur-thread-key", "codex:issue:39:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    let correct = router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "p".repeat(32)))
+                .header("x-centaur-principal-id", "agent-researcher")
+                .header("x-centaur-thread-key", "codex:issue:39:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(correct.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -211,7 +243,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v2");
-    assert_eq!(metadata["database_schema_version"], 11);
+    assert_eq!(metadata["database_schema_version"], 12);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
