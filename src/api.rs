@@ -1252,7 +1252,7 @@ async fn list_objects(
             query: optional_text(query.q, "q", 300)?,
             kind,
             lifecycle,
-            limit: bounded_limit(query.limit),
+            limit: bounded_object_limit(query.limit),
             text_search_config: state.text_search_config,
         },
     )
@@ -1914,6 +1914,10 @@ fn bounded_limit(limit: Option<i64>) -> i64 {
     limit.unwrap_or(50).clamp(1, 100)
 }
 
+fn bounded_object_limit(limit: Option<i64>) -> i64 {
+    limit.unwrap_or(50).clamp(1, 500)
+}
+
 fn idempotency_key(
     headers: &HeaderMap,
     required: bool,
@@ -2064,4 +2068,16 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .is_some_and(|error| matches!(error.code().as_deref(), Some("23503" | "23505" | "23514")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bounded_limit, bounded_object_limit};
+
+    #[test]
+    fn object_lists_allow_the_full_local_workspace_without_widening_other_lists() {
+        assert_eq!(bounded_object_limit(Some(500)), 500);
+        assert_eq!(bounded_object_limit(Some(501)), 500);
+        assert_eq!(bounded_limit(Some(500)), 100);
+    }
 }

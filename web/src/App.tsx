@@ -53,7 +53,8 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextThemeProposals, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "themes" ? api.themeProposals() : Promise.resolve([]), api.curatorRuns(), api.objectVisuals()]);
+      const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextThemeProposals, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "themes" ? api.themeProposals() : Promise.resolve([]), api.curatorRuns(), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
       setSources(nextSources.items);

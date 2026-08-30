@@ -398,6 +398,10 @@ describe("canonical Object identity across the application", () => {
   it("gives human description forms concrete type-specific guidance", async () => {
     window.history.replaceState({}, "", "/entities");
     render(<App />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/objects?lifecycle=active&limit=500&kind=entity",
+      expect.anything(),
+    ));
     await userEvent.click(await screen.findByRole("button", { name: "New entity" }));
     expect(screen.getByLabelText("Entity description")).toHaveAttribute(
       "aria-describedby",
