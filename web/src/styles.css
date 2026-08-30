@@ -217,6 +217,9 @@ button { color: inherit; }
 .connection-form .form-error { grid-column: 1 / -1; }
 .connections { border-bottom: 1px solid rgba(255,255,255,.035); }
 .connection { border: 0; border-top: 1px solid rgba(255,255,255,.035); background: transparent; padding: 8px 0; margin: 0; }
+.themed-object-row { min-width: 0; min-height: 38px; display: grid; grid-template-columns: max-content max-content minmax(0, 1fr) max-content; align-items: center; gap: 7px; padding: 7px 0; overflow: hidden; }
+.themed-object-row > .object-identity, .themed-object-row > .visual-badge, .themed-object-row > .object-context { min-width: 0; }
+.themed-object-title { min-width: 0; display: block; overflow: hidden; color: #cfd0d4; font-family: inherit; font-size: 11px; font-weight: 520; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .connection-flow { width: min(760px, 100%); display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr); align-items: center; gap: 6px; margin: 8px 0 12px; }
 .connection .connection-flow { width: 100%; margin: 0; }
 .connection-endpoint { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; background: transparent; padding: 2px 0; }
