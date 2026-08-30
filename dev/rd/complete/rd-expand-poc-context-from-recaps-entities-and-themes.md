@@ -1,6 +1,7 @@
 # RD: Expand the POC Context from Recaps, Entities, and Themes
 
-**Status:** `scoped`
+**Status:** `complete`
+**GitHub Issue:** [#39](https://github.com/bradwmorris/centaur-context/issues/39)
 **Created:** 2026-08-30
 
 ## Execution Plan
@@ -34,11 +35,11 @@ and intake; and a read-only audit of the live Supabase source. No row changed.
 
 ## What We Are Doing
 
-- [ ] Represent 159 active Entity Objects; resolve seven merged rows to their
+- [x] Prepare and locally verify 159 active Entity Objects; resolve seven merged rows to their
   winners instead of recreating duplicates.
-- [ ] Represent all 127 distinct Sources referenced by the 123 Recaps, repairing
+- [x] Prepare and locally verify all 127 distinct Sources referenced by the 123 Recaps, repairing
   defective metadata and importing only independently verified content.
-- [ ] Import 10 first-class Themes and preserve reviewed classifications as
+- [x] Prepare and locally verify 10 first-class Themes and reviewed classifications as
   explained `themed` Connections.
 
 ## Contract
@@ -64,8 +65,8 @@ The 123 Recaps have 128 active `uses_source` edges to 127 distinct active
 Sources. All 127 have one active primary canonical identifier and no duplicate
 canonical URL or content hash within the set. Recap status does not erase a
 valid Source: 67 archived Recaps identify 67 Sources and 56 published Recaps
-identify 60 Sources. One previously imported Source is expected to be reused,
-so the provisional delta is 126 Sources; the execution-time target snapshot is
+identify 60 Sources. Two previously imported Sources are reused, so the audited
+delta is 125 new Sources. The final execution-time target snapshot remains
 authoritative.
 
 Replace four Source titles equal to `>-` with verified provider titles, using a
@@ -103,7 +104,9 @@ auditable but never enter retrieval. Only Brad initially has `approve_themes`.
 - Build Source-to-Theme candidates from 3 direct candidate-Source theme pairs
   plus Recap theme evidence. The union is 225 pairs. Single-Source Recap themes
   transfer directly; manually verify the 24 possible projections from the two
-  multi-Source Recaps and keep only supported Source `themed` Theme pairs.
+  multi-Source Recaps and keep only supported Source `themed` Theme pairs. That
+  review accepted 22 and rejected 2 Poolside projections, leaving 223 distinct
+  Source `themed` Theme pairs.
 - Give every new Entity, Source, and Theme explicit `involves` Brad and
   `involves` Codex attribution, reusing the existing Users.
 - Do not weaken `owned_by`, `leads`, `affiliated_with`, `invested_in`, `part_of`,
@@ -112,20 +115,61 @@ auditable but never enter retrieval. Only Brad initially has `approve_themes`.
 
 ## Checks
 
-- [ ] Theme and `themed` migrations, subtype/endpoint constraints, proposal
+- [x] Theme and `themed` migrations, subtype/endpoint constraints, proposal
   approval authorization, APIs, search, UI, and rollback are tested first.
-- [ ] Manifest reconciliation accounts for 127 Sources, 166-to-159 Entity
+- [x] Draft manifest reconciliation accounts for 127 Sources, 166-to-159 Entity
   resolution, 10 Themes, all candidate contents, and every accepted/rejected
   edge with no orphan endpoint.
-- [ ] Validate-only writes zero rows; interrupted resume and full replay create
+- [x] Disposable-database validate-only writes zero rows; commit and full replay create
   no duplicate Object, subtype, content, Connection, or event.
-- [ ] Target counts, provenance, hashes, Brad/Codex attribution, lexical/body
+- [x] Target counts, provenance, hashes, Brad/Codex attribution, lexical/body
   search, graph traversal, and live authenticated retrieval canaries pass.
-- [ ] Repository-root verification commands and `git diff --check` pass.
+- [x] Repository-root verification commands and `git diff --check` pass.
 
 ## Approval Boundary
 
-This document authorizes planning only. Execution may change the private Enyu
-schema and data through reviewed migrations and authenticated operator surfaces
-after a separate execution instruction. It does not authorize source-database
-writes, public ingress, external publishing, spending, or any other database.
+The requester confirmed the Source-ingestion deployment was complete and
+authorized the live schema deployment, Enyu migration, and repository closeout.
+Execution stayed within that boundary. Supabase remained read-only; no public
+ingress, paid embeddings, reset, or unrelated database mutation occurred.
+
+## Local Execution Audit
+
+The private draft resolves the source snapshot to 125 new Sources plus 2 reused
+Sources, 155 new Entities plus 4 reused Entities, 10 new Themes, 200 Source-to-
+Entity `about` pairs, 76 Entity-to-Theme pairs, and 223 Source-to-Theme pairs.
+Four already-committed equivalent first-pass edges are reused rather than
+duplicated. All three bounded expansion batches validate, commit, and replay on
+a disposable schema-12 database with no duplicate active edge or invalid
+`themed` endpoint.
+
+The content audit accepted 26 of 47 ready capture artifacts and rejected or
+collapsed 21 workflow documents, working notes, placeholders, and duplicates.
+All 26 accepted bodies are privately materialized, byte-hash verified, and pass
+content-inclusive intake plus lexical retrieval canaries on the disposable
+database.
+
+The final source drift audit matched all selected row counts, revision sums,
+relationships, identifiers, and the 26 accepted artifact hashes. The private
+manifest was sealed reproducibly as
+`d4a080e68f862098b55be2581f626f27af76051df803e93f16d7dcdb4a446cac`.
+A verified pre-deployment public-schema backup has SHA-256
+`cfdd3ac041aaaac859ca8c247609366f5c055ded4a84edbb806dbfbd55afa8c7`.
+
+Schema 12 deployed with fingerprint `325a99ed4b2f1f4a`. The three dependency-
+ordered live batches validated with zero writes immediately before commit,
+committed atomically, and replayed without creating duplicates. They added 290
+Objects, 26 exact Source contents, 1,075 Connections, and 1,391 Object Events.
+The retained live database now has 366 Objects: 159 Entities, 133 Sources, 10
+Themes, 51 Notes, 8 Memories, 3 Users, 1 Chat, and 1 Task. One pre-existing
+Source remains archived, so 365 Objects are active.
+
+Reconciliation matched every imported canonical Object, subtype, protected
+flag, provenance record, content hash and byte count, and Connection. The live
+graph has 1,262 active Connections: 203 `about`, 62 `derived_from`, 698
+`involves`, and 299 `themed`. All Theme endpoints are valid, every reverse Theme
+listing reconciles, Brad is the sole initial Theme approver, no duplicate active
+edge exists, and Object, body, graph, and authenticated retrieval canaries pass.
+The temporary port-8085 intake token and manifest pin were removed and the
+listener is closed. The permanent Source listener, Theme proposal listener,
+human UI, and both Slack writers are healthy on the reviewed image.

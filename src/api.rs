@@ -22,12 +22,13 @@ use uuid::Uuid;
 use crate::{
     db::{
         self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, ObjectChanges, SourceChanges, TaskChanges,
+        NewSourceContent, NewTask, NewTheme, NewThemeProposal, ObjectChanges, SourceChanges,
+        TaskChanges,
     },
     domain::{
         ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, OBJECT_KINDS, SOURCE_CONTENT_KINDS,
         SOURCE_KINDS, TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_text,
-        provenance, required_text,
+        provenance, required_preserved_text, required_text,
     },
     embeddings::EmbeddingClient,
     schema, search,
@@ -69,7 +70,35 @@ pub fn agent_router(state: AppState, token: String) -> Router {
                 .route("/sources/{id}", get(read_source))
                 .route("/sources/{id}/content", get(read_source_content))
                 .route("/search/notes", get(search_notes))
-                .route("/notes/{id}", get(read_note)),
+                .route("/notes/{id}", get(read_note))
+                .route("/themes", get(list_themes))
+                .route("/themes/{id}", get(read_theme))
+                .route("/themes/{id}/objects", get(list_theme_objects)),
+        )
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            AgentAuth {
+                token: Arc::new(token),
+            },
+            agent_auth,
+        ))
+        .layer(TraceLayer::new_for_http())
+}
+
+pub fn theme_proposal_router(state: AppState, token: String) -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready))
+        .nest(
+            "/api/v1",
+            Router::new()
+                .route("/theme-proposals", post(create_theme_proposal))
+                .route("/theme-proposals/{id}", get(read_theme_proposal))
+                .route("/theme-assignments", post(create_theme_assignment))
+                .route(
+                    "/theme-assignments/{id}/archive",
+                    post(archive_theme_assignment),
+                ),
         )
         .with_state(state)
         .layer(middleware::from_fn_with_state(
@@ -116,6 +145,15 @@ fn service_router(state: AppState) -> Router {
                 .route("/sources/{id}/content", get(read_source_content))
                 .route("/notes", get(list_notes).post(create_note))
                 .route("/notes/{id}", get(read_note).patch(update_note))
+                .route("/themes", get(list_themes).post(create_theme))
+                .route("/themes/{id}", get(read_theme))
+                .route("/themes/{id}/objects", get(list_theme_objects))
+                .route("/theme-proposals", get(list_theme_proposals))
+                .route(
+                    "/theme-proposals/{id}/approve",
+                    post(approve_theme_proposal),
+                )
+                .route("/theme-proposals/{id}/reject", post(reject_theme_proposal))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
@@ -388,6 +426,289 @@ fn normalize_thread_key(value: &str) -> Option<String> {
         parts[2],
         parts[3]
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeListQuery {
+    slug: Option<String>,
+}
+
+async fn list_themes(
+    State(state): State<AppState>,
+    Query(query): Query<ThemeListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let data = if let Some(slug) = query.slug {
+        vec![db::get_theme_by_slug(&state.pool, &crate::domain::theme_slug(slug)?).await?]
+    } else {
+        db::list_themes(&state.pool).await?
+    };
+    Ok(Json(json!({"data":data})))
+}
+
+async fn read_theme(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"data":db::get_theme(&state.pool,id).await?})))
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeObjectsQuery {
+    kind: Option<String>,
+    limit: Option<i64>,
+}
+
+async fn list_theme_objects(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ThemeObjectsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let kind = query
+        .kind
+        .map(|value| allowed(value, "kind", OBJECT_KINDS))
+        .transpose()?;
+    if kind.as_deref() == Some("theme") {
+        return Err(ApiError::BadRequest(
+            "a Theme cannot itself be assigned a Theme".into(),
+        ));
+    }
+    let data = db::list_theme_objects(&state.pool, id, kind.as_deref(), bounded_limit(query.limit))
+        .await?;
+    Ok(Json(json!({"data":data})))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateThemeRequest {
+    title: String,
+    slug: String,
+    description: String,
+    provenance: Option<Value>,
+    #[serde(default = "default_true")]
+    protected: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn require_theme_approval_permission(
+    state: &AppState,
+    actor: &ActorContext,
+) -> Result<(), ApiError> {
+    if actor.is_agent || !db::has_permission(&state.pool, actor, "approve_themes").await? {
+        return Err(ApiError::Forbidden(
+            "approve_themes permission is required".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn create_theme(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateThemeRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    require_theme_approval_permission(&state, &actor).await?;
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let theme = db::create_theme(
+        &state.pool,
+        &actor,
+        NewTheme {
+            description: crate::domain::object_description(&title, input.description)?,
+            title,
+            slug: crate::domain::theme_slug(input.slug)?,
+            provenance: provenance(input.provenance)?,
+            protected: input.protected,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":theme}))))
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeProposalListQuery {
+    status: Option<String>,
+}
+
+async fn list_theme_proposals(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Query(query): Query<ThemeProposalListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_theme_approval_permission(&state, &actor).await?;
+    let status = query
+        .status
+        .map(|value| allowed(value, "status", &["pending", "approved", "rejected"]))
+        .transpose()?;
+    Ok(Json(json!({
+        "data":db::list_theme_proposals(&state.pool,status.as_deref()).await?
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateThemeProposalRequest {
+    title: String,
+    slug: String,
+    description: String,
+    rationale: String,
+    evidence: Option<Value>,
+    provenance: Option<Value>,
+}
+
+async fn create_theme_proposal(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateThemeProposalRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let title = required_text(input.title, "title", 300)?;
+    let proposal = db::create_theme_proposal(
+        &state.pool,
+        &actor,
+        NewThemeProposal {
+            description: crate::domain::object_description(&title, input.description)?,
+            title,
+            slug: crate::domain::theme_slug(input.slug)?,
+            rationale: required_text(input.rationale, "rationale", 2000)?,
+            evidence: theme_evidence(input.evidence)?,
+            provenance: provenance(input.provenance)?,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":proposal}))))
+}
+
+fn theme_evidence(value: Option<Value>) -> Result<Value, ApiError> {
+    let value = value.unwrap_or_else(|| json!({}));
+    if !value.is_object() {
+        return Err(ApiError::BadRequest(
+            "evidence must be a JSON object".into(),
+        ));
+    }
+    if serde_json::to_vec(&value)
+        .map_err(|_| ApiError::BadRequest("evidence must be valid JSON".into()))?
+        .len()
+        > 32_768
+    {
+        return Err(ApiError::BadRequest(
+            "evidence must be at most 32768 encoded bytes".into(),
+        ));
+    }
+    Ok(value)
+}
+
+async fn read_theme_proposal(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({
+        "data":db::get_theme_proposal(&state.pool,id).await?
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateThemeAssignmentRequest {
+    object_id: Uuid,
+    theme_id: Uuid,
+    description: String,
+    provenance: Option<Value>,
+    #[serde(default)]
+    protected: bool,
+}
+
+async fn create_theme_assignment(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<CreateThemeAssignmentRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let data = db::create_connection(
+        &state.pool,
+        &actor,
+        NewConnection {
+            source_object_id: input.object_id,
+            kind: "themed".into(),
+            target_object_id: input.theme_id,
+            description: required_text(input.description, "description", 1000)?,
+            provenance: provenance(input.provenance)?,
+            protected: input.protected,
+        },
+        &key,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(json!({"data":data}))))
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveThemeAssignmentRequest {
+    expected_revision: i64,
+}
+
+async fn archive_theme_assignment(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<ArchiveThemeAssignmentRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let current = db::get_connection(&state.pool, id).await?;
+    if current.kind != "themed" {
+        return Err(ApiError::Forbidden(
+            "the Theme assignment listener can archive only themed Connections".into(),
+        ));
+    }
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let data = db::archive_connection(&state.pool, &actor, id, input.expected_revision, Some(&key))
+        .await?;
+    Ok(Json(json!({"data":data})))
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeDecisionRequest {
+    decision_reason: String,
+}
+
+async fn approve_theme_proposal(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<ThemeDecisionRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_theme_approval_permission(&state, &actor).await?;
+    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
+    let data = db::approve_theme_proposal(
+        &state.pool,
+        &actor,
+        id,
+        &required_text(input.decision_reason, "decision_reason", 1000)?,
+        &key,
+    )
+    .await?;
+    Ok(Json(json!({"data":data})))
+}
+
+async fn reject_theme_proposal(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<ThemeDecisionRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_theme_approval_permission(&state, &actor).await?;
+    let data = db::reject_theme_proposal(
+        &state.pool,
+        &actor,
+        id,
+        &required_text(input.decision_reason, "decision_reason", 1000)?,
+    )
+    .await?;
+    Ok(Json(json!({"data":data})))
 }
 
 async fn read_context_object(
@@ -747,7 +1068,11 @@ async fn create_source_content(
         NewSourceContent {
             expected_revision: input.expected_revision,
             content_kind: allowed(input.content_kind, "content_kind", SOURCE_CONTENT_KINDS)?,
-            normalized_text: required_text(input.normalized_text, "normalized_text", 10_000_000)?,
+            normalized_text: required_preserved_text(
+                input.normalized_text,
+                "normalized_text",
+                10_000_000,
+            )?,
             language: optional_text(input.language, "language", 35)?,
             extraction_method: optional_text(input.extraction_method, "extraction_method", 200)?,
             extraction_version: optional_text(input.extraction_version, "extraction_version", 100)?,
@@ -951,7 +1276,7 @@ async fn create_object(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let kind = allowed(input.kind, "kind", OBJECT_KINDS)?;
-    if matches!(kind.as_str(), "task" | "user" | "source" | "note") {
+    if matches!(kind.as_str(), "task" | "user" | "source" | "note" | "theme") {
         return Err(ApiError::BadRequest(format!(
             "use the typed endpoint to create a {kind}"
         )));
@@ -1661,6 +1986,9 @@ impl IntoResponse for ApiError {
                 "revision_conflict",
                 "The record changed after it was read.".to_owned(),
             ),
+            Self::Db(DbError::Invalid(message)) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request", message)
+            }
             Self::Db(DbError::Validation(error)) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "validation_error",

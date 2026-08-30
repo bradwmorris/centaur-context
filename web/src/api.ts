@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, Theme, ThemeProposal, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -176,5 +176,26 @@ export const api = {
   },
   createNote(body: Record<string, unknown>) {
     return request<Note>("/api/v1/notes", write("POST", body));
+  },
+  themes() {
+    return request<Theme[]>("/api/v1/themes");
+  },
+  theme(id: string) {
+    return request<Theme>(`/api/v1/themes/${id}`);
+  },
+  themeObjects(id: string) {
+    return request<SharedObject[]>(`/api/v1/themes/${id}/objects?limit=100`);
+  },
+  createTheme(body: Record<string, unknown>) {
+    return request<Theme>("/api/v1/themes", write("POST", body));
+  },
+  themeProposals(status = "pending") {
+    return request<ThemeProposal[]>(`/api/v1/theme-proposals?status=${encodeURIComponent(status)}`);
+  },
+  approveThemeProposal(id: string, decisionReason: string) {
+    return request<Theme>(`/api/v1/theme-proposals/${id}/approve`, write("POST", { decision_reason: decisionReason }));
+  },
+  rejectThemeProposal(id: string, decisionReason: string) {
+    return request<ThemeProposal>(`/api/v1/theme-proposals/${id}/reject`, write("POST", { decision_reason: decisionReason }));
   },
 };

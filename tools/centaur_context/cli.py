@@ -131,6 +131,95 @@ def source_intake_status(manifest_file: str) -> None:
     _print(_client().source_intake_status(_manifest(manifest_file)))
 
 
+def list_themes(slug: str | None = None) -> None:
+    """List approved Themes."""
+    _print(_client().list_themes(slug=slug))
+
+
+def read_theme(theme_id: str) -> None:
+    """Read one approved Theme."""
+    _print(_client().read_theme(theme_id))
+
+
+def list_theme_objects(
+    theme_id: str, kind: str | None = None, limit: int = 20
+) -> None:
+    """List Objects assigned to one approved Theme."""
+    _print(_client().list_theme_objects(theme_id, kind=kind, limit=limit))
+
+
+def _json_object(value: str, field: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field} must be a JSON object")
+    return parsed
+
+
+def propose_theme(
+    title: str,
+    slug: str,
+    description: str,
+    rationale: str,
+    evidence_json: str = "{}",
+    provenance_json: str = "{}",
+    idempotency_key: str = "",
+) -> None:
+    """Propose a Theme for human approval."""
+    _print(
+        _client().propose_theme(
+            title=title,
+            slug=slug,
+            description=description,
+            rationale=rationale,
+            evidence=_json_object(evidence_json, "evidence_json"),
+            provenance=_json_object(provenance_json, "provenance_json"),
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+def read_theme_proposal(proposal_id: str) -> None:
+    """Read one Theme proposal and its decision status."""
+    _print(_client().read_theme_proposal(proposal_id))
+
+
+def assign_theme(
+    object_id: str,
+    theme_id: str,
+    description: str,
+    provenance_json: str = "{}",
+    protected: bool = False,
+    idempotency_key: str = "",
+) -> None:
+    """Assign an existing approved Theme to an Object."""
+    _print(
+        _client().assign_theme(
+            object_id=object_id,
+            theme_id=theme_id,
+            description=description,
+            provenance=_json_object(provenance_json, "provenance_json"),
+            protected=protected,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+def unassign_theme(
+    assignment_id: str, expected_revision: int, idempotency_key: str = ""
+) -> None:
+    """Archive one existing Theme assignment."""
+    _print(
+        _client().unassign_theme(
+            assignment_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
 def _bounded_int(minimum: int, maximum: int):
     def parse(value: str) -> int:
         parsed = int(value)
@@ -197,6 +286,42 @@ def _build_parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name)
         command.add_argument("manifest_file")
+
+    command = commands.add_parser("list-themes")
+    command.add_argument("--slug")
+
+    command = commands.add_parser("read-theme")
+    command.add_argument("theme_id")
+
+    command = commands.add_parser("list-theme-objects")
+    command.add_argument("theme_id")
+    command.add_argument("--kind")
+    command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
+
+    command = commands.add_parser("propose-theme")
+    command.add_argument("title")
+    command.add_argument("--slug", required=True)
+    command.add_argument("--description", required=True)
+    command.add_argument("--rationale", required=True)
+    command.add_argument("--evidence-json", default="{}")
+    command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--idempotency-key", required=True)
+
+    command = commands.add_parser("read-theme-proposal")
+    command.add_argument("proposal_id")
+
+    command = commands.add_parser("assign-theme")
+    command.add_argument("object_id")
+    command.add_argument("theme_id")
+    command.add_argument("--description", required=True)
+    command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--protected", action="store_true")
+    command.add_argument("--idempotency-key", required=True)
+
+    command = commands.add_parser("unassign-theme")
+    command.add_argument("assignment_id")
+    command.add_argument("--expected-revision", type=int, required=True)
+    command.add_argument("--idempotency-key", required=True)
     return parser
 
 

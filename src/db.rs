@@ -6,7 +6,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::domain::{ActorContext, ValidationError, validate_object_description};
+use crate::domain::{ActorContext, ValidationError, theme_slug, validate_object_description};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -14,6 +14,8 @@ pub enum DbError {
     NotFound,
     #[error("revision conflict")]
     Conflict,
+    #[error("{0}")]
+    Invalid(String),
     #[error("{0}")]
     Validation(#[from] ValidationError),
     #[error(transparent)]
@@ -225,6 +227,49 @@ pub struct NoteSearchResult {
     pub revision: i64,
     pub content_format: String,
     pub excerpt: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct Theme {
+    pub object_id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub slug: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub provenance: Value,
+    pub protected: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ThemeProposal {
+    pub id: Uuid,
+    pub title: String,
+    pub slug: String,
+    pub description: String,
+    pub rationale: String,
+    pub evidence: Value,
+    pub provenance: Value,
+    pub status: String,
+    pub proposed_by_type: String,
+    pub proposed_by_id: String,
+    pub centaur_thread_key: String,
+    pub centaur_execution_id: Option<String>,
+    pub idempotency_key: String,
+    pub decided_by_type: Option<String>,
+    pub decided_by_id: Option<String>,
+    pub decision_reason: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub decided_at: Option<OffsetDateTime>,
+    pub resulting_theme_object_id: Option<Uuid>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
@@ -522,6 +567,25 @@ pub struct NewNote {
     pub content_format: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct NewTheme {
+    pub title: String,
+    pub description: String,
+    pub slug: String,
+    pub provenance: Value,
+    pub protected: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewThemeProposal {
+    pub title: String,
+    pub description: String,
+    pub slug: String,
+    pub rationale: String,
+    pub evidence: Value,
+    pub provenance: Value,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct NoteChanges {
     pub title: Option<String>,
@@ -722,6 +786,353 @@ pub async fn get_note(pool: &PgPool, id: Uuid) -> Result<Note, DbError> {
     .fetch_optional(pool)
     .await?
     .ok_or(DbError::NotFound)
+}
+
+const THEME_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,t.slug,
+       o.lifecycle,o.revision,o.provenance,o.protected,o.created_at,o.updated_at
+FROM themes t JOIN objects o ON o.id=t.object_id"#;
+
+pub async fn list_themes(pool: &PgPool) -> Result<Vec<Theme>, DbError> {
+    Ok(sqlx::query_as(&format!(
+        "{THEME_SELECT} WHERE o.lifecycle='active' ORDER BY o.title,o.id"
+    ))
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_theme(pool: &PgPool, id: Uuid) -> Result<Theme, DbError> {
+    sqlx::query_as(&format!("{THEME_SELECT} WHERE o.id=$1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
+pub async fn get_theme_by_slug(pool: &PgPool, slug: &str) -> Result<Theme, DbError> {
+    sqlx::query_as(&format!("{THEME_SELECT} WHERE t.slug=$1"))
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
+pub async fn create_theme(
+    pool: &PgPool,
+    actor: &ActorContext,
+    mut input: NewTheme,
+    idempotency_key: &str,
+) -> Result<Theme, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        return get_theme(pool, id).await;
+    }
+    validate_object_description(&input.title, &input.description)?;
+    input.slug = theme_slug(input.slug)?;
+    let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"INSERT INTO objects
+        (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+        VALUES ($1,'theme',$2,$3,$4,$5,$6,$5,$6,$7)"#,
+    )
+    .bind(id)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(input.protected)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(&input.provenance)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO themes (object_id,slug) VALUES ($1,$2)")
+        .bind(id)
+        .bind(&input.slug)
+        .execute(&mut *tx)
+        .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        "created",
+        Some(idempotency_key),
+        None,
+        1,
+        json!({"kind":"theme","title":input.title,"slug":input.slug,"protected":input.protected}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_theme(pool, id).await
+}
+
+pub async fn list_theme_objects(
+    pool: &PgPool,
+    theme_id: Uuid,
+    kind: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Object>, DbError> {
+    let theme = get_theme(pool, theme_id).await?;
+    if theme.lifecycle != "active" {
+        return Err(DbError::NotFound);
+    }
+    let mut query = QueryBuilder::<Postgres>::new(
+        r#"SELECT o.* FROM connections c
+        JOIN objects o ON o.id=c.source_object_id
+        WHERE c.kind='themed' AND c.archived_at IS NULL
+          AND c.target_object_id="#,
+    );
+    query.push_bind(theme_id).push(" AND o.lifecycle='active'");
+    if let Some(kind) = kind {
+        query.push(" AND o.kind=").push_bind(kind);
+    }
+    query
+        .push(" ORDER BY o.updated_at DESC,o.id LIMIT ")
+        .push_bind(limit);
+    Ok(query.build_query_as().fetch_all(pool).await?)
+}
+
+pub async fn has_permission(
+    pool: &PgPool,
+    actor: &ActorContext,
+    permission: &str,
+) -> Result<bool, DbError> {
+    Ok(sqlx::query_scalar(
+        r#"SELECT EXISTS(SELECT 1 FROM principal_permissions
+           WHERE principal_type=$1 AND principal_id=$2 AND permission=$3)"#,
+    )
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(permission)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn list_theme_proposals(
+    pool: &PgPool,
+    status: Option<&str>,
+) -> Result<Vec<ThemeProposal>, DbError> {
+    let mut query = QueryBuilder::<Postgres>::new("SELECT * FROM theme_proposals WHERE true");
+    if let Some(status) = status {
+        query.push(" AND status=").push_bind(status);
+    }
+    query.push(" ORDER BY created_at DESC,id");
+    Ok(query.build_query_as().fetch_all(pool).await?)
+}
+
+pub async fn get_theme_proposal(pool: &PgPool, id: Uuid) -> Result<ThemeProposal, DbError> {
+    sqlx::query_as("SELECT * FROM theme_proposals WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)
+}
+
+pub async fn create_theme_proposal(
+    pool: &PgPool,
+    actor: &ActorContext,
+    mut input: NewThemeProposal,
+    idempotency_key: &str,
+) -> Result<ThemeProposal, DbError> {
+    if !actor.is_agent {
+        return Err(DbError::Invalid(
+            "Theme proposals require an authenticated agent".into(),
+        ));
+    }
+    input.slug = theme_slug(input.slug)?;
+    validate_object_description(&input.title, &input.description)?;
+    if !input.evidence.is_object() || !input.provenance.is_object() {
+        return Err(DbError::Invalid(
+            "evidence and provenance must be JSON objects".into(),
+        ));
+    }
+    if let Some(existing) = sqlx::query_as::<_, ThemeProposal>(
+        r#"SELECT * FROM theme_proposals
+           WHERE proposed_by_type=$1 AND proposed_by_id=$2 AND idempotency_key=$3"#,
+    )
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(idempotency_key)
+    .fetch_optional(pool)
+    .await?
+    {
+        if existing.title == input.title
+            && existing.slug == input.slug
+            && existing.description == input.description
+            && existing.rationale == input.rationale
+            && existing.evidence == input.evidence
+            && existing.provenance == input.provenance
+        {
+            return Ok(existing);
+        }
+        return Err(DbError::Conflict);
+    }
+    let duplicate: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS(
+            SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
+            WHERE o.lifecycle='active' AND (t.slug=$1 OR lower(o.title)=lower($2))
+        ) OR EXISTS(
+            SELECT 1 FROM theme_proposals
+            WHERE status='pending' AND (slug=$1 OR lower(title)=lower($2))
+        )"#,
+    )
+    .bind(&input.slug)
+    .bind(&input.title)
+    .fetch_one(pool)
+    .await?;
+    if duplicate {
+        return Err(DbError::Invalid(
+            "an active Theme or pending proposal already has this slug or title".into(),
+        ));
+    }
+    let proposal: ThemeProposal = sqlx::query_as(
+        r#"INSERT INTO theme_proposals
+        (id,title,slug,description,rationale,evidence,provenance,proposed_by_type,
+         proposed_by_id,centaur_thread_key,centaur_execution_id,idempotency_key)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(input.title)
+    .bind(input.slug)
+    .bind(input.description)
+    .bind(input.rationale)
+    .bind(input.evidence)
+    .bind(input.provenance)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(
+        actor
+            .centaur_thread_key
+            .as_deref()
+            .ok_or_else(|| DbError::Invalid("agent thread identity is required".into()))?,
+    )
+    .bind(&actor.centaur_execution_id)
+    .bind(idempotency_key)
+    .fetch_one(pool)
+    .await?;
+    Ok(proposal)
+}
+
+pub async fn approve_theme_proposal(
+    pool: &PgPool,
+    actor: &ActorContext,
+    proposal_id: Uuid,
+    decision_reason: &str,
+    idempotency_key: &str,
+) -> Result<Theme, DbError> {
+    if actor.is_agent || !has_permission(pool, actor, "approve_themes").await? {
+        return Err(DbError::Invalid(
+            "approve_themes permission is required".into(),
+        ));
+    }
+    let mut tx = pool.begin().await?;
+    let proposal: ThemeProposal =
+        sqlx::query_as("SELECT * FROM theme_proposals WHERE id=$1 FOR UPDATE")
+            .bind(proposal_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(DbError::NotFound)?;
+    if proposal.status == "approved" {
+        let theme_id = proposal
+            .resulting_theme_object_id
+            .ok_or_else(|| DbError::Invalid("approved proposal has no Theme".into()))?;
+        tx.commit().await?;
+        return get_theme(pool, theme_id).await;
+    }
+    if proposal.status != "pending" {
+        return Err(DbError::Conflict);
+    }
+    let duplicate: bool = sqlx::query_scalar(
+        r#"SELECT EXISTS(
+            SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
+            WHERE o.lifecycle='active' AND (t.slug=$1 OR lower(o.title)=lower($2))
+        )"#,
+    )
+    .bind(&proposal.slug)
+    .bind(&proposal.title)
+    .fetch_one(&mut *tx)
+    .await?;
+    if duplicate {
+        return Err(DbError::Invalid(
+            "an active Theme already has this slug or title".into(),
+        ));
+    }
+    let theme_id = Uuid::new_v4();
+    let object_provenance = json!({
+        "source_type":"theme_proposal",
+        "source_ref":proposal.id.to_string(),
+        "note":proposal.rationale
+    });
+    sqlx::query(
+        r#"INSERT INTO objects
+        (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+        VALUES ($1,'theme',$2,$3,true,$4,$5,$4,$5,$6)"#,
+    )
+    .bind(theme_id)
+    .bind(&proposal.title)
+    .bind(&proposal.description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(object_provenance)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO themes (object_id,slug) VALUES ($1,$2)")
+        .bind(theme_id)
+        .bind(&proposal.slug)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        r#"UPDATE theme_proposals SET status='approved',decided_by_type=$2,
+        decided_by_id=$3,decision_reason=$4,decided_at=now(),resulting_theme_object_id=$5,
+        updated_at=now() WHERE id=$1"#,
+    )
+    .bind(proposal_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(decision_reason)
+    .bind(theme_id)
+    .execute(&mut *tx)
+    .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        theme_id,
+        theme_id,
+        "created",
+        Some(idempotency_key),
+        None,
+        1,
+        json!({"kind":"theme","title":proposal.title,"slug":proposal.slug,"theme_proposal_id":proposal.id,"protected":true}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_theme(pool, theme_id).await
+}
+
+pub async fn reject_theme_proposal(
+    pool: &PgPool,
+    actor: &ActorContext,
+    proposal_id: Uuid,
+    decision_reason: &str,
+) -> Result<ThemeProposal, DbError> {
+    if actor.is_agent || !has_permission(pool, actor, "approve_themes").await? {
+        return Err(DbError::Invalid(
+            "approve_themes permission is required".into(),
+        ));
+    }
+    let proposal: ThemeProposal = sqlx::query_as(
+        r#"UPDATE theme_proposals SET status='rejected',decided_by_type=$2,
+        decided_by_id=$3,decision_reason=$4,decided_at=now(),updated_at=now()
+        WHERE id=$1 AND status='pending' RETURNING *"#,
+    )
+    .bind(proposal_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(decision_reason)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::Conflict)?;
+    Ok(proposal)
 }
 
 pub async fn list_notes(
@@ -1319,6 +1730,13 @@ pub async fn create_connection(
     input: NewConnection,
     idempotency_key: &str,
 ) -> Result<Connection, DbError> {
+    validate_connection_endpoints(
+        pool,
+        input.source_object_id,
+        &input.kind,
+        input.target_object_id,
+    )
+    .await?;
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
         return sqlx::query_as("SELECT * FROM connections WHERE id=$1")
             .bind(id)
@@ -1386,6 +1804,13 @@ pub async fn update_connection(
             .await?
             .ok_or(DbError::NotFound)?;
     let kind = changes.kind.unwrap_or_else(|| current.kind.clone());
+    validate_connection_endpoints(
+        pool,
+        current.source_object_id,
+        &kind,
+        current.target_object_id,
+    )
+    .await?;
     let description = changes
         .description
         .unwrap_or_else(|| current.description.clone());
@@ -1426,6 +1851,36 @@ pub async fn update_connection(
     .await?;
     tx.commit().await?;
     Ok(updated)
+}
+
+async fn validate_connection_endpoints(
+    pool: &PgPool,
+    source_object_id: Uuid,
+    kind: &str,
+    target_object_id: Uuid,
+) -> Result<(), DbError> {
+    if kind != "themed" {
+        return Ok(());
+    }
+    let rows: Vec<(Uuid, String, String)> =
+        sqlx::query_as("SELECT id,kind,lifecycle FROM objects WHERE id=$1 OR id=$2")
+            .bind(source_object_id)
+            .bind(target_object_id)
+            .fetch_all(pool)
+            .await?;
+    let source = rows.iter().find(|row| row.0 == source_object_id);
+    let target = rows.iter().find(|row| row.0 == target_object_id);
+    if source.is_none_or(|row| row.2 != "active") || target.is_none_or(|row| row.2 != "active") {
+        return Err(DbError::Invalid(
+            "themed connections require active source and target Objects".into(),
+        ));
+    }
+    if source.is_some_and(|row| row.1 == "theme") || target.is_none_or(|row| row.1 != "theme") {
+        return Err(DbError::Invalid(
+            "themed connections must point from a non-Theme Object to a Theme".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn archive_connection(

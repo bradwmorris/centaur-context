@@ -152,6 +152,14 @@ pub struct IntakeObject {
     pub source: Option<IntakeSource>,
     #[serde(default)]
     pub note: Option<IntakeNote>,
+    #[serde(default)]
+    pub theme: Option<IntakeTheme>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntakeTheme {
+    pub slug: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -421,7 +429,7 @@ pub(crate) async fn prepare_batch_for_app(
         object.kind = allowed(
             object.kind.clone(),
             "kind",
-            &["user", "entity", "source", "note"],
+            &["user", "entity", "source", "note", "theme"],
         )?;
         object.title = required_text(object.title.clone(), "title", 300)?;
         object.description = object_description(&object.title, object.description.clone())?;
@@ -435,21 +443,25 @@ pub(crate) async fn prepare_batch_for_app(
                     "user_kind",
                     USER_KINDS,
                 )?);
-                if object.source.is_some() || object.note.is_some() {
+                if object.source.is_some() || object.note.is_some() || object.theme.is_some() {
                     return Err(IntakeError::BadRequest(
                         "user Objects cannot contain source or note data".into(),
                     ));
                 }
             }
             "entity" => {
-                if object.user_kind.is_some() || object.source.is_some() || object.note.is_some() {
+                if object.user_kind.is_some()
+                    || object.source.is_some()
+                    || object.note.is_some()
+                    || object.theme.is_some()
+                {
                     return Err(IntakeError::BadRequest(
                         "entity Objects cannot contain subtype data".into(),
                     ));
                 }
             }
             "source" => {
-                if object.user_kind.is_some() || object.note.is_some() {
+                if object.user_kind.is_some() || object.note.is_some() || object.theme.is_some() {
                     return Err(IntakeError::BadRequest(
                         "source Objects contain only source subtype data".into(),
                     ));
@@ -459,7 +471,7 @@ pub(crate) async fn prepare_batch_for_app(
                 })?)?;
             }
             "note" => {
-                if object.user_kind.is_some() || object.source.is_some() {
+                if object.user_kind.is_some() || object.source.is_some() || object.theme.is_some() {
                     return Err(IntakeError::BadRequest(
                         "note Objects contain only note subtype data".into(),
                     ));
@@ -467,6 +479,17 @@ pub(crate) async fn prepare_batch_for_app(
                 validate_note(object.note.as_mut().ok_or_else(|| {
                     IntakeError::BadRequest("note data is required for note Objects".into())
                 })?)?;
+            }
+            "theme" => {
+                if object.user_kind.is_some() || object.source.is_some() || object.note.is_some() {
+                    return Err(IntakeError::BadRequest(
+                        "theme Objects may contain only theme subtype data".into(),
+                    ));
+                }
+                let theme = object.theme.as_mut().ok_or_else(|| {
+                    IntakeError::BadRequest("theme data is required for theme Objects".into())
+                })?;
+                theme.slug = crate::domain::theme_slug(theme.slug.clone())?;
             }
             _ => unreachable!(),
         }
@@ -517,7 +540,7 @@ pub(crate) async fn prepare_batch_for_app(
             "content_kind",
             SOURCE_CONTENT_KINDS,
         )?;
-        content.normalized_text = required_text(
+        content.normalized_text = crate::domain::required_preserved_text(
             content.normalized_text.clone(),
             "normalized_text",
             10_000_000,
@@ -578,9 +601,9 @@ pub(crate) async fn prepare_batch_for_app(
             1000,
         )?;
         connection.provenance = Some(provenance(connection.provenance.take())?);
-        let (source_id, _) =
+        let (source_id, source_kind) =
             resolve_ref(&app.pool, &object_ids, &request.objects, &connection.source).await?;
-        let (target_id, _) =
+        let (target_id, target_kind) =
             resolve_ref(&app.pool, &object_ids, &request.objects, &connection.target).await?;
         if source_id == target_id {
             return Err(IntakeError::BadRequest(
@@ -590,6 +613,11 @@ pub(crate) async fn prepare_batch_for_app(
         if !active_edges.insert((source_id, connection.kind.clone(), target_id)) {
             return Err(IntakeError::BadRequest(
                 "batch contains a duplicate active connection".into(),
+            ));
+        }
+        if connection.kind == "themed" && (source_kind == "theme" || target_kind != "theme") {
+            return Err(IntakeError::BadRequest(
+                "themed connections must point from a non-Theme Object to a Theme".into(),
             ));
         }
         connection.source = IntakeObjectRef {
@@ -879,6 +907,14 @@ pub(crate) async fn write_batch(
                     .bind(&source.language).bind(&source.media_type).bind(&source.artifact_reference).bind(&source.content_hash)
                     .execute(&mut *tx).await?;
             }
+            "theme" => {
+                let theme = object.theme.as_ref().expect("validated theme");
+                sqlx::query("INSERT INTO themes (object_id,slug) VALUES ($1,$2)")
+                    .bind(id)
+                    .bind(&theme.slug)
+                    .execute(&mut *tx)
+                    .await?;
+            }
             _ => unreachable!(),
         }
         insert_intake_event(
@@ -1050,7 +1086,13 @@ impl From<sqlx::Error> for IntakeError {
 
 impl From<crate::db::DbError> for IntakeError {
     fn from(value: crate::db::DbError) -> Self {
-        Self::Internal(value.to_string())
+        match value {
+            crate::db::DbError::NotFound => Self::BadRequest("record not found".into()),
+            crate::db::DbError::Conflict => Self::Conflict("record conflict".into()),
+            crate::db::DbError::Invalid(message) => Self::BadRequest(message),
+            crate::db::DbError::Validation(error) => Self::BadRequest(error.to_string()),
+            crate::db::DbError::Sqlx(error) => Self::Database(error),
+        }
     }
 }
 

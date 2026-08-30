@@ -6,14 +6,14 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, Theme, ThemeProposal, User } from "./types";
 
-const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from"];
+const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
-const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note" } as const;
+const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
+const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
-const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes"]);
+const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
 type CreateSection = keyof typeof sectionSingular;
 const descriptionExamples: Record<ObjectKind, string> = {
   task: "Prepare and publish the approved launch notes for customers.",
@@ -23,6 +23,7 @@ const descriptionExamples: Record<ObjectKind, string> = {
   memory: "The product team approved the customer migration during the August review.",
   source: "A concise summary of the evidence and why it matters.",
   note: "A short summary that helps people recognize what this note contains.",
+  theme: "A research vertical used to group related work for retrieval and audience interests.",
 };
 const sourceKinds: SourceKind[] = ["article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page", "other"];
 
@@ -34,6 +35,8 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sources, setSources] = useState<Source[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [themeProposals, setThemeProposals] = useState<ThemeProposal[]>([]);
   const [curatorRuns, setCuratorRuns] = useState<CuratorRun[]>([]);
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -50,11 +53,13 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), api.curatorRuns(), api.objectVisuals()]);
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextThemeProposals, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "themes" ? api.themeProposals() : Promise.resolve([]), api.curatorRuns(), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
       setSources(nextSources.items);
       setNotes(nextNotes.items);
+      setThemes(nextThemes);
+      setThemeProposals(nextThemeProposals);
       setCuratorRuns(nextCuratorRuns);
       setVisuals(nextVisuals);
     } catch (cause) {
@@ -82,7 +87,7 @@ export default function App() {
     navigate(sectionPath(next));
   };
 
-  const currentItems = itemsForSection(section, objects, tasks, sources, notes, curatorRuns);
+  const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, curatorRuns, query);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
@@ -108,6 +113,7 @@ export default function App() {
           <NavButton active={section === "memories"} compact={collapsed} icon="✦" label="Memories" onClick={() => selectSection("memories")} />
           <NavButton active={section === "sources"} compact={collapsed} icon="▤" label="Sources" onClick={() => selectSection("sources")} />
           <NavButton active={section === "notes"} compact={collapsed} icon="▱" label="Notes" onClick={() => selectSection("notes")} />
+          <NavButton active={section === "themes"} compact={collapsed} icon="#" label="Themes" onClick={() => selectSection("themes")} />
           <NavButton active={section === "curator"} compact={collapsed} icon="↻" label="Curator Runs" onClick={() => selectSection("curator")} />
           <NavButton active={section === "evals"} compact={collapsed} icon="≋" label="Evals" onClick={() => selectSection("evals")} />
           <NavButton active={section === "schema"} compact={collapsed} icon="⌘" label="Schema" onClick={() => selectSection("schema")} />
@@ -134,6 +140,7 @@ export default function App() {
               <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
             </div>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
+            {section === "themes" && <ThemeProposalQueue proposals={themeProposals} onChanged={load} />}
             <div className="record-list">
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
@@ -147,7 +154,7 @@ export default function App() {
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
@@ -156,18 +163,23 @@ export default function App() {
         ? <NewTask onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : section === "sources" ? <NewSource onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : section === "notes" ? <NewNote onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
+        : section === "themes" ? <NewTheme onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : <NewObject fixedKind={fixedCreateKind(section)} label={sectionSingular[section]} onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.id, load, setCreateOpen)} />)}
     </main>
   );
 }
 
-type ListItem = SharedObject | Task | Source | NoteSummary | CuratorRun;
+type ListItem = SharedObject | Task | Source | NoteSummary | Theme | CuratorRun;
 
-function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], curatorRuns: CuratorRun[]): ListItem[] {
+function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], curatorRuns: CuratorRun[], query: string): ListItem[] {
   if (section === "schema") return [];
   if (section === "tasks") return tasks;
   if (section === "sources") return sources;
   if (section === "notes") return notes;
+  if (section === "themes") {
+    const normalized = query.trim().toLocaleLowerCase();
+    return normalized ? themes.filter((item) => `${item.title} ${item.slug} ${item.description}`.toLocaleLowerCase().includes(normalized)) : themes;
+  }
   if (section === "curator") return curatorRuns;
   if (section === "objects") return objects;
   if (section === "evals") return [];
@@ -178,7 +190,7 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
 function itemRouteId(item: ListItem) { return "trigger" in item ? item.id : canonicalObjectId(item); }
 function canonicalObjectId(item: ListItem) { return "trigger" in item ? item.chat_object_id : "object_id" in item ? item.object_id : item.id; }
 
-function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
+function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "slug" in item ? "theme" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
 function itemTitle(item: ListItem, objects: SharedObject[]) { return "title" in item ? item.title : `Chat · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}`; }
 function itemDescription(item: ListItem) { return "description" in item ? item.description : `${item.trigger.replace("_", " ")} · ${item.message_count} message${item.message_count === 1 ? "" : "s"}`; }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
@@ -186,6 +198,64 @@ function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" |
 
 function NavButton({ active, compact, icon, label, onClick }: { active: boolean; compact: boolean; icon: string; label: string; onClick: () => void }) {
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
+}
+
+function ThemeProposalQueue({ proposals, onChanged }: { proposals: ThemeProposal[]; onChanged: () => Promise<void> }) {
+  if (proposals.length === 0) return null;
+  return <Section title={`Pending proposals (${proposals.length})`}>
+    <div className="change-list">{proposals.map((proposal) => <ThemeProposalCard proposal={proposal} onChanged={onChanged} key={proposal.id} />)}</div>
+  </Section>;
+}
+
+function ThemeProposalCard({ proposal, onChanged }: { proposal: ThemeProposal; onChanged: () => Promise<void> }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const decide = async (decision: "approve" | "reject") => {
+    if (!reason.trim()) { setError("A decision reason is required."); return; }
+    setBusy(true); setError(null);
+    try {
+      if (decision === "approve") await api.approveThemeProposal(proposal.id, reason.trim());
+      else await api.rejectThemeProposal(proposal.id, reason.trim());
+      await onChanged();
+    } catch (cause) { setError(message(cause)); }
+    finally { setBusy(false); }
+  };
+  return <article className="change"><span className="event-dot" /><div><strong>{proposal.title}</strong><p><code>{proposal.slug}</code> · {proposal.description}</p><small>{proposal.rationale} · proposed by {proposal.proposed_by_id}</small><input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={1000} placeholder="Decision reason" aria-label={`Decision reason for ${proposal.title}`} />{error && <p className="form-error">{error}</p>}</div><span><button className="secondary" type="button" disabled={busy} onClick={() => void decide("approve")}>Approve</button><button className="text-button" type="button" disabled={busy} onClick={() => void decide("reject")}>Reject</button></span></article>;
+}
+
+function ThemeDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+  const [theme, setTheme] = useState<Theme | null>(null);
+  const [assigned, setAssigned] = useState<SharedObject[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void Promise.all([api.theme(id), api.themeObjects(id)])
+      .then(([nextTheme, nextAssigned]) => { if (active) { setTheme(nextTheme); setAssigned(nextAssigned); } })
+      .catch((cause) => { if (active) setError(message(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  if (!theme) return <DetailLoading error={error} />;
+  const themeObject = objects.find((item) => item.id === id);
+  return <div className="record-page"><div className="record-primary">
+    <h1 className="detail-title">{theme.title}</h1><p className="detail-description">{theme.description}</p>
+    <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
+    <Section title="Themed Objects"><div className="connections">{assigned.map((item) => <article className="connection" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
+    {themeObject && <Provenance value={themeObject.provenance} />}
+  </div></div>;
+}
+
+function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Theme) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(null);
+    const data = new FormData(event.currentTarget);
+    try {
+      onCreated(await api.createTheme({ title: String(data.get("title")), slug: String(data.get("slug")), description: String(data.get("description")), protected: true, provenance: { source_type: "human", note: "Approved and created in Centaur Context" } }));
+    } catch (cause) { setError(message(cause)); setBusy(false); }
+  };
+  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {

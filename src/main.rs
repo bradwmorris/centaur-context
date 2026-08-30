@@ -73,6 +73,16 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let theme_proposal_listener = if let Some(theme_proposals) = config.theme_proposals.as_ref() {
+        Some((
+            TcpListener::bind(theme_proposals.addr)
+                .await
+                .context("bind Theme proposal listener")?,
+            theme_proposals.clone(),
+        ))
+    } else {
+        None
+    };
     let state = AppState {
         pool,
         embeddings: embedding_client.clone(),
@@ -97,6 +107,9 @@ async fn main() -> Result<()> {
     let source_intake = source_intake_listener.as_ref().map(|(_, config)| {
         centaur_context::source_intake::router(state.clone(), config.api_token.clone())
     });
+    let theme_proposals = theme_proposal_listener
+        .as_ref()
+        .map(|(_, config)| api::theme_proposal_router(state.clone(), config.api_token.clone()));
     let inactivity_pool = state.pool.clone();
     let inactivity_duration = config.interaction_inactivity;
     let poll_interval = config.inactivity_poll_interval;
@@ -164,6 +177,11 @@ async fn main() -> Result<()> {
     } else {
         info!("permanent Source intake listener disabled");
     }
+    if let Some((_, config)) = theme_proposal_listener.as_ref() {
+        info!(address = %config.addr, "Theme proposal listener ready");
+    } else {
+        info!("Theme proposal listener disabled");
+    }
 
     let intake_server = async move {
         if let (Some((listener, _)), Some(router)) = (intake_listener, intake) {
@@ -185,6 +203,16 @@ async fn main() -> Result<()> {
         }
     };
 
+    let theme_proposal_server = async move {
+        if let (Some((listener, _)), Some(router)) = (theme_proposal_listener, theme_proposals) {
+            axum::serve(listener, router)
+                .await
+                .context("Theme proposal server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
+
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
@@ -193,6 +221,7 @@ async fn main() -> Result<()> {
         result = axum::serve(curator_listener, curator) => result.context("context curator server stopped")?,
         result = intake_server => result?,
         result = source_intake_server => result?,
+        result = theme_proposal_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
         _ = curator_worker => unreachable!("curator worker runs until shutdown"),

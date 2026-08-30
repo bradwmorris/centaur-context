@@ -1,4 +1,4 @@
-export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note";
+export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme";
 export type TaskStatus = "todo" | "doing" | "blocked" | "review" | "done";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
 export type SchemaViewMode = "map" | "structure" | "rows";
@@ -86,6 +86,38 @@ export interface Connection {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+}
+
+export interface Theme {
+  object_id: string;
+  title: string;
+  description: string;
+  slug: string;
+  lifecycle: "active" | "archived";
+  revision: number;
+  provenance: Record<string, unknown>;
+  protected: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThemeProposal {
+  id: string;
+  title: string;
+  slug: string;
+  description: string;
+  rationale: string;
+  evidence: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  status: "pending" | "approved" | "rejected";
+  proposed_by_type: "centaur_agent";
+  proposed_by_id: string;
+  centaur_thread_key: string;
+  centaur_execution_id: string | null;
+  decision_reason: string | null;
+  resulting_theme_object_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Task {
