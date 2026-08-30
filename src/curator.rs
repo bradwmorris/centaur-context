@@ -1964,10 +1964,10 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
             }
             let attribution = UsageAttribution {
                 provider: &response.provider,
-                execution_type: "centaur_codex",
+                execution_type: "codex_harness",
                 auth_mode: &response.authentication_mode,
                 upstream_service: &response.upstream,
-                billing_mode: &response.billing_basis,
+                billing_mode: "subscription_allowance",
                 reasoning_effort: Some(&response.reasoning_effort),
                 source_execution_id: &response.execution_id,
             };
@@ -2157,10 +2157,10 @@ fn default_usage_attribution<'a>(
     match config.transport {
         CuratorModelTransport::CentaurSubscription => UsageAttribution {
             provider: "openai",
-            execution_type: "centaur_codex",
+            execution_type: "codex_harness",
             auth_mode: "chatgpt_subscription",
             upstream_service: "chatgpt.com",
-            billing_mode: "chatgpt_subscription",
+            billing_mode: "subscription_allowance",
             reasoning_effort: Some("low"),
             source_execution_id: attempt_id,
         },
@@ -2368,5 +2368,22 @@ mod tests {
         assert_eq!(attribution.execution_type, "direct_api");
         assert_eq!(attribution.auth_mode, "api_key");
         assert_eq!(attribution.billing_mode, "metered_api");
+    }
+
+    #[test]
+    fn subscription_attribution_uses_canonical_eval_values() {
+        let config = CuratorModelConfig {
+            transport: CuratorModelTransport::CentaurSubscription,
+            endpoint: "http://centaur-api-rs/api/internal/context-curator/infer".to_owned(),
+            api_token: "test-token".to_owned(),
+            model: "gpt-5.6-luna".to_owned(),
+            prompt_version: "test".to_owned(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(210),
+        };
+        let attribution = default_usage_attribution(&config, "attempt-1");
+        assert_eq!(attribution.execution_type, "codex_harness");
+        assert_eq!(attribution.auth_mode, "chatgpt_subscription");
+        assert_eq!(attribution.billing_mode, "subscription_allowance");
     }
 }
