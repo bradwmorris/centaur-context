@@ -127,12 +127,28 @@ async fn ready(State(state): State<IngestState>) -> Result<Json<Value>, ApiError
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct SlackAvatarAssetInput {
+    pub sha256: String,
+    pub filename: String,
+    #[serde(default = "empty_json_object")]
+    pub provenance: Value,
+}
+
+fn empty_json_object() -> Value {
+    json!({})
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct SlackSenderInput {
     pub provider_user_id: String,
     pub display_name: String,
     pub user_kind: String,
     #[serde(default)]
     pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub avatar_asset: Option<SlackAvatarAssetInput>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub profile_refreshed_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -165,6 +181,15 @@ pub struct ValidatedSlackSender {
     display_name: String,
     user_kind: String,
     avatar_url: Option<String>,
+    avatar_asset: Option<ValidatedAvatarAsset>,
+    profile_refreshed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedAvatarAsset {
+    sha256: String,
+    filename: String,
+    provenance: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -241,6 +266,8 @@ impl SlackInteractionInput {
                         &["human", "agent"],
                     )?,
                     avatar_url: validate_avatar_url(message.sender.avatar_url)?,
+                    avatar_asset: validate_avatar_asset(message.sender.avatar_asset)?,
+                    profile_refreshed_at: message.sender.profile_refreshed_at,
                 },
                 content: required_text(message.content, "content", 20_000)?,
                 source_created_at: message.source_created_at,
@@ -277,6 +304,45 @@ fn validate_avatar_url(value: Option<String>) -> Result<Option<String>, Validati
         });
     }
     Ok(value)
+}
+
+fn validate_avatar_asset(
+    value: Option<SlackAvatarAssetInput>,
+) -> Result<Option<ValidatedAvatarAsset>, ValidationError> {
+    let Some(value) = value else { return Ok(None) };
+    let sha256 = required_text(value.sha256, "sender.avatar_asset.sha256", 64)?;
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.sha256",
+            value: sha256,
+        });
+    }
+    let filename = required_text(value.filename, "sender.avatar_asset.filename", 128)?;
+    if filename.contains("..")
+        || !filename.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric() || (index > 0 && matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.filename",
+            value: filename,
+        });
+    }
+    if !value.provenance.is_object() {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.provenance",
+            value: "must be an object".to_owned(),
+        });
+    }
+    Ok(Some(ValidatedAvatarAsset {
+        sha256,
+        filename,
+        provenance: value.provenance,
+    }))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -559,13 +625,47 @@ async fn get_or_create_user(
             }));
         }
         sqlx::query(
-            "UPDATE external_identities SET display_name=$2,avatar_url=COALESCE($3,avatar_url),updated_at=now() WHERE user_object_id=$1 AND provider='slack'",
+            r#"UPDATE external_identities
+               SET display_name=$2,
+                   avatar_url=COALESCE($3,avatar_url),
+                   avatar_asset_sha256=COALESCE($4,avatar_asset_sha256),
+                   avatar_asset_filename=COALESCE($5,avatar_asset_filename),
+                   avatar_provenance=CASE WHEN $4::text IS NULL THEN avatar_provenance ELSE $6 END,
+                   profile_refreshed_at=COALESCE($7,profile_refreshed_at),updated_at=now()
+               WHERE user_object_id=$1 AND provider='slack'"#,
         )
         .bind(id)
         .bind(&sender.display_name)
         .bind(&sender.avatar_url)
+        .bind(sender.avatar_asset.as_ref().map(|asset| &asset.sha256))
+        .bind(sender.avatar_asset.as_ref().map(|asset| &asset.filename))
+        .bind(
+            sender
+                .avatar_asset
+                .as_ref()
+                .map(|asset| asset.provenance.clone())
+                .unwrap_or_else(|| json!({})),
+        )
+        .bind(sender.profile_refreshed_at)
         .execute(&mut **tx)
         .await?;
+        let revision: Option<i64> = sqlx::query_scalar(
+            r#"UPDATE objects SET title=$2,
+               description=CASE WHEN $3='human' THEN 'A human Slack user named ' || $2 || '.'
+                                ELSE 'A Centaur agent on Slack named ' || $2 || '.' END,
+               revision=revision+1,updated_by_type=$4,updated_by_id=$5,updated_at=now()
+               WHERE id=$1 AND title IS DISTINCT FROM $2 RETURNING revision"#,
+        )
+        .bind(id)
+        .bind(&sender.display_name)
+        .bind(&sender.user_kind)
+        .bind(actor.actor_type)
+        .bind(&actor.actor_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(revision) = revision {
+            insert_object_update_event(tx, actor, id, revision, &sender.display_name).await?;
+        }
         return Ok(id);
     }
 
@@ -600,8 +700,9 @@ async fn get_or_create_user(
         .await?;
     sqlx::query(
         r#"INSERT INTO external_identities
-           (id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url)
-           VALUES ($1,$2,'slack',$3,$4,$5,$6)"#,
+           (id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url,
+            avatar_asset_sha256,avatar_asset_filename,avatar_provenance,profile_refreshed_at)
+           VALUES ($1,$2,'slack',$3,$4,$5,$6,$7,$8,$9,$10)"#,
     )
     .bind(Uuid::new_v4())
     .bind(id)
@@ -609,6 +710,16 @@ async fn get_or_create_user(
     .bind(&sender.provider_user_id)
     .bind(&sender.display_name)
     .bind(&sender.avatar_url)
+    .bind(sender.avatar_asset.as_ref().map(|asset| &asset.sha256))
+    .bind(sender.avatar_asset.as_ref().map(|asset| &asset.filename))
+    .bind(
+        sender
+            .avatar_asset
+            .as_ref()
+            .map(|asset| asset.provenance.clone())
+            .unwrap_or_else(|| json!({})),
+    )
+    .bind(sender.profile_refreshed_at)
     .execute(&mut **tx)
     .await?;
     insert_event(
@@ -889,6 +1000,33 @@ async fn insert_event(
     Ok(())
 }
 
+async fn insert_object_update_event(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    object_id: Uuid,
+    revision: i64,
+    display_name: &str,
+) -> Result<(), DbError> {
+    sqlx::query(
+        r#"INSERT INTO object_events
+           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
+            centaur_thread_key,centaur_execution_id,from_revision,to_revision,changes)
+           VALUES ($1,'object',$2,$2,'updated',$3,$4,$5,$6,$7,$8,$9)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(object_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(&actor.centaur_thread_key)
+    .bind(&actor.centaur_execution_id)
+    .bind(revision - 1)
+    .bind(revision)
+    .bind(json!({"title": display_name, "source": "slack_profile_refresh"}))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -918,5 +1056,33 @@ mod tests {
         assert!(validate_avatar_url(Some("data:image/png;base64,secret".to_owned())).is_err());
         assert!(validate_avatar_url(Some("javascript:alert(1)".to_owned())).is_err());
         assert_eq!(validate_avatar_url(None).unwrap(), None);
+    }
+
+    #[test]
+    fn identity_assets_require_safe_content_addressed_paths() {
+        let asset = validate_avatar_asset(Some(SlackAvatarAssetInput {
+            sha256: "a".repeat(64),
+            filename: "ed.png".to_owned(),
+            provenance: json!({"source": "overlay"}),
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(asset.filename, "ed.png");
+        assert!(
+            validate_avatar_asset(Some(SlackAvatarAssetInput {
+                sha256: "A".repeat(64),
+                filename: "ed.png".to_owned(),
+                provenance: json!({}),
+            }))
+            .is_err()
+        );
+        assert!(
+            validate_avatar_asset(Some(SlackAvatarAssetInput {
+                sha256: "a".repeat(64),
+                filename: "../ed.png".to_owned(),
+                provenance: json!({}),
+            }))
+            .is_err()
+        );
     }
 }

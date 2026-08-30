@@ -92,7 +92,7 @@ configured. It defaults to port `8087` and uses
 `CENTAUR_CONTEXT_THEME_PROPOSAL_URL` and
 `CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN`. Agents can assign or unassign existing
 approved Themes and submit new Theme proposals, but cannot approve proposals.
-Approval requires the `approve_themes` permission on the human API; schema 12
+Approval requires the `approve_themes` permission on the human API; schema 13
 grants it only to the initial local human administrator identity (`local-human`).
 
 ## Status

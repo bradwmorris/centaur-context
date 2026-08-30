@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         embeddings: embedding_client.clone(),
         text_search_config: config.text_search_config,
     };
-    let human = api::human_router(state.clone(), config.static_dir);
+    let human = api::human_router(state.clone(), config.static_dir, config.identity_assets_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
     let note_write = api::note_write_router(state.clone(), config.note_write_api_token);
     let ingest = centaur_context::ingest::router(

@@ -85,6 +85,7 @@ const visuals = objects.map((object) => ({
     user_kind: "human",
     role: object.id === ids.user ? "identity" : object.id === ids.chat || object.id === ids.note ? "participant" : "source author",
     avatar_url: null,
+    avatar_asset_url: null,
   }] : [],
 }));
 

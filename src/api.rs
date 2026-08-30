@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Extension, Json, Router,
+    body::Body,
     extract::{Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -10,6 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -46,14 +48,78 @@ struct AgentAuth {
     token: Arc<String>,
 }
 
-pub fn human_router(state: AppState, static_dir: PathBuf) -> Router {
+#[derive(Clone)]
+struct IdentityAssetsDir(PathBuf);
+
+pub fn human_router(state: AppState, static_dir: PathBuf, identity_assets_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
     Router::new()
+        .route(
+            "/api/v1/identity-assets/{sha256}/{filename}",
+            get(identity_asset),
+        )
         .merge(service_router(state))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index)))
+        .layer(Extension(IdentityAssetsDir(identity_assets_dir)))
         .layer(Extension(ActorContext::human()))
         .layer(TraceLayer::new_for_http())
+}
+
+async fn identity_asset(
+    Path((sha256, filename)): Path<(String, String)>,
+    Extension(root): Extension<IdentityAssetsDir>,
+) -> Result<Response, StatusCode> {
+    if !is_safe_asset_digest(&sha256) || !is_safe_asset_filename(&filename) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let expected_mime = if filename.ends_with(".png") {
+        "image/png"
+    } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let bytes = tokio::fs::read(root.0.join(&sha256).join(&filename))
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if bytes.len() > 5 * 1024 * 1024
+        || !asset_bytes_match_mime(&bytes, expected_mime)
+        || format!("{:x}", Sha256::digest(&bytes)) != sha256
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, expected_mime)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(header::ETAG, format!("\"{sha256}\""))
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn is_safe_asset_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_safe_asset_filename(value: &str) -> bool {
+    !value.contains("..")
+        && value.len() <= 128
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric() || (index > 0 && matches!(byte, b'.' | b'_' | b'-'))
+        })
+}
+
+fn asset_bytes_match_mime(bytes: &[u8], mime: &str) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        _ => false,
+    }
 }
 
 pub fn agent_router(state: AppState, token: String) -> Router {

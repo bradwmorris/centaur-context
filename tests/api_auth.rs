@@ -10,6 +10,7 @@ use centaur_context::{
     source_intake::router as source_intake_router,
 };
 use http_body_util::BodyExt;
+use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
 use tower::ServiceExt;
@@ -165,7 +166,11 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
     )
     .unwrap();
 
-    let router = human_router(state(), static_dir.clone());
+    let router = human_router(
+        state(),
+        static_dir.clone(),
+        static_dir.join("identity-assets"),
+    );
     let response = router
         .clone()
         .oneshot(
@@ -191,6 +196,59 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
     std::fs::remove_dir_all(static_dir).unwrap();
 
     assert_eq!(schema.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn identity_assets_are_content_addressed_same_origin_images() {
+    let root = std::env::temp_dir().join(format!(
+        "centaur-context-identity-assets-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let bytes = b"\x89PNG\r\n\x1a\nsynthetic-image";
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    std::fs::create_dir_all(root.join(&digest)).unwrap();
+    std::fs::write(root.join(&digest).join("avatar.png"), bytes).unwrap();
+    let wrong_mime = b"\xff\xd8\xffsynthetic-jpeg";
+    let wrong_mime_digest = format!("{:x}", Sha256::digest(wrong_mime));
+    std::fs::create_dir_all(root.join(&wrong_mime_digest)).unwrap();
+    std::fs::write(root.join(&wrong_mime_digest).join("wrong.png"), wrong_mime).unwrap();
+    let router = human_router(state(), PathBuf::from("web/dist"), root.clone());
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/identity-assets/{digest}/avatar.png"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(
+        response.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(response.headers()["etag"], format!("\"{digest}\""));
+
+    for path in [
+        format!("/api/v1/identity-assets/{digest}/../avatar.png"),
+        format!("/api/v1/identity-assets/{}/avatar.png", "0".repeat(64)),
+        format!("/api/v1/identity-assets/{digest}/avatar.svg"),
+        format!("/api/v1/identity-assets/{wrong_mime_digest}/wrong.png"),
+    ] {
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -224,7 +282,11 @@ async fn curator_listener_uses_its_own_credential_and_is_not_an_agent_surface() 
 
 #[tokio::test]
 async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
-    let router = human_router(state(), PathBuf::from("web/dist"));
+    let router = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    );
     let meta = router
         .clone()
         .oneshot(
@@ -243,7 +305,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v2");
-    assert_eq!(metadata["database_schema_version"], 12);
+    assert_eq!(metadata["database_schema_version"], 13);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -260,24 +322,28 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
 
 #[tokio::test]
 async fn human_api_rejects_a_weak_object_description_before_database_access() {
-    let response = human_router(state(), PathBuf::from("web/dist"))
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/objects")
-                .header("content-type", "application/json")
-                .header("idempotency-key", "weak-object-description")
-                .body(Body::from(
-                    r#"{
+    let response = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/objects")
+            .header("content-type", "application/json")
+            .header("idempotency-key", "weak-object-description")
+            .body(Body::from(
+                r#"{
                         "kind":"entity",
                         "title":"Northwind",
                         "description":"Northwind"
                     }"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -532,33 +598,41 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
     .unwrap();
     assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
 
-    let invalid_human_filter = human_router(state(), PathBuf::from("web/dist"))
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/evals?kind=automatic_score")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let invalid_human_filter = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/api/v1/evals?kind=automatic_score")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         invalid_human_filter.status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
 
-    let invalid_human_annotation = human_router(state(), PathBuf::from("web/dist"))
-        .oneshot(
-            Request::builder()
-                .method("PATCH")
-                .uri("/api/v1/evals/00000000-0000-4000-8000-000000000001/annotation")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"verdict":"automatic_score","notes":null,"expected_revision":0}"#,
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let invalid_human_annotation = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    )
+    .oneshot(
+        Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/evals/00000000-0000-4000-8000-000000000001/annotation")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"verdict":"automatic_score","notes":null,"expected_revision":0}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         invalid_human_annotation.status(),
         StatusCode::UNPROCESSABLE_ENTITY
@@ -610,16 +684,20 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
 
     for method in ["POST", "PUT", "PATCH", "DELETE"] {
-        let response = human_router(state(), PathBuf::from("web/dist"))
-            .oneshot(
-                Request::builder()
-                    .method(method)
-                    .uri("/api/v1/schema")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let response = human_router(
+            state(),
+            PathBuf::from("web/dist"),
+            PathBuf::from("identity-assets"),
+        )
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri("/api/v1/schema")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }

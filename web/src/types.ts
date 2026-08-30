@@ -267,6 +267,10 @@ export interface ExternalIdentity {
   provider_user_id: string;
   display_name: string | null;
   avatar_url: string | null;
+  avatar_asset_sha256: string | null;
+  avatar_asset_filename: string | null;
+  avatar_provenance: Record<string, unknown>;
+  profile_refreshed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -278,6 +282,7 @@ export interface UserAttribution {
   user_kind: "human" | "agent";
   role: "identity" | "owner" | "participant" | "source author";
   avatar_url: string | null;
+  avatar_asset_url: string | null;
 }
 
 export interface ObjectVisual {

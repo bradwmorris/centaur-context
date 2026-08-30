@@ -1,8 +1,9 @@
-# RD: Unify Enyu Slack Identities and Avatars
+# 2 — RD: Unify Enyu Slack Identities and Avatars
 
-**Status:** `scoped`
+**Status:** `in_progress`
 **Created:** 2026-08-30
-**Dependency:** `rd-fork-centaur-context-multi-agent-poc.md` phases 1-2 provide
+**Issue:** [#53](https://github.com/bradwmorris/centaur-context/issues/53)
+**Dependency:** `complete/rd-fork-centaur-context-multi-agent-poc.md` phases 1-2 provide
 the shared Context handshake and generic multi-Slack instances. This RD
 supersedes that RD's dedicated-per-agent MVP channel expectation and owns only
 the Enyu names, identity media, one-channel acceptance, and UI presentation.
