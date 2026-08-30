@@ -204,12 +204,15 @@ def test_read_source_reads_metadata_without_content() -> None:
         requests.append(request)
         return json_response({"data": {"id": "source/id", "title": "A paper"}})
 
-    result = make_client(handler).read_source("source/id")
+    result = make_client(handler).read_source(
+        "source/id", thread_key="workflow:run-123"
+    )
 
     assert result["title"] == "A paper"
     assert requests[0].method == "GET"
     assert requests[0].url.raw_path == b"/api/v1/sources/source%2Fid"
     assert requests[0].url.query == b""
+    assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-123"
 
 
 def test_read_source_content_sends_a_bounded_window() -> None:
