@@ -1,6 +1,7 @@
 # RD: Research a Paradigm AI/AGI Context Corpus
 
-**Status:** `scoped`
+**Status:** `review`
+**GitHub Issue:** [#51](https://github.com/bradwmorris/centaur-context/issues/51)
 **Created:** 2026-08-30
 **Codex Task:** `codex://threads/01a0511a-f8e4-74c2-8402-2b4e0c07af3d`
 **Related RD:** `complete/rd-prepare-and-populate-poc-database.md`
@@ -15,10 +16,11 @@ seed-import contract; the scoped legacy-corpus expansion; and Paradigm's officia
 About, Team, Investments, Research, Research Index, and Writing surfaces as of
 2026-08-30. Strong initial leads include its recursive-self-improvement work,
 automated-research projects, EVMbench, Centaur, and officially AI-labelled
-portfolio companies. These are candidates, not an import allowlist.
+portfolio companies. Those leads were resolved into the exact import allowlist
+below.
 
 **Missing:** none for research and import preparation. Database writes require a
-separate execution instruction after the candidate manifest is reviewed.
+separate explicit approval after the exact manifest is reviewed.
 
 1. Snapshot the existing Enyu corpus through the authenticated read-only HTTP API
    and inspect the pending legacy-expansion manifest if available. Build a
@@ -51,64 +53,111 @@ separate execution instruction after the candidate manifest is reviewed.
 
 ## What We Are Doing
 
-- [ ] Produce an evidence-backed map of Paradigm, its most relevant people, and
+- [x] Produce an evidence-backed map of Paradigm, its most relevant people, and
   its backed organizations at the intersection of Brad's AI/AGI interests.
-- [ ] Identify the recent, durable research Sources worth retaining from
+- [x] Identify the recent, durable research Sources worth retaining from
   Paradigm and the accepted organizations.
-- [ ] Deliver a deduplicated, import-ready candidate manifest and efficient
+- [x] Deliver a deduplicated, import-ready candidate manifest and efficient
   reviewed import plan without writing to the database.
 
-## Exact First-Pass Ingest Target
+## Final Import Allowlist — Awaiting Brad Approval
 
-The research deliverable must end with one explicit allowlist. Subject to
-identity and duplicate checks, the expected first pass is:
+The authoritative, schema-shaped manifest is private at
+`~/.codex/private/centaur-context/issue-51/candidate-manifest.json`, SHA-256
+`9fa5af9370d49647840bc75706bb6128550702603576e4a3e1fb9acc6c4e74b7`.
+The exact replay-safe intake payload is `intake-batch.json`, file SHA-256
+`9c8bea40e7d13d9e74a77e1124af61c46f69a1b8e66433d3001a363bf41a3462`.
+It contains every URL, evidence URL, exact description, bounded provenance,
+subtype field, retained body, locator, Connection reason, and dependency. The
+tables below are the complete human review surface; there are no unnamed rows.
 
-| Target | Intended Context representation |
+### Entities: 10 inserts
+
+Every row is a protected canonical Entity Object. Its primary URL is the
+`source_ref`; provenance is exactly `source_type=public_research`, that URL, and
+the note “Official identity, current-role, and relevance evidence reviewed
+2026-08-30.” Exact descriptions follow.
+
+| Client key / title | Primary URL | Exact description |
+| --- | --- | --- |
+| `entity-paradigm` — Paradigm | `paradigm.xyz/about` | Paradigm is an investment firm and research organization that builds and backs frontier technology, including crypto, artificial intelligence, and robotics; its AI work includes recursive self-improvement economics, automated research, agent infrastructure, and AI security evaluation. |
+| `entity-matt-huang` — Matt Huang | `paradigm.xyz/team/matt-huang` | Matt Huang is Paradigm's co-founder and managing partner, responsible for the firm's frontier-technology investing and strategic direction across crypto, AI, robotics, and related research-led opportunities. |
+| `entity-dan-robinson` — Dan Robinson | `paradigm.xyz/team/dan-robinson` | Dan Robinson is a Paradigm general partner and researcher working across mechanism and market design, programming languages, automated research, formal verification, agent infrastructure, and the economics of recursive AI self-improvement. |
+| `entity-justin-wang` — Justin Wang | `paradigm.xyz/team/justin-wang` | Justin Wang is a Paradigm research partner whose work spans AI capabilities, adversarial robustness and agent safety, AI security evaluation, and quantitative modeling of recursive self-improvement. |
+| `entity-alpin-yukseloglu` — Alpin Yukseloglu | `paradigm.xyz/team/alpin-yukseloglu` | Alpin Yukseloglu is a Paradigm partner in investing and research with prior machine-learning research experience at OpenAI; he led Paradigm's work on EVMbench, an evaluation framework for AI agents performing smart-contract security tasks. |
+| `entity-georgios-konstantopoulos` — Georgios Konstantopoulos | `paradigm.xyz/team/georgios-konstantopoulos` | Georgios Konstantopoulos is Paradigm's general partner and CTO, leading technical work and open-source systems including Centaur, Paradigm's secure multiplayer agent runtime and shared organizational context infrastructure. |
+| `entity-nous-research` — Nous Research | `nousresearch.com` | Nous Research is an open AI research organization developing open-weight reasoning models, reinforcement-learning infrastructure, and Psyche, a decentralized system for coordinating large-scale model training over heterogeneous compute. |
+| `entity-harmonic` — Harmonic | `harmonic.fun` | Harmonic is an AI research company building verifiable mathematical reasoning systems; its Aristotle system combines learned proof search, informal reasoning, and formal verification for mathematics and software. |
+| `entity-andromeda` — Andromeda | `andromeda.ai` | Andromeda builds market infrastructure for AI compute, including cluster sourcing, benchmarking, certification, standardized contracts, workload matching, operations, and observability across infrastructure providers. |
+| `entity-vana` — Vana | `vana.org` | Vana is an open network for user-owned AI data, using data liquidity pools and dataset-linked tokens to coordinate contribution, access, governance, monetization, and markets for model-training data. |
+
+### Sources: 10 inserts, 9 retained bodies
+
+All are protected Source Objects with `language=en`; article bodies use
+`article_text`, papers use `paper_text`, and media type is UTF-8 plain text.
+Descriptions, full bylines, evidence URLs, exact RFC-3339 dates, and provenance
+are sealed in the manifest. `Psyche` is deliberately metadata-only because its
+official Discourse host stopped resolving during capture; no partial text is
+substituted. Andromeda states only 2026, so `published_at` is exactly null.
+
+| Client key / exact title | Publisher; date; kind | Content artifact; bytes; SHA-256 |
+| --- | --- | --- |
+| `source-paradigm-rsi-simulator` — RSI Simulator | Paradigm; 2026-08-11; article | `paradigm-rsi-simulator.txt`; 5,830; `c4ea14482a0ebd42c4ab5306486b8bda9d16a09b408fa4cf365095f667a20025` |
+| `source-paradigm-evmbench` — Introducing EVMbench | Paradigm; 2026-02-18; article | `paradigm-evmbench.txt`; 2,108; `462f3b95560894e88ca28f8b310811fee5d34efadcf1e852cb46e0d532b21ab1` |
+| `source-paradigm-solidus` — Formally Verifying a Compiler Using Automated Research | Paradigm; 2026-07-24; article | `paradigm-solidus.txt`; 9,277; `f81f482a54fa528d5fe960d4e3c3ff0b92571c1c2bf8773b4a43cc895958a0e7` |
+| `source-paradigm-centaur-2` — Centaur 2.0: Permissions, Context, and MCP | Paradigm; 2026-08-10; article | `paradigm-centaur-2.txt`; 7,274; `c7217b141a4e4590a12b2c5a041cbc29318d4238e7c2cae3efd8d720ad02e91c` |
+| `source-paradigm-open-sourcing-centaur` — Open Sourcing Centaur: Multiplayer, self-hosted, secure agents | Paradigm; 2026-05-21; article | `paradigm-open-sourcing-centaur.txt`; 14,040; `332088506966a94d1da75cedce0cf9a27726a626fc7fe8e70fd32e59a5092471` |
+| `source-nous-hermes-4-report` — Hermes 4 Technical Report | Nous Research; 2025-08-25; paper | `nous-hermes-4-technical-report.txt`; 159,253; `6430030246b5e9c1c3843946bb5dc11a140ab8af1414778df3517042473cc4cf` |
+| `source-nous-psyche-future-directions` — Psyche - Future Directions | Nous Research; 2025-10-09; article | `metadata_only`; 0; null |
+| `source-harmonic-aristotle-imo` — Aristotle: IMO-level Automated Theorem Proving | Harmonic; 2025-10-01; paper | `harmonic-aristotle-imo-level-atp.txt`; 74,399; `d55045e00994858e7dee9288b9850d1f16df2778798ae7897f0f7d711d8fc150` |
+| `source-andromeda-gpu-hours` — A view from billions of GPU-Hours | Andromeda; null; article | `andromeda-gpu-hours.txt`; 5,215; `8245cc32df8efaf04833133d800e11cec49c3c738a83e46fc08b42b424a0d024` |
+| `source-vana-solana-data-markets` — Vana Brings Data Tokens to Solana’s Onchain Capital Markets | Vana; 2025-05-22; article | `vana-vrc20-data-finance.txt`; 2,261; `d90a84d6f24aa579250d2b8cde2916cfa35d05adc4087a4eb12812024e23c5f8` |
+
+### Reuse, defer, and reject
+
+- Reuse Source `46f174c1-38ef-5958-a3de-a8238fe8f174`, *The Economics of
+  Recursive Self-Improvement*; the live canonical URI is
+  `https://elasticity.institute/rsi-paper.pdf`. Do not update or duplicate it.
+- Defer Matthew Slipper as an Entity: he authors two retained publications but
+  is absent from Paradigm's current official Team directory. Preserve authorship
+  only in Source bylines.
+- Reject Axiom and its reviewed ZK-heavy writing as too tangential; AI Arena as
+  out of focus; Project Kryptos as lower-priority than Solidus; and the rest of
+  Paradigm's staff and portfolio because this is not a directory import.
+
+### Exact Connections and import sequence
+
+The payload has 82 protected Connections: 40 `involves`, 39 `themed`, two
+`about`, and one `derived_from`. Every inserted Object connects to live Brad
+`74000b0a-…` (“Brad selected this Object…”) and Codex `9d11eaab-…` (“Codex
+researched, normalized, and prepared this Object…”). Theme mappings are:
+
+| Object keys | Exact approved Themes |
 | --- | --- |
-| Paradigm | One required canonical Entity, inserted or reused. |
-| Relevant Paradigm people | One Entity each for the small set of current people with directly relevant work. Starting candidates are Matt Huang, Dan Robinson, Justin Wang, Alpin Yukseloglu, Georgios Konstantopoulos, and Matthew Slipper; include only those whose current role and relevance are verified. |
-| Relevant backed organizations | One Entity each for the verified high-signal set. Start with Nous Research, Harmonic, Andromeda, and Vana; add another portfolio organization only with equally strong AI/AGI-economic relevance. |
-| Paradigm research | One Source per accepted durable publication, with one immutable current Source content version when a complete public capture can be retained. The provisional core is *RSI Simulator*, *Introducing EVMbench*, *Formally Verifying a Compiler Using Automated Research*, *Centaur 2.0*, and *Open Sourcing Centaur*. |
-| Portfolio-company research | One Source plus retained content for each recent official publication that materially advances the target themes; the research phase must name these exactly rather than importing company news feeds wholesale. |
-| Existing RSI economics paper | Reuse the existing *The Economics of Recursive Self-Improvement* Source and connect new material to it only where the ontology has an exact evidenced relationship. Never create a duplicate. |
+| Paradigm; Matt | Capital/Markets; Paradigm also AI Engineering |
+| Dan | Jobs/GDP; AI for Science; Agents |
+| Justin; Alpin | Frontier Models; AI Engineering |
+| Georgios | Agents; AI Engineering |
+| Nous; Hermes 4; Psyche | Open Models; Frontier Models for Nous/Hermes; AI Infrastructure for Psyche |
+| Harmonic; Aristotle | AI for Science; Frontier Models |
+| Andromeda and its Source | AI Infrastructure; Capital/Markets |
+| Vana and its Source | Capital/Markets |
+| RSI Simulator | Jobs/GDP; Frontier Models |
+| EVMbench | AI Engineering; Frontier Models |
+| Solidus | AI for Science; Agents; AI Engineering |
+| both Centaur Sources | Agents; AI Engineering |
 
-For every accepted Entity create exactly one canonical Object and Entity subtype.
-For every accepted publication create exactly one canonical Object and Source
-subtype, plus at most one verified current content version in this pass. Apply
-the existing Brad/Codex attribution convention. Add semantic Connections only
-when their allowed kind is exact and evidenced.
+`RSI Simulator derived_from Economics of RSI` uses the paper's live Object ID.
+Both Centaur Sources are `about Paradigm`. Investment, employment, and authorship
+remain in descriptions/provenance because no exact ontology edge exists.
 
-Do **not** ingest Paradigm's complete staff directory or portfolio, generic team
-and investment pages as research Sources, news or fundraising announcements,
-job posts, weakly relevant company writing, raw search results, duplicate
-captures, Notes, Memories, Tasks, Chats, Users, or speculative relationships.
-Official directory pages remain evidence and provenance for Entity selection.
-
-### Mandatory Final Allowlist Before Import
-
-The table above is the research target, not yet the executable import manifest.
-Research completion must update this RD with a fixed row-by-row allowlist before
-any database-write instruction is accepted. That final table must name every
-record and contain:
-
-- stable client key and exact canonical title;
-- Object kind and `reuse` or `insert` action;
-- canonical primary URL and evidence URLs;
-- exact approved Object description and bounded provenance;
-- for Sources, publication date, authors, publisher, Source kind, exact content
-  artifact, SHA-256, byte count, and `retain` or `metadata_only` decision;
-- every proposed Connection as exact source Object, allowed kind, target Object,
-  and human-readable reason—or an explicit statement that there is no edge;
-- dependency order and expected post-import Object, subtype, content, Connection,
-  and Object Event counts.
-
-The final allowlist must contain no `candidate`, “such as”, unnamed portfolio
-publication, unresolved identity, placeholder payload, open-ended discovery, or
-range of possible counts. Each researched item must instead be marked `reuse`,
-`insert`, `defer`, or `reject`. Brad reviews that amended RD and manifest; only a
-later explicit approval authorizes importing exactly the `reuse` and `insert`
-rows. Any new record discovered after approval requires another RD amendment and
-approval rather than being silently added during execution.
+Import order is existing-ID preflight, 10 Entities, 10 Sources, nine contents,
+then 82 Connections, all through the temporarily enabled, manifest-pinned,
+authenticated bounded intake. Baseline is 366 Objects, 159 Entities, 133
+Sources, 26 contents, 1,262 Connections, and 1,657 Events. Expected result is
+386 Objects (385 active), 169 Entities, 143 Sources, 35 contents, 1,344
+Connections (`about` 205, `derived_from` 63, `involves` 738, `themed` 338), and
+1,768 Events. Replay must add zero rows. This section does not authorize import.
 
 ## Contract
 
@@ -164,19 +213,19 @@ represent.
 
 ## Checks
 
-- [ ] Primary official sources support identity, affiliation/investment,
+- [x] Primary official sources support identity, affiliation/investment,
   authorship, dates, and relevance; secondary sources are corroboration only.
-- [ ] The ledger accounts for every considered person, organization, and Source
+- [x] The ledger accounts for every considered person, organization, and Source
   as reuse, insert, defer, or reject, with no canonical URI/name/hash collision.
-- [ ] Existing Enyu seed records—including *The Economics of Recursive
+- [x] Existing Enyu seed records—including *The Economics of Recursive
   Self-Improvement*—and pending expansion candidates are reused, not duplicated.
-- [ ] Every accepted Source has a canonical identifier; every retained capture
+- [x] Every accepted Source has a canonical identifier; every retained capture
   has a verified SHA-256, completeness/rights decision, and schema-safe size.
-- [ ] Offline validation confirms exact payloads, stable keys, dependency order,
+- [x] Offline validation confirms exact payloads, stable keys, dependency order,
   allowed provenance, valid endpoints, and no unexplained Connection.
-- [ ] The final report states exact proposed/reused/rejected counts, unresolved
+- [x] The final report states exact proposed/reused/rejected counts, unresolved
   uncertainties, evidence links, and the later write/reconciliation procedure.
-- [ ] `git diff --check` passes.
+- [x] `git diff --check` passes.
 
 ## Approval Boundary
 
