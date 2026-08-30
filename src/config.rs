@@ -13,6 +13,7 @@ pub struct Config {
     pub note_write_addr: SocketAddr,
     pub note_write_api_token: String,
     pub intake: Option<IntakeConfig>,
+    pub source_intake: Option<SourceIntakeConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
     pub curator_addr: SocketAddr,
@@ -31,6 +32,12 @@ pub struct IntakeConfig {
     pub addr: SocketAddr,
     pub api_token: String,
     pub approved_manifest_sha256: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct SourceIntakeConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
 }
 
 #[derive(Clone)]
@@ -155,6 +162,7 @@ impl Config {
         let embedding = embedding_config()?;
         let curator_model = curator_model_config()?;
         let intake = intake_config()?;
+        let source_intake = source_intake_config()?;
         if intake.as_ref().is_some_and(|intake| {
             intake.api_token == agent_api_token
                 || intake.api_token == note_write_api_token
@@ -162,6 +170,17 @@ impl Config {
                 || intake.api_token == curator_api_token
         }) {
             bail!("INTAKE_API_TOKEN must differ from every other service credential");
+        }
+        if source_intake.as_ref().is_some_and(|source_intake| {
+            source_intake.api_token == agent_api_token
+                || source_intake.api_token == note_write_api_token
+                || source_intake.api_token == chat_ingest_api_token
+                || source_intake.api_token == curator_api_token
+                || intake
+                    .as_ref()
+                    .is_some_and(|intake| intake.api_token == source_intake.api_token)
+        }) {
+            bail!("SOURCE_INTAKE_API_TOKEN must differ from every other service credential");
         }
 
         Ok(Self {
@@ -172,6 +191,7 @@ impl Config {
             note_write_addr: parse_addr("NOTE_WRITE_ADDR", "0.0.0.0:8084")?,
             note_write_api_token,
             intake,
+            source_intake,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
             curator_addr: parse_addr("CURATOR_ADDR", "0.0.0.0:8083")?,
@@ -219,6 +239,19 @@ fn intake_config() -> Result<Option<IntakeConfig>> {
         addr: parse_addr("INTAKE_ADDR", "0.0.0.0:8085")?,
         api_token,
         approved_manifest_sha256,
+    }))
+}
+
+fn source_intake_config() -> Result<Option<SourceIntakeConfig>> {
+    let Some(api_token) = optional("SOURCE_INTAKE_API_TOKEN") else {
+        return Ok(None);
+    };
+    if api_token.len() < 32 {
+        bail!("SOURCE_INTAKE_API_TOKEN must be at least 32 characters");
+    }
+    Ok(Some(SourceIntakeConfig {
+        addr: parse_addr("SOURCE_INTAKE_ADDR", "0.0.0.0:8086")?,
+        api_token,
     }))
 }
 

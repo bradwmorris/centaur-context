@@ -9,4 +9,5 @@ pub mod ingest;
 pub mod intake;
 pub mod schema;
 pub mod search;
+pub mod source_intake;
 pub mod version;

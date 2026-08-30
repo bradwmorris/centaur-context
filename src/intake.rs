@@ -226,23 +226,23 @@ pub struct IntakeObjectRef {
 }
 
 #[derive(Clone)]
-struct PreparedBatch {
-    request: IntakeBatchRequest,
-    payload_sha256: String,
-    object_ids: HashMap<String, Uuid>,
+pub(crate) struct PreparedBatch {
+    pub(crate) request: IntakeBatchRequest,
+    pub(crate) payload_sha256: String,
+    pub(crate) object_ids: HashMap<String, Uuid>,
     identity_ids: HashMap<String, Uuid>,
     content_ids: HashMap<String, Uuid>,
     connection_ids: HashMap<String, Uuid>,
 }
 
 impl PreparedBatch {
-    fn event_count(&self) -> usize {
+    pub(crate) fn event_count(&self) -> usize {
         self.request.objects.len()
             + self.request.source_contents.len()
             + self.request.connections.len()
     }
 
-    fn counts(&self) -> Value {
+    pub(crate) fn counts(&self) -> Value {
         json!({
             "objects":self.request.objects.len(),
             "external_identities":self.request.external_identities.len(),
@@ -349,15 +349,24 @@ async fn read_batch_status(
 
 async fn prepare_batch(
     state: &IntakeState,
+    request: IntakeBatchRequest,
+) -> Result<PreparedBatch, IntakeError> {
+    prepare_batch_for_app(
+        &state.app,
+        state.approved_manifest_sha256.as_deref(),
+        request,
+    )
+    .await
+}
+
+pub(crate) async fn prepare_batch_for_app(
+    app: &AppState,
+    approved_manifest_sha256: Option<&str>,
     mut request: IntakeBatchRequest,
 ) -> Result<PreparedBatch, IntakeError> {
     request.batch_id = validate_key(&request.batch_id, "batch_id", 100)?;
     request.manifest_sha256 = validate_hash(&request.manifest_sha256, "manifest_sha256")?;
-    if state
-        .approved_manifest_sha256
-        .as_deref()
-        .is_some_and(|approved| approved != request.manifest_sha256)
-    {
+    if approved_manifest_sha256.is_some_and(|approved| approved != request.manifest_sha256) {
         return Err(IntakeError::Forbidden(
             "manifest is not approved for this intake listener".into(),
         ));
@@ -446,13 +455,8 @@ async fn prepare_batch(
         identity.provider_user_id =
             required_text(identity.provider_user_id.clone(), "provider_user_id", 300)?;
         identity.display_name = optional_text(identity.display_name.take(), "display_name", 500)?;
-        let (id, kind) = resolve_ref(
-            &state.app.pool,
-            &object_ids,
-            &request.objects,
-            &identity.user,
-        )
-        .await?;
+        let (id, kind) =
+            resolve_ref(&app.pool, &object_ids, &request.objects, &identity.user).await?;
         if kind != "user" {
             return Err(IntakeError::BadRequest(
                 "external identity must reference a user Object".into(),
@@ -509,13 +513,8 @@ async fn prepare_batch(
                 "locators must be a JSON object".into(),
             ));
         }
-        let (id, kind) = resolve_ref(
-            &state.app.pool,
-            &object_ids,
-            &request.objects,
-            &content.source,
-        )
-        .await?;
+        let (id, kind) =
+            resolve_ref(&app.pool, &object_ids, &request.objects, &content.source).await?;
         if kind != "source" {
             return Err(IntakeError::BadRequest(
                 "source content must reference a source Object".into(),
@@ -546,20 +545,10 @@ async fn prepare_batch(
             1000,
         )?;
         connection.provenance = Some(provenance(connection.provenance.take())?);
-        let (source_id, _) = resolve_ref(
-            &state.app.pool,
-            &object_ids,
-            &request.objects,
-            &connection.source,
-        )
-        .await?;
-        let (target_id, _) = resolve_ref(
-            &state.app.pool,
-            &object_ids,
-            &request.objects,
-            &connection.target,
-        )
-        .await?;
+        let (source_id, _) =
+            resolve_ref(&app.pool, &object_ids, &request.objects, &connection.source).await?;
+        let (target_id, _) =
+            resolve_ref(&app.pool, &object_ids, &request.objects, &connection.target).await?;
         if source_id == target_id {
             return Err(IntakeError::BadRequest(
                 "connection endpoints must differ".into(),
@@ -735,7 +724,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-async fn write_batch(
+pub(crate) async fn write_batch(
     pool: &PgPool,
     actor: &ActorContext,
     batch: &PreparedBatch,
@@ -900,14 +889,17 @@ async fn insert_intake_event(
 }
 
 #[derive(Debug)]
-struct BatchStatus {
-    manifest_sha256: String,
-    payload_sha256: String,
-    event_count: i64,
-    object_ids: Vec<Uuid>,
+pub(crate) struct BatchStatus {
+    pub(crate) manifest_sha256: String,
+    pub(crate) payload_sha256: String,
+    pub(crate) event_count: i64,
+    pub(crate) object_ids: Vec<Uuid>,
 }
 
-async fn status(pool: &PgPool, batch_id: &str) -> Result<Option<BatchStatus>, IntakeError> {
+pub(crate) async fn status(
+    pool: &PgPool,
+    batch_id: &str,
+) -> Result<Option<BatchStatus>, IntakeError> {
     #[derive(sqlx::FromRow)]
     struct Row {
         manifest_sha256: String,
@@ -936,7 +928,7 @@ async fn status(pool: &PgPool, batch_id: &str) -> Result<Option<BatchStatus>, In
 }
 
 #[derive(Debug)]
-enum IntakeError {
+pub(crate) enum IntakeError {
     BadRequest(String),
     Unauthorized,
     Forbidden(String),
