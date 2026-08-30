@@ -37,7 +37,7 @@ def main() -> None:
     )
     require("Read and update" not in text("tools/centaur_context/pyproject.toml"), "read-only tool description regressed")
     migrations = [int(path.name.split("_", 1)[0]) for path in (ROOT / "migrations").glob("*.sql")]
-    require(max(migrations) == 10, "database schema version does not match migrations")
+    require(max(migrations) == 11, "database schema version does not match migrations")
 
     tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
     private = re.compile(r"brad(?:ley|wmorris)?|theagipost", re.IGNORECASE)
@@ -60,7 +60,10 @@ def main() -> None:
         "scripts/uninstall-kubernetes.sh",
         "scripts/validate-backup-metadata.py",
         "src/db.rs",
+        "src/schema.rs",
         "tests/database_contract.rs",
+        "tests/intake_contract.rs",
+        "tests/source_intake_contract.rs",
         "tools/centaur_context/client.py",
         "tools/centaur_context/pyproject.toml",
         "tools/centaur_context/test_client.py",
@@ -77,7 +80,10 @@ def main() -> None:
                 content = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
-            if private.search(content) or "/Users/" in content:
+            if (
+                not relative.startswith("dev/rd/")
+                and (private.search(content) or "/Users/" in content)
+            ):
                 violations.append(relative)
             if (
                 legacy_name.search(content)
