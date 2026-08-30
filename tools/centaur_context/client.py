@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:8081"
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
@@ -66,8 +66,16 @@ class _UrllibClient:
             body = json_module.dumps(json, separators=(",", ":")).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
         request = Request(url, data=body, headers=request_headers, method=method)
+        proxy = _clean(os.getenv("http_proxy") or os.getenv("HTTP_PROXY"))
+        open_request = urlopen
+        if proxy and urlparse(url).scheme == "http":
+            proxy_url = urlparse(proxy)
+            if not proxy_url.netloc:
+                raise RuntimeError("HTTP proxy URL is invalid")
+            request.set_proxy(proxy_url.netloc, "http")
+            open_request = build_opener(ProxyHandler({})).open
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with open_request(request, timeout=self.timeout) as response:
                 return _UrllibResponse(response.status, response.read())
         except HTTPError as exc:
             return _UrllibResponse(exc.code, exc.read())
