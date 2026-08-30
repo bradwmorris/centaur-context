@@ -240,7 +240,7 @@ function ThemeDetail({ id, objects, visuals }: { id: string; objects: SharedObje
   return <div className="record-page"><div className="record-primary">
     <h1 className="detail-title">{theme.title}</h1><p className="detail-description">{theme.description}</p>
     <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
-    <Section title="Themed Objects"><div className="connections">{assigned.map((item) => <article className="connection" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
+    <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
     {themeObject && <Provenance value={themeObject.provenance} />}
   </div></div>;
 }
