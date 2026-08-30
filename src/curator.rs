@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::{
     api::AppState,
-    config::CuratorModelConfig,
+    config::{CuratorModelConfig, CuratorModelTransport},
     domain::{
         CONNECTION_KINDS, TASK_PRIORITIES, TASK_STATUSES, allowed, optional_text, required_text,
     },
@@ -1564,9 +1564,16 @@ struct ModelResponse {
 
 #[derive(Debug, Deserialize)]
 struct ModelUsage {
+    #[serde(alias = "input_tokens", alias = "inputTokens")]
     prompt_tokens: Option<i64>,
+    #[serde(alias = "output_tokens", alias = "outputTokens")]
     completion_tokens: Option<i64>,
+    #[serde(alias = "totalTokens")]
     total_tokens: Option<i64>,
+    #[serde(alias = "cachedInputTokens", alias = "cached_input_tokens")]
+    cached_input_tokens: Option<i64>,
+    #[serde(alias = "reasoningOutputTokens", alias = "reasoning_output_tokens")]
+    reasoning_output_tokens: Option<i64>,
     prompt_tokens_details: Option<ModelPromptTokenDetails>,
     completion_tokens_details: Option<ModelCompletionTokenDetails>,
 }
@@ -1591,6 +1598,31 @@ struct ModelMessage {
     content: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CentaurInferenceResponse {
+    request_id: String,
+    execution_id: String,
+    model: String,
+    provider: String,
+    harness: String,
+    authentication_mode: String,
+    billing_basis: String,
+    upstream: String,
+    reasoning_effort: String,
+    output: Value,
+    usage: Option<ModelUsage>,
+}
+
+struct UsageAttribution<'a> {
+    provider: &'a str,
+    execution_type: &'a str,
+    auth_mode: &'a str,
+    upstream_service: &'a str,
+    billing_mode: &'a str,
+    reasoning_effort: Option<&'a str>,
+    source_execution_id: &'a str,
+}
+
 pub async fn run_worker(
     pool: PgPool,
     embeddings: Option<crate::embeddings::EmbeddingClient>,
@@ -1599,7 +1631,7 @@ pub async fn run_worker(
 ) {
     let worker_id = format!("context-curator-{}", Uuid::new_v4());
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
+        .timeout(config.request_timeout)
         .build()
     {
         Ok(client) => client,
@@ -1800,41 +1832,67 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
         "candidate_objects": candidates,
         "validation_feedback": validation_feedback,
     });
-    let response = match client
-        .post(&config.endpoint)
-        .bearer_auth(&config.api_token)
-        .json(&json!({
+    let input =
+        serde_json::to_string(&input).map_err(|error| CuratorError::Invalid(error.to_string()))?;
+    let idempotency_id = format!(
+        "curator-{}-{}",
+        run.id,
+        if validation_feedback.is_some() {
+            "repair"
+        } else {
+            "initial"
+        }
+    );
+    let request_body = match config.transport {
+        CuratorModelTransport::CentaurSubscription => json!({
+            "request_id": idempotency_id,
+            "system_prompt": system,
+            "input": input,
+            "output_schema": reconciliation_plan_schema(),
+            "reasoning_effort": "low"
+        }),
+        CuratorModelTransport::DirectApi => json!({
             "model": config.model,
             "messages": [
                 {"role":"system","content":system},
-                {"role":"user","content":serde_json::to_string(&input).map_err(|e|CuratorError::Invalid(e.to_string()))?}
+                {"role":"user","content":input}
             ],
             "response_format":{"type":"json_object"},
             "temperature":0
-        }))
+        }),
+    };
+    let response = match client
+        .post(&config.endpoint)
+        .bearer_auth(&config.api_token)
+        .json(&request_body)
         .send()
-        .await {
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
+            let attribution = default_usage_attribution(config, &attempt_id);
             record_curator_usage(
                 pool,
                 run,
                 &config.model,
-                &attempt_id,
+                &attribution,
                 None,
                 Some(&error.to_string()),
             )
             .await;
-            return Err(CuratorError::Invalid(format!("curator model request failed: {error}")));
+            return Err(CuratorError::Invalid(format!(
+                "curator model request failed: {error}"
+            )));
         }
     };
     let status = response.status();
     if !status.is_success() {
+        let attribution = default_usage_attribution(config, &attempt_id);
         record_curator_usage(
             pool,
             run,
             &config.model,
-            &attempt_id,
+            &attribution,
             None,
             Some(&format!("HTTP {status}")),
         )
@@ -1843,14 +1901,15 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
             "curator model returned HTTP {status}"
         )));
     }
-    let response: ModelResponse = match response.json().await {
-        Ok(response) => response,
+    let body: Value = match response.json().await {
+        Ok(body) => body,
         Err(error) => {
+            let attribution = default_usage_attribution(config, &attempt_id);
             record_curator_usage(
                 pool,
                 run,
                 &config.model,
-                &attempt_id,
+                &attribution,
                 None,
                 Some(&error.to_string()),
             )
@@ -1860,37 +1919,268 @@ Every run creates exactly one primary event Memory with kind=memory. Create addi
             )));
         }
     };
-    record_curator_usage(
-        pool,
-        run,
-        &config.model,
-        &attempt_id,
-        response.usage.as_ref(),
-        response
-            .usage
-            .is_none()
-            .then_some("provider response omitted usage"),
-    )
-    .await;
-    let content = response
-        .choices
-        .into_iter()
-        .next()
-        .ok_or_else(|| CuratorError::Invalid("curator model returned no choices".into()))?
-        .message
-        .content;
-    serde_json::from_str(&content).map_err(|error| {
-        CuratorError::Invalid(format!(
-            "curator model returned an invalid reconciliation plan: {error}"
-        ))
+    match config.transport {
+        CuratorModelTransport::CentaurSubscription => {
+            let response: CentaurInferenceResponse = match serde_json::from_value(body) {
+                Ok(response) => response,
+                Err(error) => {
+                    let attribution = default_usage_attribution(config, &attempt_id);
+                    record_curator_usage(
+                        pool,
+                        run,
+                        &config.model,
+                        &attribution,
+                        None,
+                        Some(&error.to_string()),
+                    )
+                    .await;
+                    return Err(CuratorError::Invalid(format!(
+                        "invalid Centaur inference response: {error}"
+                    )));
+                }
+            };
+            if response.request_id != idempotency_id
+                || response.model != "gpt-5.6-luna"
+                || response.provider != "openai"
+                || response.harness != "codex"
+                || response.authentication_mode != "chatgpt_subscription"
+                || response.billing_basis != "chatgpt_subscription"
+                || response.upstream != "chatgpt.com"
+            {
+                let attribution = default_usage_attribution(config, &attempt_id);
+                record_curator_usage(
+                    pool,
+                    run,
+                    &config.model,
+                    &attribution,
+                    response.usage.as_ref(),
+                    Some("Centaur inference attribution mismatch"),
+                )
+                .await;
+                return Err(CuratorError::Invalid(
+                    "Centaur inference attribution did not match the subscription contract"
+                        .to_owned(),
+                ));
+            }
+            let attribution = UsageAttribution {
+                provider: &response.provider,
+                execution_type: "centaur_codex",
+                auth_mode: &response.authentication_mode,
+                upstream_service: &response.upstream,
+                billing_mode: &response.billing_basis,
+                reasoning_effort: Some(&response.reasoning_effort),
+                source_execution_id: &response.execution_id,
+            };
+            record_curator_usage(
+                pool,
+                run,
+                &config.model,
+                &attribution,
+                response.usage.as_ref(),
+                response
+                    .usage
+                    .is_none()
+                    .then_some("Codex response omitted usage"),
+            )
+            .await;
+            let plan = serde_json::from_value(response.output).map_err(|error| {
+                CuratorError::Invalid(format!(
+                    "curator model returned an invalid reconciliation plan: {error}"
+                ))
+            })?;
+            Ok(plan)
+        }
+        CuratorModelTransport::DirectApi => {
+            let response: ModelResponse = match serde_json::from_value(body) {
+                Ok(response) => response,
+                Err(error) => {
+                    let attribution = default_usage_attribution(config, &attempt_id);
+                    record_curator_usage(
+                        pool,
+                        run,
+                        &config.model,
+                        &attribution,
+                        None,
+                        Some(&error.to_string()),
+                    )
+                    .await;
+                    return Err(CuratorError::Invalid(format!(
+                        "invalid direct API response: {error}"
+                    )));
+                }
+            };
+            let attribution = default_usage_attribution(config, &attempt_id);
+            record_curator_usage(
+                pool,
+                run,
+                &config.model,
+                &attribution,
+                response.usage.as_ref(),
+                response
+                    .usage
+                    .is_none()
+                    .then_some("provider response omitted usage"),
+            )
+            .await;
+            let content = response
+                .choices
+                .into_iter()
+                .next()
+                .ok_or_else(|| CuratorError::Invalid("curator model returned no choices".into()))?
+                .message
+                .content;
+            let plan = serde_json::from_str(&content).map_err(|error| {
+                CuratorError::Invalid(format!(
+                    "curator model returned an invalid reconciliation plan: {error}"
+                ))
+            })?;
+            Ok(plan)
+        }
+    }
+}
+
+fn reconciliation_plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["create_objects", "update_objects", "create_connections", "update_connections"],
+        "properties": {
+            "create_objects": {"type": "array", "items": {"$ref": "#/$defs/create_object"}},
+            "update_objects": {"type": "array", "items": {"$ref": "#/$defs/update_object"}},
+            "create_connections": {"type": "array", "items": {"$ref": "#/$defs/create_connection"}},
+            "update_connections": {"type": "array", "items": {"$ref": "#/$defs/update_connection"}}
+        },
+        "$defs": {
+            "nullable_string": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "uuid": {"type": "string"},
+            "nullable_uuid": {"anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
+            "message_ids": {"type": "array", "items": {"$ref": "#/$defs/uuid"}},
+            "task_fields": {
+                "type": "object", "additionalProperties": false,
+                "required": ["confirmed", "status", "priority", "owner_object_id", "agent_eligible", "due_at"],
+                "properties": {
+                    "confirmed": {"type": "boolean"}, "status": {"type": "string"},
+                    "priority": {"type": "string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
+                    "agent_eligible": {"type": "boolean"}, "due_at": {"$ref": "#/$defs/nullable_string"}
+                }
+            },
+            "task_patch": {
+                "type": "object", "additionalProperties": false,
+                "required": ["confirmed", "status", "priority", "owner_object_id", "clear_owner", "agent_eligible", "due_at", "clear_due_at"],
+                "properties": {
+                    "confirmed": {"type": "boolean"}, "status": {"$ref": "#/$defs/nullable_string"},
+                    "priority": {"$ref": "#/$defs/nullable_string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
+                    "clear_owner": {"type": "boolean"}, "agent_eligible": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+                    "due_at": {"$ref": "#/$defs/nullable_string"}, "clear_due_at": {"type": "boolean"}
+                }
+            },
+            "memory_fields": {
+                "type": "object", "additionalProperties": false,
+                "required": ["primary_event", "happened_at"],
+                "properties": {"primary_event": {"type": "boolean"}, "happened_at": {"type": "string"}}
+            },
+            "source_content": {
+                "type": "object", "additionalProperties": false,
+                "required": ["content_kind", "normalized_text", "language", "extraction_method", "extraction_version", "artifact_reference", "locators"],
+                "properties": {
+                    "content_kind": {"type": "string"}, "normalized_text": {"type": "string"},
+                    "language": {"$ref": "#/$defs/nullable_string"}, "extraction_method": {"$ref": "#/$defs/nullable_string"},
+                    "extraction_version": {"$ref": "#/$defs/nullable_string"}, "artifact_reference": {"$ref": "#/$defs/nullable_string"},
+                    "locators": {"type": "object", "additionalProperties": false, "properties": {}}
+                }
+            },
+            "source_fields": {
+                "type": "object", "additionalProperties": false,
+                "required": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "accessed_at", "language", "media_type", "artifact_reference", "content_hash", "content"],
+                "properties": {
+                    "source_kind": {"type": "string"}, "canonical_uri": {"$ref": "#/$defs/nullable_string"},
+                    "byline": {"$ref": "#/$defs/nullable_string"}, "publisher": {"$ref": "#/$defs/nullable_string"},
+                    "published_at": {"$ref": "#/$defs/nullable_string"}, "accessed_at": {"$ref": "#/$defs/nullable_string"},
+                    "language": {"$ref": "#/$defs/nullable_string"}, "media_type": {"$ref": "#/$defs/nullable_string"},
+                    "artifact_reference": {"$ref": "#/$defs/nullable_string"}, "content_hash": {"$ref": "#/$defs/nullable_string"},
+                    "content": {"anyOf": [{"$ref": "#/$defs/source_content"}, {"type": "null"}]}
+                }
+            },
+            "object_ref": {
+                "anyOf": [
+                    {"type": "object", "additionalProperties": false, "required": ["object_id"], "properties": {"object_id": {"$ref": "#/$defs/uuid"}}},
+                    {"type": "object", "additionalProperties": false, "required": ["client_id"], "properties": {"client_id": {"type": "string"}}}
+                ]
+            },
+            "create_object": {
+                "type": "object", "additionalProperties": false,
+                "required": ["client_id", "kind", "title", "description", "supporting_message_ids", "task", "memory", "source"],
+                "properties": {
+                    "client_id": {"type": "string"}, "kind": {"type": "string"}, "title": {"type": "string"},
+                    "description": {"type": "string"}, "supporting_message_ids": {"$ref": "#/$defs/message_ids"},
+                    "task": {"anyOf": [{"$ref": "#/$defs/task_fields"}, {"type": "null"}]},
+                    "memory": {"anyOf": [{"$ref": "#/$defs/memory_fields"}, {"type": "null"}]},
+                    "source": {"anyOf": [{"$ref": "#/$defs/source_fields"}, {"type": "null"}]}
+                }
+            },
+            "update_object": {
+                "type": "object", "additionalProperties": false,
+                "required": ["object_id", "expected_revision", "title", "description", "supporting_message_ids", "task"],
+                "properties": {
+                    "object_id": {"$ref": "#/$defs/uuid"}, "expected_revision": {"type": "integer"},
+                    "title": {"$ref": "#/$defs/nullable_string"}, "description": {"$ref": "#/$defs/nullable_string"},
+                    "supporting_message_ids": {"$ref": "#/$defs/message_ids"},
+                    "task": {"anyOf": [{"$ref": "#/$defs/task_patch"}, {"type": "null"}]}
+                }
+            },
+            "create_connection": {
+                "type": "object", "additionalProperties": false,
+                "required": ["source", "kind", "target", "description", "supporting_message_ids"],
+                "properties": {
+                    "source": {"$ref": "#/$defs/object_ref"}, "kind": {"type": "string"},
+                    "target": {"$ref": "#/$defs/object_ref"}, "description": {"type": "string"},
+                    "supporting_message_ids": {"$ref": "#/$defs/message_ids"}
+                }
+            },
+            "update_connection": {
+                "type": "object", "additionalProperties": false,
+                "required": ["connection_id", "expected_revision", "kind", "description", "supporting_message_ids"],
+                "properties": {
+                    "connection_id": {"$ref": "#/$defs/uuid"}, "expected_revision": {"type": "integer"},
+                    "kind": {"$ref": "#/$defs/nullable_string"}, "description": {"$ref": "#/$defs/nullable_string"},
+                    "supporting_message_ids": {"$ref": "#/$defs/message_ids"}
+                }
+            }
+        }
     })
+}
+
+fn default_usage_attribution<'a>(
+    config: &CuratorModelConfig,
+    attempt_id: &'a str,
+) -> UsageAttribution<'a> {
+    match config.transport {
+        CuratorModelTransport::CentaurSubscription => UsageAttribution {
+            provider: "openai",
+            execution_type: "centaur_codex",
+            auth_mode: "chatgpt_subscription",
+            upstream_service: "chatgpt.com",
+            billing_mode: "chatgpt_subscription",
+            reasoning_effort: Some("low"),
+            source_execution_id: attempt_id,
+        },
+        CuratorModelTransport::DirectApi => UsageAttribution {
+            provider: "openai",
+            execution_type: "direct_api",
+            auth_mode: "api_key",
+            upstream_service: "api.openai.com",
+            billing_mode: "metered_api",
+            reasoning_effort: None,
+            source_execution_id: attempt_id,
+        },
+    }
 }
 
 async fn record_curator_usage(
     pool: &PgPool,
     run: &CuratorRun,
     model_id: &str,
-    attempt_id: &str,
+    attribution: &UsageAttribution<'_>,
     usage: Option<&ModelUsage>,
     missing_reason: Option<&str>,
 ) {
@@ -1912,17 +2202,17 @@ async fn record_curator_usage(
     let input = crate::evals::NormalizedUsage {
         eval_id,
         component: "context_curator".into(),
-        provider: "openai".into(),
+        provider: attribution.provider.into(),
         model_id: model_id.to_owned(),
         display_tier: Some(model_id.to_owned()),
-        execution_type: "direct_api".into(),
-        auth_mode: "api_key".into(),
-        upstream_service: "api.openai.com".into(),
-        billing_mode: "metered_api".into(),
-        reasoning_effort: None,
+        execution_type: attribution.execution_type.into(),
+        auth_mode: attribution.auth_mode.into(),
+        upstream_service: attribution.upstream_service.into(),
+        billing_mode: attribution.billing_mode.into(),
+        reasoning_effort: attribution.reasoning_effort.map(str::to_owned),
         service_tier: None,
         source_thread_id: Some(run.chat_object_id.to_string()),
-        source_execution_id: attempt_id.to_owned(),
+        source_execution_id: attribution.source_execution_id.to_owned(),
         source_turn_id: Some(run.id.to_string()),
         usage_status: if usage.is_some() {
             "reported"
@@ -1934,10 +2224,22 @@ async fn record_curator_usage(
         input_tokens: usage.and_then(|value| value.prompt_tokens),
         output_tokens: usage.and_then(|value| value.completion_tokens),
         cache_creation_tokens: None,
-        cache_read_tokens: usage
-            .and_then(|value| value.prompt_tokens_details.as_ref()?.cached_tokens),
-        reasoning_tokens: usage
-            .and_then(|value| value.completion_tokens_details.as_ref()?.reasoning_tokens),
+        cache_read_tokens: usage.and_then(|value| {
+            value.cached_input_tokens.or_else(|| {
+                value
+                    .prompt_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.cached_tokens)
+            })
+        }),
+        reasoning_tokens: usage.and_then(|value| {
+            value.reasoning_output_tokens.or_else(|| {
+                value
+                    .completion_tokens_details
+                    .as_ref()
+                    .and_then(|details| details.reasoning_tokens)
+            })
+        }),
         total_tokens: usage.and_then(|value| value.total_tokens),
         estimated_micro_usd: None,
         chatgpt_credit_microunits: None,
@@ -2026,5 +2328,45 @@ mod tests {
             due_at: None,
         };
         assert!(validate_task_fields(&mut task).is_err());
+    }
+
+    #[test]
+    fn subscription_schema_is_strict_at_every_object_boundary() {
+        let schema = reconciliation_plan_schema();
+        assert_eq!(schema["additionalProperties"], json!(false));
+        for definition in [
+            "task_fields",
+            "task_patch",
+            "memory_fields",
+            "source_content",
+            "source_fields",
+            "create_object",
+            "update_object",
+            "create_connection",
+            "update_connection",
+        ] {
+            assert_eq!(
+                schema["$defs"][definition]["additionalProperties"],
+                json!(false),
+                "{definition} must reject extra model fields"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_api_attribution_is_an_explicit_rollback() {
+        let config = CuratorModelConfig {
+            transport: CuratorModelTransport::DirectApi,
+            endpoint: "https://api.openai.com/v1/chat/completions".to_owned(),
+            api_token: "test-token".to_owned(),
+            model: "gpt-4.1-mini".to_owned(),
+            prompt_version: "test".to_owned(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(210),
+        };
+        let attribution = default_usage_attribution(&config, "attempt-1");
+        assert_eq!(attribution.execution_type, "direct_api");
+        assert_eq!(attribution.auth_mode, "api_key");
+        assert_eq!(attribution.billing_mode, "metered_api");
     }
 }
