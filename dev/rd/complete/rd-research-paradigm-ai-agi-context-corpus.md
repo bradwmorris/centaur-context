@@ -1,6 +1,6 @@
 # RD: Research a Paradigm AI/AGI Context Corpus
 
-**Status:** `review`
+**Status:** `complete`
 **GitHub Issue:** [#51](https://github.com/bradwmorris/centaur-context/issues/51)
 **Created:** 2026-08-30
 **Codex Task:** `codex://threads/01a0511a-f8e4-74c2-8402-2b4e0c07af3d`
@@ -19,8 +19,8 @@ automated-research projects, EVMbench, Centaur, and officially AI-labelled
 portfolio companies. Those leads were resolved into the exact import allowlist
 below.
 
-**Missing:** none for research and import preparation. Database writes require a
-separate explicit approval after the exact manifest is reviewed.
+**Missing:** none. Brad approved the exact sealed manifest on 2026-08-30; the
+bounded import and reconciliation are complete.
 
 1. Snapshot the existing Enyu corpus through the authenticated read-only HTTP API
    and inspect the pending legacy-expansion manifest if available. Build a
@@ -60,7 +60,10 @@ separate explicit approval after the exact manifest is reviewed.
 - [x] Deliver a deduplicated, import-ready candidate manifest and efficient
   reviewed import plan without writing to the database.
 
-## Final Import Allowlist — Awaiting Brad Approval
+## Final Import Allowlist — Approved and Imported
+
+Brad explicitly approved this exact sealed allowlist in the linked Codex task on
+2026-08-30. No additions or substitutions are authorized.
 
 The authoritative, schema-shaped manifest is private at
 `~/.codex/private/centaur-context/issue-51/candidate-manifest.json`, SHA-256
@@ -157,27 +160,43 @@ authenticated bounded intake. Baseline is 366 Objects, 159 Entities, 133
 Sources, 26 contents, 1,262 Connections, and 1,657 Events. Expected result is
 386 Objects (385 active), 169 Entities, 143 Sources, 35 contents, 1,344
 Connections (`about` 205, `derived_from` 63, `involves` 738, `themed` 338), and
-1,768 Events. Replay must add zero rows. This section does not authorize import.
+1,768 Events. Replay must add zero rows. These were planning totals, not the
+authoritative execution ledger.
+
+### Execution result
+
+The approved batch `paradigm-ai-agi-context-corpus-2026-08-30-v1` committed on
+2026-08-30 with payload SHA-256
+`feeff3d4b04db3557243713575c9afc2beffdca865bd0bc3220efca88a7487a8`.
+The server recorded exactly 20 Objects, nine Source contents, 82 Connections,
+and 111 Events. Immediate replay returned `replayed=true` and added no rows.
+Readback matched all 20 exact titles and all nine content hashes; authenticated
+full-text search retrieved the new corpus.
+
+One unrelated editor-workflow acceptance Source arrived after the research
+snapshot. The earlier content/Event totals were also inferred rather than read
+from the schema endpoint. Authoritative post-import totals are therefore 387
+Objects (386 active), 169 Entities, 144 Sources, 44 Source contents, 1,344 active
+Connections (`about` 205, `derived_from` 63, `involves` 738, `themed` 338), and
+1,805 Events. The batch ledger isolates exactly 111 of those Events. The
+temporary manifest-pinned intake credential was removed and the listener was
+confirmed disabled after reconciliation.
 
 ## Contract
 
-- **Goal:** Prepare a small, high-signal Paradigm research graph that can be
-  added to Centaur Context safely and efficiently.
-- **Done:** Every candidate and rejection has primary-source evidence and a
-  relevance reason; all accepted Entities and Sources reconcile against current
-  and pending corpus records; proposed payloads fit the current schema; retained
-  content has verified identity and hashes; and an exact import/reuse plan is
-  ready for requester approval.
+- **Goal:** Add a small, high-signal Paradigm research graph to Centaur Context
+  safely and efficiently after exact requester approval.
+- **Done:** Every decision has primary-source evidence; the approved sealed batch
+  committed exactly once; replay added no rows; Objects, contents, Connections,
+  Events, hashes, retrieval, and disabled intake state reconcile.
 - **Files:** This RD only in Git. Store public-source snapshots, full captures,
   dossiers, manifests, hashes, and reconciliation artifacts under a private
   task-specific directory outside Git. No product code or migration changes.
-- **Agent owns:** Read-only Context inspection, web research, editorial ranking,
-  identity resolution, deduplication, capture assessment, manifest preparation,
-  offline validation, and the proposed import sequence.
-- **Requester owns:** Final candidate approval and any later hosted database
-  write, credential enablement, deployment, publication, or spending decision.
-- **Out of scope:** Import execution; exhaustive Paradigm staff or portfolio
-  coverage; investment advice; speculative affiliations; monitoring;
+- **Agent owns:** Research, reconciliation, manifest preparation, offline
+  validation, the explicitly approved bounded import, replay, and readback.
+- **Requester owns:** Any later expansion, publication, or spending decision.
+- **Out of scope:** Exhaustive Paradigm staff or portfolio coverage; investment
+  advice; speculative affiliations; monitoring;
   schema or ontology changes; public ingress; external publishing; Supabase,
   `ai_v2`, Console, or direct database access.
 
@@ -225,12 +244,16 @@ represent.
   allowed provenance, valid endpoints, and no unexplained Connection.
 - [x] The final report states exact proposed/reused/rejected counts, unresolved
   uncertainties, evidence links, and the later write/reconciliation procedure.
+- [x] The approved batch committed once, replayed without new rows, and its 20
+  Objects, nine contents, 82 Connections, and 111 Events reconcile live.
+- [x] The manifest-pinned intake credential was removed and its listener was
+  confirmed disabled after import.
 - [x] `git diff --check` passes.
 
 ## Approval Boundary
 
-This document authorizes read-only public research, authenticated read-only
-inspection of the in-scope Centaur Context API, private artifact creation, and
-offline validation only. It does not authorize database writes, credentials,
-deployment, public ingress, publishing, contacting people, spending, deletion,
-or changes to any external system.
+Brad's 2026-08-30 approval extended the original boundary only to importing the
+exact sealed allowlist through the manifest-pinned private Context intake and
+reconciling it. That authorization was consumed. It did not authorize additional
+records, public ingress, publishing, contacting people, spending, deletion,
+schema changes, `ai_v2`, Console, Supabase, or direct database access.
