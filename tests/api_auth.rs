@@ -6,6 +6,7 @@ use centaur_context::{
     api::{AppState, agent_router, human_router, note_write_router},
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
+    intake::router as intake_router,
 };
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
@@ -20,6 +21,39 @@ fn state() -> AppState {
         embeddings: None,
         text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
     }
+}
+
+#[tokio::test]
+async fn intake_listener_uses_a_separate_bearer_credential() {
+    let router = intake_router(state(), "t".repeat(32), Some("a".repeat(64)));
+    let wrong = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "migration-operator")
+                .header("x-centaur-thread-key", "codex:issue-27")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+
+    let correct = router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {}", "t".repeat(32)))
+                .header("x-centaur-principal-id", "migration-operator")
+                .header("x-centaur-thread-key", "codex:issue-27")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(correct.status(), StatusCode::OK);
 }
 
 #[tokio::test]

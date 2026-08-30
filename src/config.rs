@@ -12,6 +12,7 @@ pub struct Config {
     pub agent_api_token: String,
     pub note_write_addr: SocketAddr,
     pub note_write_api_token: String,
+    pub intake: Option<IntakeConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
     pub curator_addr: SocketAddr,
@@ -23,6 +24,13 @@ pub struct Config {
     pub text_search_config: TextSearchConfig,
     pub curator_model: Option<CuratorModelConfig>,
     pub static_dir: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct IntakeConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
+    pub approved_manifest_sha256: Option<String>,
 }
 
 #[derive(Clone)]
@@ -146,6 +154,15 @@ impl Config {
                 .map_err(anyhow::Error::msg)?;
         let embedding = embedding_config()?;
         let curator_model = curator_model_config()?;
+        let intake = intake_config()?;
+        if intake.as_ref().is_some_and(|intake| {
+            intake.api_token == agent_api_token
+                || intake.api_token == note_write_api_token
+                || intake.api_token == chat_ingest_api_token
+                || intake.api_token == curator_api_token
+        }) {
+            bail!("INTAKE_API_TOKEN must differ from every other service credential");
+        }
 
         Ok(Self {
             database_url,
@@ -154,6 +171,7 @@ impl Config {
             agent_api_token,
             note_write_addr: parse_addr("NOTE_WRITE_ADDR", "0.0.0.0:8084")?,
             note_write_api_token,
+            intake,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
             curator_addr: parse_addr("CURATOR_ADDR", "0.0.0.0:8083")?,
@@ -175,6 +193,33 @@ impl Config {
                 .unwrap_or_else(|_| PathBuf::from("web/dist")),
         })
     }
+}
+
+fn intake_config() -> Result<Option<IntakeConfig>> {
+    let token = optional("INTAKE_API_TOKEN");
+    let approved_manifest_sha256 = optional("INTAKE_APPROVED_MANIFEST_SHA256");
+    if token.is_none() && approved_manifest_sha256.is_none() {
+        return Ok(None);
+    }
+    let api_token = token.context(
+        "INTAKE_API_TOKEN is required when any Context intake configuration is provided",
+    )?;
+    if api_token.len() < 32 {
+        bail!("INTAKE_API_TOKEN must be at least 32 characters");
+    }
+    if let Some(hash) = approved_manifest_sha256.as_deref()
+        && (hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        bail!("INTAKE_APPROVED_MANIFEST_SHA256 must be a lowercase SHA-256 hex digest");
+    }
+    Ok(Some(IntakeConfig {
+        addr: parse_addr("INTAKE_ADDR", "0.0.0.0:8085")?,
+        api_token,
+        approved_manifest_sha256,
+    }))
 }
 
 fn curator_model_config() -> Result<Option<CuratorModelConfig>> {
