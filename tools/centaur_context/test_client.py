@@ -15,6 +15,7 @@ def make_client(handler, **overrides) -> CentaurContextClient:
     return CentaurContextClient(
         base_url="http://centaur-context.test:8081",
         note_write_url="http://centaur-context.test:8084",
+        intake_url="http://centaur-context.test:8085",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         principal_id="principal-1",
@@ -334,6 +335,62 @@ def test_create_note_uses_only_the_separate_write_credential() -> None:
         b'"content":"# Evidence\\n\\nA bounded body.","content_format":"markdown",'
         b'"provenance":{"source_type":"agent","source_ref":"turn-1"}}'
     )
+
+
+def test_intake_validate_commit_and_status_use_only_intake_credential() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"status": "ok"}}, 201 if request.method == "POST" else 200)
+
+    client = make_client(handler, intake_token="intake-placeholder-token")
+    batch = {
+        "batch_id": "enyu-source-1",
+        "manifest_sha256": "a" * 64,
+        "objects": [],
+    }
+
+    client.validate_intake_batch(batch)
+    client.commit_intake_batch(batch)
+    client.intake_batch_status("enyu-source-1")
+
+    assert [request.url.path for request in requests] == [
+        "/api/v1/intake/batches/validate",
+        "/api/v1/intake/batches/commit",
+        "/api/v1/intake/batches/enyu-source-1",
+    ]
+    assert all(request.url.port == 8085 for request in requests)
+    assert all(request.headers["authorization"] == "Bearer intake-placeholder-token" for request in requests)
+    assert all(request.headers["authorization"] != "Bearer placeholder-token" for request in requests)
+
+
+def test_intake_never_falls_back_to_read_or_note_write_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CENTAUR_CONTEXT_INTAKE_TOKEN", raising=False)
+    monkeypatch.setattr(client_module, "_tool_secret", lambda _name: "")
+
+    with pytest.raises(RuntimeError, match="CENTAUR_CONTEXT_INTAKE_TOKEN"):
+        make_client(lambda _request: json_response({}), note_write_token="note-token").validate_intake_batch(
+            {"batch_id": "batch-1", "manifest_sha256": "a" * 64}
+        )
+
+
+@pytest.mark.parametrize(
+    ("batch", "message"),
+    [
+        ([], "batch must be a JSON object"),
+        ({"manifest_sha256": "a" * 64}, "batch_id is required"),
+        ({"batch_id": "batch-1", "manifest_sha256": "A" * 64}, "lowercase SHA-256"),
+    ],
+)
+def test_intake_rejects_invalid_envelopes_before_request(batch, message: str) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request should not be sent")
+
+    with pytest.raises(ValueError, match=message):
+        make_client(handler, intake_token="intake-token").validate_intake_batch(batch)
 
 
 def test_create_note_never_falls_back_to_the_read_token(

@@ -30,4 +30,5 @@ secrets = [
     {type = "http", name = "CENTAUR_CONTEXT_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_OS_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-os.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-note-write.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-intake.centaur.svc.cluster.local"]},
 ]
