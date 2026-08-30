@@ -1,6 +1,9 @@
 ALTER TABLE objects DROP CONSTRAINT objects_kind_check;
 ALTER TABLE objects ADD CONSTRAINT objects_kind_check
-    CHECK (kind IN ('note', 'source', 'decision', 'task', 'chat', 'entity', 'memory', 'external_action'));
+    CHECK (kind IN (
+        'task', 'chat', 'user', 'entity', 'memory', 'source', 'note', 'theme',
+        'external_action'
+    ));
 
 CREATE TABLE external_actions (
     object_id uuid PRIMARY KEY,
