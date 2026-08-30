@@ -66,12 +66,22 @@ CURATOR_MODEL_API_URL
 CURATOR_MODEL_API_TOKEN
 CURATOR_MODEL
 CURATOR_PROMPT_VERSION
+CURATOR_MODEL_TRANSPORT
+CURATOR_MODEL_TIMEOUT_SECONDS
 ```
 
-Without these values, Curator Runs stay queued. If the model provider is
-outside the cluster, review
+Use `centaur_subscription` (the default) with Centaur's private inference URL,
+the purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model `gpt-5.6-luna`.
+Use `direct_api` only for rollback. Without these values, Curator Runs stay
+queued. If the direct model provider is outside the cluster, review
 [`deploy/provider-egress.example.yaml`](../deploy/provider-egress.example.yaml)
 before allowing that traffic.
+
+For rollback, set `CURATOR_MODEL_TRANSPORT=direct_api` and replace the URL,
+token, and model together. Do not reuse the Centaur Context bearer token as a
+provider API key. Queued or failed Curator runs retain their normal bounded
+retry behavior; an in-flight subscription request is allowed to fail rather
+than being replayed across billing modes.
 
 `TEXT_SEARCH_CONFIG` defaults to the language-neutral `simple` configuration.
 Installers may select `dutch`, `english`, `french`, `german`, `italian`,

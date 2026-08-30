@@ -103,6 +103,12 @@ spec:
                   name: centaur-context-env
                   key: CURATOR_MODEL_API_URL
                   optional: true
+            - name: CURATOR_MODEL_TRANSPORT
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_TRANSPORT
+                  optional: true
             - name: CURATOR_MODEL_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -120,6 +126,12 @@ spec:
                 secretKeyRef:
                   name: centaur-context-env
                   key: CURATOR_PROMPT_VERSION
+                  optional: true
+            - name: CURATOR_MODEL_TIMEOUT_SECONDS
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_TIMEOUT_SECONDS
                   optional: true
           resources:
             requests:

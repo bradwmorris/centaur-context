@@ -94,11 +94,19 @@ impl Default for TextSearchConfig {
 
 #[derive(Clone)]
 pub struct CuratorModelConfig {
+    pub transport: CuratorModelTransport,
     pub endpoint: String,
     pub api_token: String,
     pub model: String,
     pub prompt_version: String,
     pub poll_interval: std::time::Duration,
+    pub request_timeout: std::time::Duration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CuratorModelTransport {
+    CentaurSubscription,
+    DirectApi,
 }
 
 impl Config {
@@ -170,12 +178,16 @@ impl Config {
 }
 
 fn curator_model_config() -> Result<Option<CuratorModelConfig>> {
+    let transport = optional("CURATOR_MODEL_TRANSPORT");
     let endpoint = optional("CURATOR_MODEL_API_URL");
     let token = optional("CURATOR_MODEL_API_TOKEN");
     let model = optional("CURATOR_MODEL");
     let prompt_version = optional("CURATOR_PROMPT_VERSION");
-    let configured =
-        endpoint.is_some() || token.is_some() || model.is_some() || prompt_version.is_some();
+    let configured = transport.is_some()
+        || endpoint.is_some()
+        || token.is_some()
+        || model.is_some()
+        || prompt_version.is_some();
     if !configured {
         return Ok(None);
     }
@@ -190,15 +202,27 @@ fn curator_model_config() -> Result<Option<CuratorModelConfig>> {
     let prompt_version = prompt_version.context(
         "CURATOR_PROMPT_VERSION is required when any curator model configuration is provided",
     )?;
+    let transport = match transport.as_deref().unwrap_or("centaur_subscription") {
+        "centaur_subscription" => CuratorModelTransport::CentaurSubscription,
+        "direct_api" => CuratorModelTransport::DirectApi,
+        value => {
+            bail!("CURATOR_MODEL_TRANSPORT must be centaur_subscription or direct_api, got {value}")
+        }
+    };
+    if transport == CuratorModelTransport::CentaurSubscription && model != "gpt-5.6-luna" {
+        bail!("CURATOR_MODEL must be gpt-5.6-luna in centaur_subscription mode");
+    }
     if model.len() > 300 || prompt_version.len() > 300 {
         bail!("CURATOR_MODEL and CURATOR_PROMPT_VERSION must each be at most 300 characters");
     }
     Ok(Some(CuratorModelConfig {
+        transport,
         endpoint,
         api_token,
         model,
         prompt_version,
         poll_interval: parse_duration_seconds("CURATOR_POLL_SECONDS", 5, 1)?,
+        request_timeout: parse_duration_seconds("CURATOR_MODEL_TIMEOUT_SECONDS", 210, 30)?,
     }))
 }
 
