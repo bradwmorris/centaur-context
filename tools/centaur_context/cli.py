@@ -20,6 +20,14 @@ def _print(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False, default=str))
 
 
+def _manifest(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)
+    if not isinstance(value, dict):
+        raise ValueError("manifest file must contain a JSON object")
+    return value
+
+
 @app.command("get-context")
 def get_context(
     query: str = typer.Argument(..., help="What the agent needs context for."),
@@ -136,6 +144,30 @@ def create_note(
             idempotency_key=idempotency_key,
         )
     )
+
+
+@app.command("source-intake-validate")
+def source_intake_validate(
+    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
+) -> None:
+    """Validate one Enyu Source manifest without writes."""
+    _print(_client().source_intake_validate(_manifest(manifest_file)))
+
+
+@app.command("source-intake-commit")
+def source_intake_commit(
+    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
+) -> None:
+    """Commit or safely replay one Enyu Source manifest."""
+    _print(_client().source_intake_commit(_manifest(manifest_file)))
+
+
+@app.command("source-intake-status")
+def source_intake_status(
+    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
+) -> None:
+    """Check commit and retrieval readiness for one Enyu Source manifest."""
+    _print(_client().source_intake_status(_manifest(manifest_file)))
 
 
 def main() -> None:

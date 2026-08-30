@@ -65,6 +65,8 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `search-notes` (bounded Note excerpts)
 - `read-note` (one Note and its content)
 - `create-note` (requires the separate `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`)
+- `source-intake-validate`, `source-intake-commit`, and `source-intake-status`
+  (permanent Enyu workflow only; requires its separate Source-intake token)
 
 All reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation never falls back to
 that read token: configure the separately scoped
@@ -73,6 +75,14 @@ logical Note creation. The write client defaults to the private Note-write
 service `centaur-context-note-write` on port `8084`; its distinct hostname keeps
 credential substitution unambiguous. Override it with
 `CENTAUR_CONTEXT_NOTE_WRITE_URL` when needed.
+
+The optional permanent Source-intake listener is disabled unless
+`SOURCE_INTAKE_API_TOKEN` is configured. It defaults to port `8086`, accepts
+only `workflow-enyu-source-ingestion`, and is distinct from the temporary
+bootstrap intake listener and credential. The tool uses
+`CENTAUR_CONTEXT_SOURCE_INTAKE_URL` and
+`CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN`; neither falls back to another Context
+credential.
 
 ## Status
 

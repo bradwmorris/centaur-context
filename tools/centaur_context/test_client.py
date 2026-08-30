@@ -16,6 +16,7 @@ def make_client(handler, **overrides) -> CentaurContextClient:
         base_url="http://centaur-context.test:8081",
         note_write_url="http://centaur-context.test:8084",
         intake_url="http://centaur-context.test:8085",
+        source_intake_url="http://centaur-context.test:8086",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         principal_id="principal-1",
@@ -375,6 +376,67 @@ def test_intake_never_falls_back_to_read_or_note_write_tokens(
         make_client(lambda _request: json_response({}), note_write_token="note-token").validate_intake_batch(
             {"batch_id": "batch-1", "manifest_sha256": "a" * 64}
         )
+
+
+def test_source_intake_methods_use_only_the_enyu_workflow_credential() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"status": "ok"}})
+
+    client = make_client(
+        handler, source_intake_token="source-intake-placeholder-token"
+    )
+    manifest = {
+        "version": "centaur-context-source-intake-v1",
+        "idempotency_key": "workflow:run-1",
+        "source": {"title": "Example"},
+    }
+
+    client.source_intake_validate(manifest)
+    client.source_intake_commit(manifest)
+    client.source_intake_status(manifest)
+
+    assert [request.url.path for request in requests] == [
+        "/api/v1/source-intake/validate",
+        "/api/v1/source-intake/commit",
+        "/api/v1/source-intake/status",
+    ]
+    assert all(request.url.port == 8086 for request in requests)
+    assert all(
+        request.headers["authorization"]
+        == "Bearer source-intake-placeholder-token"
+        for request in requests
+    )
+    assert all(
+        request.headers["authorization"] != "Bearer placeholder-token"
+        for request in requests
+    )
+
+
+def test_source_intake_never_falls_back_to_other_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN", raising=False)
+    monkeypatch.setattr(client_module, "_tool_secret", lambda _name: "")
+
+    with pytest.raises(RuntimeError, match="CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"):
+        make_client(
+            lambda _request: json_response({}),
+            note_write_token="note-token",
+            intake_token="intake-token",
+        ).source_intake_validate({})
+
+
+def test_source_intake_requires_a_json_object_before_request() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("request should not be sent")
+
+    with pytest.raises(ValueError, match="manifest must be a JSON object"):
+        make_client(
+            handler, source_intake_token="source-intake-token"
+        ).source_intake_validate([])  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
