@@ -124,7 +124,7 @@ auditable but never enter retrieval. Only Brad initially has `approve_themes`.
   no duplicate Object, subtype, content, Connection, or event.
 - [ ] Target counts, provenance, hashes, Brad/Codex attribution, lexical/body
   search, graph traversal, and live authenticated retrieval canaries pass.
-- [ ] Repository-root verification commands and `git diff --check` pass.
+- [x] Repository-root verification commands and `git diff --check` pass.
 
 ## Approval Boundary
 
