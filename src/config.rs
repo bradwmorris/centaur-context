@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{collections::HashSet, env, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -15,6 +15,7 @@ pub struct Config {
     pub intake: Option<IntakeConfig>,
     pub source_intake: Option<SourceIntakeConfig>,
     pub theme_proposals: Option<ThemeProposalConfig>,
+    pub external_actions: Option<ExternalActionConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
     pub curator_addr: SocketAddr,
@@ -46,6 +47,13 @@ pub struct SourceIntakeConfig {
 pub struct ThemeProposalConfig {
     pub addr: SocketAddr,
     pub api_token: String,
+}
+
+#[derive(Clone)]
+pub struct ExternalActionConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
+    pub allowed_principals: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -172,6 +180,7 @@ impl Config {
         let intake = intake_config()?;
         let source_intake = source_intake_config()?;
         let theme_proposals = theme_proposal_config()?;
+        let external_actions = external_action_config()?;
         if intake.as_ref().is_some_and(|intake| {
             intake.api_token == agent_api_token
                 || intake.api_token == note_write_api_token
@@ -205,6 +214,23 @@ impl Config {
         }) {
             bail!("THEME_PROPOSAL_API_TOKEN must differ from every other service credential");
         }
+        if external_actions.as_ref().is_some_and(|external_actions| {
+            external_actions.api_token == agent_api_token
+                || external_actions.api_token == note_write_api_token
+                || external_actions.api_token == chat_ingest_api_token
+                || external_actions.api_token == curator_api_token
+                || intake
+                    .as_ref()
+                    .is_some_and(|intake| intake.api_token == external_actions.api_token)
+                || source_intake.as_ref().is_some_and(|source_intake| {
+                    source_intake.api_token == external_actions.api_token
+                })
+                || theme_proposals.as_ref().is_some_and(|theme_proposals| {
+                    theme_proposals.api_token == external_actions.api_token
+                })
+        }) {
+            bail!("EXTERNAL_ACTION_API_TOKEN must differ from every other service credential");
+        }
 
         let static_dir = env::var("STATIC_DIR")
             .map(PathBuf::from)
@@ -227,6 +253,7 @@ impl Config {
             intake,
             source_intake,
             theme_proposals,
+            external_actions,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
             curator_addr: parse_addr("CURATOR_ADDR", "0.0.0.0:8083")?,
@@ -299,6 +326,39 @@ fn theme_proposal_config() -> Result<Option<ThemeProposalConfig>> {
     Ok(Some(ThemeProposalConfig {
         addr: parse_addr("THEME_PROPOSAL_ADDR", "0.0.0.0:8087")?,
         api_token,
+    }))
+}
+
+fn external_action_config() -> Result<Option<ExternalActionConfig>> {
+    let token = optional("EXTERNAL_ACTION_API_TOKEN");
+    let principals = optional("EXTERNAL_ACTION_ALLOWED_PRINCIPALS");
+    if token.is_none() && principals.is_none() {
+        return Ok(None);
+    }
+    let api_token = token.context(
+        "EXTERNAL_ACTION_API_TOKEN is required when External-action configuration is provided",
+    )?;
+    if api_token.len() < 32 {
+        bail!("EXTERNAL_ACTION_API_TOKEN must be at least 32 characters");
+    }
+    let allowed_principals: HashSet<String> = principals
+        .context("EXTERNAL_ACTION_ALLOWED_PRINCIPALS is required when the listener is enabled")?
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if allowed_principals.is_empty()
+        || allowed_principals
+            .iter()
+            .any(|value| value.len() > 128 || !value.is_ascii())
+    {
+        bail!("EXTERNAL_ACTION_ALLOWED_PRINCIPALS must contain valid principal IDs");
+    }
+    Ok(Some(ExternalActionConfig {
+        addr: parse_addr("EXTERNAL_ACTION_ADDR", "0.0.0.0:8088")?,
+        api_token,
+        allowed_principals,
     }))
 }
 

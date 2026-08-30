@@ -67,6 +67,9 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `create-note` (requires the separate `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`)
 - `source-intake-validate`, `source-intake-commit`, and `source-intake-status`
   (permanent Enyu workflow only; requires its separate Source-intake token)
+- `reserve-external-action`, `append-external-action-event`, and
+  `read-external-action` (configured workflow principals only; requires its
+  separate External-action token)
 - `list-themes`, `read-theme`, and `list-theme-objects`
 - `propose-theme` and `read-theme-proposal`, plus `assign-theme` and
   `unassign-theme` (requires the separate Theme listener token)
@@ -94,6 +97,13 @@ configured. It defaults to port `8087` and uses
 approved Themes and submit new Theme proposals, but cannot approve proposals.
 Approval requires the `approve_themes` permission on the human API; schema 13
 grants it only to the initial local human administrator identity (`local-human`).
+
+The optional generic External-action listener is disabled unless
+`EXTERNAL_ACTION_API_TOKEN` and `EXTERNAL_ACTION_ALLOWED_PRINCIPALS` are
+configured. It defaults to port `8088`, stores privacy-minimized immutable
+action events, and uses `CENTAUR_CONTEXT_EXTERNAL_ACTION_URL` plus the distinct
+`CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN`. Provider credentials and message
+bodies are never accepted by this contract.
 
 ## Status
 

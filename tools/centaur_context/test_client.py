@@ -19,6 +19,8 @@ def make_client(handler, **overrides) -> CentaurContextClient:
         source_intake_url="http://centaur-context.test:8086",
         theme_proposal_url="http://centaur-context.test:8087",
         theme_proposal_token="theme-proposal-token",
+        external_action_url="http://centaur-context.test:8088",
+        external_action_token="external-action-token",
         console_url="http://centaur-console.test:3000",
         token="placeholder-token",
         principal_id="principal-1",
@@ -525,6 +527,51 @@ def test_source_intake_requires_a_json_object_before_request() -> None:
         make_client(
             handler, source_intake_token="source-intake-token"
         ).source_intake_validate([])  # type: ignore[arg-type]
+
+
+def test_external_action_methods_use_only_the_dedicated_credential() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response({"data": {"object_id": "action-1", "state": "reserved"}})
+
+    client = make_client(handler)
+    manifest = {
+        "version": "centaur-context-external-action-v1",
+        "idempotency_key": "reserve-1",
+    }
+    client.reserve_external_action(manifest)
+    client.append_external_action_event("action/1", manifest)
+    client.read_external_action("action/1")
+
+    assert [request.method for request in requests] == ["POST", "POST", "GET"]
+    assert [request.url.raw_path.split(b"?", 1)[0] for request in requests] == [
+        b"/api/v1/external-actions/reserve",
+        b"/api/v1/external-actions/action%2F1/events",
+        b"/api/v1/external-actions/action%2F1",
+    ]
+    assert all(request.url.port == 8088 for request in requests)
+    assert all(
+        request.headers["authorization"] == "Bearer external-action-token"
+        for request in requests
+    )
+    assert all(
+        request.headers["authorization"] != "Bearer placeholder-token"
+        for request in requests
+    )
+
+
+def test_external_actions_never_fall_back_to_other_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN", raising=False)
+    monkeypatch.setattr(client_module, "_tool_secret", lambda _name: "")
+
+    client = make_client(lambda _request: json_response({}))
+    client._explicit_external_action_token = ""
+    with pytest.raises(RuntimeError, match="CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN"):
+        client.reserve_external_action({})
 
 
 @pytest.mark.parametrize(
