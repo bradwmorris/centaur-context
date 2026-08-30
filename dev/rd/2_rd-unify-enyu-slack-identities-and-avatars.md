@@ -1,6 +1,6 @@
 # 2 — RD: Unify Enyu Slack Identities and Avatars
 
-**Status:** `in_progress`
+**Status:** `review`
 **Created:** 2026-08-30
 **Issue:** [#53](https://github.com/bradwmorris/centaur-context/issues/53)
 **Dependency:** `complete/rd-fork-centaur-context-multi-agent-poc.md` phases 1-2 provide
@@ -76,7 +76,7 @@ dimensions/hashes.
 - [ ] Context has stable Brad, Ed, and Rez Users whose canonical images render
   on every applicable UI identity surface, survive Slack URL expiry/change,
   and refresh names/profile metadata without duplicating Users.
-- [ ] Missing, unreadable, private, wrong-type, or broken media falls back to
+- [x] Missing, unreadable, private, wrong-type, or broken media falls back to
   deterministic initials/colour with accessible identity text and no broken
   image, secret, token, or private Slack URL exposure.
 
@@ -106,14 +106,27 @@ dimensions/hashes.
 
 ## Checks
 
-- [ ] Context migration upgrade preserves existing identities/API clients;
+- [x] Context migration upgrade preserves existing identities/API clients;
   ingestion replay, rename/refresh, asset priority, traversal/wrong-MIME/private-
   URL rejection, caching, and fallback tests pass.
-- [ ] UI tests cover all enumerated surfaces for Brad, Ed, and Rez plus broken
+- [x] UI tests cover all enumerated surfaces for Brad, Ed, and Rez plus broken
   media; Centaur sink tests cover profile TTL/failure and one-channel two-bot
   snapshots; Enyu tests assert exact names, hashes, mapping, and no `&#x20;`.
-- [ ] Context root verification, Slackbot v2 type/tests, Enyu overlay tests, and
+- [x] Context root verification, Slackbot v2 type/tests, Enyu overlay tests, and
   `git diff --check` pass in each changed repository.
+
+## Verification
+
+- Context: formatting, Clippy, Rust unit/API/database integration tests against
+  a disposable `centaur_context_test` database, web type-check/build/tests, and
+  the packaged Python client suite passed.
+- Slackbot v2: type-check and 266 tests passed with one existing stress test
+  skipped on Bun 1.3.14; the focused identity suite passed 6 tests.
+- Enyu: 36 overlay tests, Python compile checks, YAML parsing, Helm lint, exact
+  asset hashes, and the non-root asset carrier image build passed.
+- Pending requester approval: apply the Slack app/bot/profile changes and run
+  the live one-channel three-User acceptance checks. Until then the two live
+  outcomes above remain unchecked and this RD remains in `review`.
 
 ## Approval Boundary
 
