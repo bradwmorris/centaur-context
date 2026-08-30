@@ -1,6 +1,6 @@
 # RD: Build the Enyu Overlay and Source Ingestion Workflow
 
-**Status:** `in_progress`
+**Status:** `complete`
 **Created:** 2026-08-30
 **Context issue:** [#29](https://github.com/bradwmorris/centaur-context/issues/29)
 **Enyu issues:** [#1](https://github.com/bradwmorris/centaur-enyu/issues/1), [#3](https://github.com/bradwmorris/centaur-enyu/issues/3)
@@ -61,7 +61,16 @@ or text file into one protected, connected, searchable canonical Context Source.
   reported.
 - [x] Python client tests prove the permanent Source-intake credential never falls
   back to read, Note-write, or temporary migration credentials.
-- [ ] Required repository-wide checks, PR review, and merge are complete.
+- [x] Required repository-wide checks, PR review, and merge are complete.
+
+## Completion
+
+- Context PR #31 merged as `66eb8aa621c3851e49197f87ac926a0f88098bec`.
+- Enyu PR #4 merged as `e392efb3134d6d64325dc9d9b03ea0468f11171c`.
+- The shared migration checkpoint `c5bed94` remains exact shared ancestry for
+  migration closeout PR #32.
+- The permanent port 8086 adapter was not deployed or used by the completed
+  migration; its live deployment and credentials remain separately approved work.
 
 ## Approval boundary
 
