@@ -70,15 +70,19 @@ or text file into one protected, connected, searchable canonical Context Source.
 - The shared migration checkpoint `c5bed94` remains exact shared ancestry for
   migration closeout PR #32.
 - Live deployment was subsequently approved and completed at Enyu Helm revision
-  39, with durable Slack ingress at `https://slack.enyu.org` and two Cloudflare
+  40, with durable Slack ingress at `https://slack.enyu.org` and two Cloudflare
   tunnel replicas.
 - Centaur PR #9 merged as `7fcc2d032641898e04df05d59072ddf65fafa41f`,
   enabling the YouTube caption host used by the standard extraction tool.
 - Enyu PR #12 merged as `9e3a0d7ebbd714456b85984731c7b1d64b7223c0`;
   stable deployment repin PR #13 merged as
-  `d6e83a4d6e92838d6d9f1d5ea6d47df32ad35dc6`.
+  `d6e83a4d6e92838d6d9f1d5ea6d47df32ad35dc6`, followed by merged-main
+  Context repin PR #14 as `21dee22afd7459b33837c805c2bf02a06bdd1f80`.
 - Context PR #41 merged as `c076b496b52d7d82619482123b18f0bb3f5a5a91`,
   reconciling concurrent Curator and Source-ingestion ownership.
+- Context PR #42 merged as `24c7ac81dba91946ff0d0f1a0688585e552f4ebb`;
+  the live tool and service image now pin merged Context main rather than a
+  pre-merge branch build.
 - Live YouTube acceptance passed in workflow run
   `01a051cf-4c22-7b01-abc2-4d9f2fd18a44`: Source
   `7ac65959-201a-5539-87dc-219f9ce5277a` contains a transcript with 869 cues
