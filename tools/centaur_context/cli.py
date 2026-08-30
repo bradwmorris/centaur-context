@@ -58,9 +58,9 @@ def search_sources(
     _print(_client().search_sources(query, limit=limit, cursor=cursor))
 
 
-def read_source(source_id: str) -> None:
+def read_source(source_id: str, thread_key: str | None = None) -> None:
     """Read Source metadata without loading its long-form content."""
-    _print(_client().read_source(source_id))
+    _print(_client().read_source(source_id, thread_key=thread_key))
 
 
 def read_source_content(
