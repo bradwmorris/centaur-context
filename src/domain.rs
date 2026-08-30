@@ -182,7 +182,7 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
     let value = value.unwrap_or_else(|| Value::Object(Map::new()));
     let object = value.as_object().ok_or(ValidationError::ProvenanceObject)?;
     for key in object.keys() {
-        if !["source_type", "source_ref", "note"].contains(&key.as_str()) {
+        if !["source_type", "source_ref", "note", "publication_allowed"].contains(&key.as_str()) {
             return Err(ValidationError::Unsupported {
                 field: "provenance key",
                 value: key.clone(),
@@ -196,6 +196,14 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
         if source_type.trim().is_empty() {
             return Err(ValidationError::Required("provenance.source_type"));
         }
+    }
+    if let Some(publication_allowed) = object.get("publication_allowed")
+        && !publication_allowed.is_boolean()
+    {
+        return Err(ValidationError::Unsupported {
+            field: "provenance.publication_allowed",
+            value: publication_allowed.to_string(),
+        });
     }
     Ok(value)
 }
@@ -253,6 +261,7 @@ pub struct ProvenanceInput {
     pub source_type: Option<String>,
     pub source_ref: Option<String>,
     pub note: Option<String>,
+    pub publication_allowed: Option<bool>,
 }
 
 impl From<ProvenanceInput> for Value {
@@ -275,6 +284,9 @@ impl Serialize for ProvenanceInput {
         }
         if let Some(value) = &self.note {
             map.insert("note".to_owned(), Value::String(value.clone()));
+        }
+        if let Some(value) = self.publication_allowed {
+            map.insert("publication_allowed".to_owned(), Value::Bool(value));
         }
         map.serialize(serializer)
     }
@@ -309,6 +321,8 @@ mod tests {
     #[test]
     fn provenance_rejects_unknown_keys() {
         assert!(provenance(Some(json!({"source_type": "human"}))).is_ok());
+        assert!(provenance(Some(json!({"publication_allowed": true}))).is_ok());
+        assert!(provenance(Some(json!({"publication_allowed": "yes"}))).is_err());
         assert!(provenance(Some(json!({"secret": "no"}))).is_err());
         assert!(provenance(Some(json!([]))).is_err());
     }
