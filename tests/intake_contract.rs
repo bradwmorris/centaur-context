@@ -49,11 +49,11 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
         "batch_id":batch_id,
         "manifest_sha256":manifest_sha256,
         "objects":[
-            {"client_key":"brad","kind":"user","title":"Brad","description":"Human owner of the imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"brad"},"user_kind":"human"},
+            {"client_key":"owner","kind":"user","title":"Test Owner","description":"Human owner of the synthetic imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"owner"},"user_kind":"human"},
             {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":"https://example.test/paper","byline":null,"publisher":null,"published_at":null,"accessed_at":null,"language":"en","media_type":"text/plain","artifact_reference":null,"content_hash":content_hash}},
             {"client_key":"note-1","kind":"note","title":"A grounded research note","description":"A grounded note derived from the verified test source.","protected":true,"provenance":{"source_type":"test","source_ref":"note-1"},"note":{"content":"A durable, source-grounded observation.","content_format":"markdown"}}
         ],
-        "external_identities":[{"client_key":"brad-slack","user":{"client_key":"brad"},"provider":"slack","workspace_id":"TTEST","provider_user_id":"UTEST","display_name":"Brad Test"}],
+        "external_identities":[{"client_key":"owner-slack","user":{"client_key":"owner"},"provider":"slack","workspace_id":"TTEST","provider_user_id":"UTEST","display_name":"Test Owner"}],
         "source_contents":[{"client_key":"source-1-v1","source":{"client_key":"source-1"},"content_kind":"paper_text","normalized_text":normalized_text,"content_hash":content_hash,"language":"en","extraction_method":"test","extraction_version":"1","artifact_reference":null,"locators":{}}],
         "connections":[{"client_key":"note-source","source":{"client_key":"note-1"},"kind":"derived_from","target":{"client_key":"source-1"},"description":"The note is directly derived from this verified source.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-1"}}]
     });

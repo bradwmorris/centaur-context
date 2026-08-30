@@ -2,7 +2,7 @@
 version = "0.2.0"
 api_version = "v1"
 ontology_version = "v2"
-database_schema_version = 10
+database_schema_version = 11
 tool_version = "0.2.0"
 
 [runtime]
