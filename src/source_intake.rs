@@ -166,24 +166,61 @@ async fn prepared(
     request: SourceIntakeRequest,
 ) -> Result<PreparedBatch, IntakeError> {
     let batch = source_batch(request)?;
-    let prepared = crate::intake::prepare_batch_for_app(&state.app, None, batch).await?;
+    let mut prepared = crate::intake::prepare_batch_for_app(&state.app, None, batch).await?;
     let source = prepared.request.objects[0]
         .source
         .as_ref()
         .expect("Source adapter");
-    let conflicts: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT object_id FROM sources
-           WHERE ($1::text IS NOT NULL AND canonical_uri=$1) OR content_hash=$2"#,
+    #[derive(sqlx::FromRow)]
+    struct Conflict {
+        object_id: Uuid,
+        protected: bool,
+        current_content_id: Option<Uuid>,
+        content_hash: Option<String>,
+        provenance: Value,
+        canonical_uri: Option<String>,
+        same_batch: bool,
+    }
+    let conflicts: Vec<Conflict> = sqlx::query_as(
+        r#"SELECT s.object_id,o.protected,s.current_content_id,s.content_hash,o.provenance,
+                  s.canonical_uri,EXISTS(
+                    SELECT 1 FROM object_events e
+                    WHERE e.object_id=s.object_id AND e.changes->>'intake_batch_id'=$3
+                  ) AS same_batch
+           FROM sources s JOIN objects o ON o.id=s.object_id
+           WHERE o.lifecycle='active'
+             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR s.content_hash=$2)"#,
     )
     .bind(&source.canonical_uri)
     .bind(&source.content_hash)
+    .bind(&prepared.request.batch_id)
     .fetch_all(&state.app.pool)
     .await?;
     let expected = prepared.object_ids["source"];
-    if conflicts.iter().any(|object_id| *object_id != expected) {
-        return Err(IntakeError::Conflict(
-            "canonical URI or exact content already belongs to a different Source".into(),
-        ));
+    let mut foreign = conflicts
+        .into_iter()
+        .filter(|conflict| conflict.object_id != expected);
+    if let Some(conflict) = foreign.next() {
+        if foreign.next().is_some() {
+            return Err(IntakeError::Conflict(
+                "canonical URI or exact content belongs to multiple Sources".into(),
+            ));
+        }
+        let curator_placeholder = !conflict.protected
+            && conflict.current_content_id.is_none()
+            && conflict.content_hash.is_none()
+            && conflict.canonical_uri == source.canonical_uri
+            && conflict
+                .provenance
+                .get("source_type")
+                .and_then(Value::as_str)
+                == Some("context_curator");
+        if !conflict.same_batch && !curator_placeholder {
+            return Err(IntakeError::Conflict(
+                "canonical URI or exact content already belongs to a different Source".into(),
+            ));
+        }
+        prepared.adopt_object("source", conflict.object_id)?;
     }
     Ok(prepared)
 }
