@@ -10,11 +10,15 @@ import httpx
 
 DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:8081"
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
+DEFAULT_INTAKE_URL = "http://centaur-context-intake.centaur.svc.cluster.local:8085"
+DEFAULT_SOURCE_INTAKE_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8086"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 TOKEN_NAME = "CENTAUR_CONTEXT_API_TOKEN"
 LEGACY_TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 NOTE_WRITE_TOKEN_NAME = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN"
+INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
+SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
 
@@ -67,6 +71,10 @@ class CentaurContextClient:
         token: str | None = None,
         note_write_url: str | None = None,
         note_write_token: str | None = None,
+        intake_url: str | None = None,
+        intake_token: str | None = None,
+        source_intake_url: str | None = None,
+        source_intake_token: str | None = None,
         principal_id: str | None = None,
         thread_key: str | None = None,
         console_url: str | None = None,
@@ -83,11 +91,21 @@ class CentaurContextClient:
             _clean(note_write_url or os.getenv("CENTAUR_CONTEXT_NOTE_WRITE_URL"))
             or DEFAULT_NOTE_WRITE_URL
         ).rstrip("/")
+        self.intake_url = (
+            _clean(intake_url or os.getenv("CENTAUR_CONTEXT_INTAKE_URL"))
+            or DEFAULT_INTAKE_URL
+        ).rstrip("/")
+        self.source_intake_url = (
+            _clean(source_intake_url or os.getenv("CENTAUR_CONTEXT_SOURCE_INTAKE_URL"))
+            or DEFAULT_SOURCE_INTAKE_URL
+        ).rstrip("/")
         self.console_url = (
             _clean(console_url or os.getenv("CENTAUR_CONSOLE_URL")) or DEFAULT_CONSOLE_URL
         ).rstrip("/")
         self._explicit_token = _clean(token)
         self._explicit_note_write_token = _clean(note_write_token)
+        self._explicit_intake_token = _clean(intake_token)
+        self._explicit_source_intake_token = _clean(source_intake_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
         self._http = httpx.Client(timeout=timeout, transport=transport)
@@ -115,6 +133,26 @@ class CentaurContextClient:
             value = _tool_secret(NOTE_WRITE_TOKEN_NAME)
         if not value:
             raise RuntimeError(f"{NOTE_WRITE_TOKEN_NAME} is required to create notes")
+        return value
+
+    def _intake_token(self) -> str:
+        value = self._explicit_intake_token or _clean(os.getenv(INTAKE_TOKEN_NAME))
+        if not value:
+            value = _tool_secret(INTAKE_TOKEN_NAME)
+        if not value:
+            raise RuntimeError(f"{INTAKE_TOKEN_NAME} is required for Context intake")
+        return value
+
+    def _source_intake_token(self) -> str:
+        value = self._explicit_source_intake_token or _clean(
+            os.getenv(SOURCE_INTAKE_TOKEN_NAME)
+        )
+        if not value:
+            value = _tool_secret(SOURCE_INTAKE_TOKEN_NAME)
+        if not value:
+            raise RuntimeError(
+                f"{SOURCE_INTAKE_TOKEN_NAME} is required for Enyu Source intake"
+            )
         return value
 
     def _principal_id(self) -> str:
@@ -364,6 +402,86 @@ class CentaurContextClient:
             token=self._note_write_token(),
             base_url=self.note_write_url,
         )
+
+    def validate_intake_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Validate an atomic, bounded intake batch without writing rows."""
+        payload = self._intake_batch(batch)
+        return self._request(
+            "POST",
+            "/api/v1/intake/batches/validate",
+            json=payload,
+            token=self._intake_token(),
+            base_url=self.intake_url,
+        )
+
+    def commit_intake_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """Atomically commit or idempotently replay a validated intake batch."""
+        payload = self._intake_batch(batch)
+        return self._request(
+            "POST",
+            "/api/v1/intake/batches/commit",
+            json=payload,
+            token=self._intake_token(),
+            base_url=self.intake_url,
+        )
+
+    def intake_batch_status(self, batch_id: str) -> dict[str, Any] | None:
+        """Read server-ledger status for a previously committed intake batch."""
+        batch_id = _clean(batch_id)
+        if not batch_id:
+            raise ValueError("batch_id is required")
+        if len(batch_id) > 100:
+            raise ValueError("batch_id must be at most 100 characters")
+        return self._request(
+            "GET",
+            f"/api/v1/intake/batches/{quote(batch_id, safe='')}",
+            token=self._intake_token(),
+            base_url=self.intake_url,
+        )
+
+    def source_intake_validate(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Validate one Enyu Source manifest without writing rows."""
+        return self._source_intake_request("validate", manifest)
+
+    def source_intake_commit(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Atomically commit or replay one Enyu Source manifest."""
+        return self._source_intake_request("commit", manifest)
+
+    def source_intake_status(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Check commit and retrieval readiness for one Enyu Source manifest."""
+        return self._source_intake_request("status", manifest)
+
+    def _source_intake_request(
+        self, action: str, manifest: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be a JSON object")
+        return self._request(
+            "POST",
+            f"/api/v1/source-intake/{action}",
+            json=manifest,
+            token=self._source_intake_token(),
+            base_url=self.source_intake_url,
+        )
+
+    @staticmethod
+    def _intake_batch(batch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(batch, dict):
+            raise ValueError("batch must be a JSON object")
+        batch_id = _clean(batch.get("batch_id"))
+        manifest_sha256 = _clean(batch.get("manifest_sha256"))
+        if not batch_id:
+            raise ValueError("batch_id is required")
+        if len(batch_id) > 100:
+            raise ValueError("batch_id must be at most 100 characters")
+        if len(manifest_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in manifest_sha256
+        ):
+            raise ValueError("manifest_sha256 must be a lowercase SHA-256 hex digest")
+        payload = dict(batch)
+        payload["batch_id"] = batch_id
+        payload["manifest_sha256"] = manifest_sha256
+        return payload
 
 
 def _client() -> CentaurContextClient:

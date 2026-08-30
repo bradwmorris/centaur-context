@@ -53,6 +53,26 @@ async fn main() -> Result<()> {
     let curator_listener = TcpListener::bind(config.curator_addr)
         .await
         .context("bind context curator listener")?;
+    let intake_listener = if let Some(intake) = config.intake.as_ref() {
+        Some((
+            TcpListener::bind(intake.addr)
+                .await
+                .context("bind Context intake listener")?,
+            intake.clone(),
+        ))
+    } else {
+        None
+    };
+    let source_intake_listener = if let Some(source_intake) = config.source_intake.as_ref() {
+        Some((
+            TcpListener::bind(source_intake.addr)
+                .await
+                .context("bind permanent Source intake listener")?,
+            source_intake.clone(),
+        ))
+    } else {
+        None
+    };
     let state = AppState {
         pool,
         embeddings: embedding_client.clone(),
@@ -67,6 +87,16 @@ async fn main() -> Result<()> {
         config.approved_slack_surfaces,
     );
     let curator = centaur_context::curator::router(state.clone(), config.curator_api_token);
+    let intake = intake_listener.as_ref().map(|(_, config)| {
+        centaur_context::intake::router(
+            state.clone(),
+            config.api_token.clone(),
+            config.approved_manifest_sha256.clone(),
+        )
+    });
+    let source_intake = source_intake_listener.as_ref().map(|(_, config)| {
+        centaur_context::source_intake::router(state.clone(), config.api_token.clone())
+    });
     let inactivity_pool = state.pool.clone();
     let inactivity_duration = config.interaction_inactivity;
     let poll_interval = config.inactivity_poll_interval;
@@ -124,6 +154,36 @@ async fn main() -> Result<()> {
     info!(address = %config.note_write_addr, "Note-write API listener ready");
     info!(address = %config.ingest_addr, "chat ingestion listener ready");
     info!(address = %config.curator_addr, "context curator listener ready");
+    if let Some((_, config)) = intake_listener.as_ref() {
+        info!(address = %config.addr, "private Context intake listener ready");
+    } else {
+        info!("private Context intake listener disabled");
+    }
+    if let Some((_, config)) = source_intake_listener.as_ref() {
+        info!(address = %config.addr, "permanent Source intake listener ready");
+    } else {
+        info!("permanent Source intake listener disabled");
+    }
+
+    let intake_server = async move {
+        if let (Some((listener, _)), Some(router)) = (intake_listener, intake) {
+            axum::serve(listener, router)
+                .await
+                .context("Context intake server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
+
+    let source_intake_server = async move {
+        if let (Some((listener, _)), Some(router)) = (source_intake_listener, source_intake) {
+            axum::serve(listener, router)
+                .await
+                .context("permanent Source intake server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
 
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
@@ -131,6 +191,8 @@ async fn main() -> Result<()> {
         result = axum::serve(note_write_listener, note_write) => result.context("Note-write server stopped")?,
         result = axum::serve(ingest_listener, ingest) => result.context("chat ingestion server stopped")?,
         result = axum::serve(curator_listener, curator) => result.context("context curator server stopped")?,
+        result = intake_server => result?,
+        result = source_intake_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
         _ = curator_worker => unreachable!("curator worker runs until shutdown"),

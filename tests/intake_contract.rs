@@ -1,0 +1,112 @@
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use centaur_context::{api::AppState, config::TextSearchConfig, db, intake::router};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use sqlx::{PgPool, postgres::PgPoolOptions};
+use tower::ServiceExt;
+
+async fn test_pool() -> Option<PgPool> {
+    let url = std::env::var("TEST_DATABASE_URL").ok()?;
+    assert!(url.contains("centaur_context_test") || url.contains("centaur_os_test"));
+    Some(
+        PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&url)
+            .await
+            .unwrap(),
+    )
+}
+
+fn request(path: &str, token: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-centaur-principal-id", "intake-contract-test")
+        .header("x-centaur-thread-key", "test:intake-contract")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn validates_commits_and_replays_one_atomic_source_batch() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping intake contract: TEST_DATABASE_URL is not set");
+        return;
+    };
+    db::migrate(&pool).await.unwrap();
+    let token = "i".repeat(32);
+    let batch_id = format!("intake-contract-{}", uuid::Uuid::new_v4());
+    let normalized_text = "A high-quality source body.";
+    let content_hash = format!("{:x}", Sha256::digest(normalized_text.as_bytes()));
+    let manifest_sha256 = "a".repeat(64);
+    let payload = json!({
+        "batch_id":batch_id,
+        "manifest_sha256":manifest_sha256,
+        "objects":[
+            {"client_key":"brad","kind":"user","title":"Brad","description":"Human owner of the imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"brad"},"user_kind":"human"},
+            {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":"https://example.test/paper","byline":null,"publisher":null,"published_at":null,"accessed_at":null,"language":"en","media_type":"text/plain","artifact_reference":null,"content_hash":content_hash}},
+            {"client_key":"note-1","kind":"note","title":"A grounded research note","description":"A grounded note derived from the verified test source.","protected":true,"provenance":{"source_type":"test","source_ref":"note-1"},"note":{"content":"A durable, source-grounded observation.","content_format":"markdown"}}
+        ],
+        "external_identities":[{"client_key":"brad-slack","user":{"client_key":"brad"},"provider":"slack","workspace_id":"TTEST","provider_user_id":"UTEST","display_name":"Brad Test"}],
+        "source_contents":[{"client_key":"source-1-v1","source":{"client_key":"source-1"},"content_kind":"paper_text","normalized_text":normalized_text,"content_hash":content_hash,"language":"en","extraction_method":"test","extraction_version":"1","artifact_reference":null,"locators":{}}],
+        "connections":[{"client_key":"note-source","source":{"client_key":"note-1"},"kind":"derived_from","target":{"client_key":"source-1"},"description":"The note is directly derived from this verified source.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-1"}}]
+    });
+    let state = AppState {
+        pool: pool.clone(),
+        embeddings: None,
+        text_search_config: TextSearchConfig::SIMPLE,
+    };
+    let app = router(state, token.clone(), Some(manifest_sha256));
+
+    let before: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let validated = app
+        .clone()
+        .oneshot(request(
+            "/api/v1/intake/batches/validate",
+            &token,
+            payload.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(validated.status(), StatusCode::OK);
+    let after_validate: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after_validate);
+
+    let committed = app
+        .clone()
+        .oneshot(request(
+            "/api/v1/intake/batches/commit",
+            &token,
+            payload.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(committed.status(), StatusCode::CREATED);
+    let body: Value =
+        serde_json::from_slice(&committed.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["data"]["counts"]["objects"], 3);
+    assert_eq!(body["data"]["counts"]["events"], 5);
+
+    let replayed = app
+        .oneshot(request("/api/v1/intake/batches/commit", &token, payload))
+        .await
+        .unwrap();
+    assert_eq!(replayed.status(), StatusCode::OK);
+    let after_replay: i64 = sqlx::query_scalar("SELECT count(*) FROM objects")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(after_replay, before + 3);
+}
