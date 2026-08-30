@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from typing import Any
 
-import typer
-
 from .client import _client
-
-app = typer.Typer(
-    name="centaur-context",
-    help="Read shared context and create explicitly authorized Notes.",
-    no_args_is_help=True,
-)
 
 
 def _print(value: Any) -> None:
@@ -28,14 +21,11 @@ def _manifest(path: str) -> dict[str, Any]:
     return value
 
 
-@app.command("get-context")
 def get_context(
-    query: str = typer.Argument(..., help="What the agent needs context for."),
-    chat_object_id: str = typer.Option(
-        ..., "--chat-object-id", help="Canonical Chat Object for the current thread."
-    ),
-    kind: str | None = typer.Option(None, help="Optional Object kind filter."),
-    limit: int = typer.Option(10, min=1, max=10),
+    query: str,
+    chat_object_id: str,
+    kind: str | None = None,
+    limit: int = 10,
 ) -> None:
     """Build a concise packet of relevant Objects and their connections."""
     _print(
@@ -45,50 +35,39 @@ def get_context(
     )
 
 
-@app.command("search-objects")
 def search_objects(
-    query: str = typer.Argument(..., help="Text to find in record titles or bodies."),
-    kind: str | None = typer.Option(None, help="Optional Object kind filter."),
-    limit: int = typer.Option(20, min=1, max=100),
+    query: str,
+    kind: str | None = None,
+    limit: int = 20,
 ) -> None:
     """Search shared Objects."""
     _print(_client().search_objects(query, kind=kind, limit=limit))
 
 
-@app.command("read-object")
-def read_object(id: str = typer.Argument(..., help="Object UUID.")) -> None:
+def read_object(id: str) -> None:
     """Read one shared Object."""
     _print(_client().read_object(id))
 
 
-@app.command("search-sources")
 def search_sources(
-    query: str = typer.Argument(
-        ..., help="Text to find in Source metadata or normalized content."
-    ),
-    limit: int = typer.Option(20, min=1, max=100),
-    cursor: str | None = typer.Option(None, help="Opaque cursor from the prior page."),
+    query: str,
+    limit: int = 20,
+    cursor: str | None = None,
 ) -> None:
     """Search Sources and return small attributed excerpts."""
     _print(_client().search_sources(query, limit=limit, cursor=cursor))
 
 
-@app.command("read-source")
-def read_source(
-    source_id: str = typer.Argument(..., help="Canonical Source Object UUID."),
-) -> None:
+def read_source(source_id: str) -> None:
     """Read Source metadata without loading its long-form content."""
     _print(_client().read_source(source_id))
 
 
-@app.command("read-source-content")
 def read_source_content(
-    source_id: str = typer.Argument(..., help="Canonical Source Object UUID."),
-    version: int | None = typer.Option(
-        None, min=1, help="Content version; omit to read the current version."
-    ),
-    offset: int = typer.Option(0, min=0, help="Zero-based character offset."),
-    limit: int = typer.Option(8_000, min=1, max=20_000),
+    source_id: str,
+    version: int | None = None,
+    offset: int = 0,
+    limit: int = 8_000,
 ) -> None:
     """Read a bounded text window from one Source content version."""
     _print(
@@ -98,36 +77,27 @@ def read_source_content(
     )
 
 
-@app.command("search-notes")
 def search_notes(
-    query: str = typer.Argument(..., help="Text to find in Note metadata or content."),
-    limit: int = typer.Option(20, min=1, max=100),
-    cursor: str | None = typer.Option(None, help="Opaque cursor from the prior page."),
+    query: str,
+    limit: int = 20,
+    cursor: str | None = None,
 ) -> None:
     """Search Notes and return bounded excerpts."""
     _print(_client().search_notes(query, limit=limit, cursor=cursor))
 
 
-@app.command("read-note")
-def read_note(
-    note_id: str = typer.Argument(..., help="Canonical Note Object UUID."),
-) -> None:
+def read_note(note_id: str) -> None:
     """Read one Note and its content."""
     _print(_client().read_note(note_id))
 
 
-@app.command("create-note")
 def create_note(
-    title: str = typer.Argument(..., help="Short Note title."),
-    description: str = typer.Option(..., help="Concise description of the Note."),
-    content: str = typer.Option(..., help="Markdown or plain-text Note content."),
-    content_format: str = typer.Option("markdown", help="markdown or plain_text."),
-    provenance_json: str = typer.Option(
-        "{}", help="JSON object describing where the Note came from."
-    ),
-    idempotency_key: str = typer.Option(
-        ..., help="Stable retry key, required for safe Note creation."
-    ),
+    title: str,
+    description: str,
+    content: str,
+    content_format: str = "markdown",
+    provenance_json: str = "{}",
+    idempotency_key: str = "",
 ) -> None:
     """Create a Note using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
     try:
@@ -146,28 +116,94 @@ def create_note(
     )
 
 
-@app.command("source-intake-validate")
-def source_intake_validate(
-    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
-) -> None:
+def source_intake_validate(manifest_file: str) -> None:
     """Validate one Enyu Source manifest without writes."""
     _print(_client().source_intake_validate(_manifest(manifest_file)))
 
 
-@app.command("source-intake-commit")
-def source_intake_commit(
-    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
-) -> None:
+def source_intake_commit(manifest_file: str) -> None:
     """Commit or safely replay one Enyu Source manifest."""
     _print(_client().source_intake_commit(_manifest(manifest_file)))
 
 
-@app.command("source-intake-status")
-def source_intake_status(
-    manifest_file: str = typer.Argument(..., help="Path to an Enyu Source manifest JSON file."),
-) -> None:
+def source_intake_status(manifest_file: str) -> None:
     """Check commit and retrieval readiness for one Enyu Source manifest."""
     _print(_client().source_intake_status(_manifest(manifest_file)))
+
+
+def _bounded_int(minimum: int, maximum: int):
+    def parse(value: str) -> int:
+        parsed = int(value)
+        if not minimum <= parsed <= maximum:
+            raise argparse.ArgumentTypeError(
+                f"must be between {minimum} and {maximum}"
+            )
+        return parsed
+
+    return parse
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="centaur-context",
+        description="Read shared context and create explicitly authorized Notes.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    command = commands.add_parser("get-context")
+    command.add_argument("query")
+    command.add_argument("--chat-object-id", required=True)
+    command.add_argument("--kind")
+    command.add_argument("--limit", type=_bounded_int(1, 10), default=10)
+
+    command = commands.add_parser("search-objects")
+    command.add_argument("query")
+    command.add_argument("--kind")
+    command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
+
+    command = commands.add_parser("read-object")
+    command.add_argument("id")
+
+    for name in ("search-sources", "search-notes"):
+        command = commands.add_parser(name)
+        command.add_argument("query")
+        command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
+        command.add_argument("--cursor")
+
+    command = commands.add_parser("read-source")
+    command.add_argument("source_id")
+
+    command = commands.add_parser("read-source-content")
+    command.add_argument("source_id")
+    command.add_argument("--version", type=_bounded_int(1, 2**31 - 1))
+    command.add_argument("--offset", type=_bounded_int(0, 2**31 - 1), default=0)
+    command.add_argument("--limit", type=_bounded_int(1, 20_000), default=8_000)
+
+    command = commands.add_parser("read-note")
+    command.add_argument("note_id")
+
+    command = commands.add_parser("create-note")
+    command.add_argument("title")
+    command.add_argument("--description", required=True)
+    command.add_argument("--content", required=True)
+    command.add_argument("--content-format", default="markdown")
+    command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--idempotency-key", required=True)
+
+    for name in (
+        "source-intake-validate",
+        "source-intake-commit",
+        "source-intake-status",
+    ):
+        command = commands.add_parser(name)
+        command.add_argument("manifest_file")
+    return parser
+
+
+def app(argv: list[str] | None = None) -> None:
+    values = vars(_build_parser().parse_args(argv))
+    command = values.pop("command").replace("-", "_")
+    globals()[command](**values)
 
 
 def main() -> None:

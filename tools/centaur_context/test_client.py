@@ -616,6 +616,43 @@ def test_api_error_preserves_safe_message() -> None:
         make_client(handler).read_object("object-1")
 
 
+def test_default_transport_uses_stdlib_without_runtime_packages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"data":{"id":"object-1"}}'
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    client = CentaurContextClient(
+        base_url="http://centaur-context.test:8081",
+        token="placeholder-token",
+        principal_id="principal-1",
+        thread_key="thread-1",
+        timeout=12,
+    )
+
+    assert client.read_object("object-1") == {"id": "object-1"}
+    request, timeout = requests[0]
+    assert request.full_url == "http://centaur-context.test:8081/api/v1/objects/object-1"
+    assert request.get_header("Authorization") == "Bearer placeholder-token"
+    assert timeout == 12
+
+
 def test_cli_api_failure_exits_cleanly(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
