@@ -58,9 +58,10 @@ export const api = {
     }
     return request<SchemaRowPage>(`/api/v1/schema/tables/${encodeURIComponent(table)}/rows?${params}`);
   },
-  objects(query = "") {
-    const params = new URLSearchParams({ lifecycle: "active" });
+  objects(query = "", kind?: string) {
+    const params = new URLSearchParams({ lifecycle: "active", limit: "500" });
     if (query.trim()) params.set("q", query.trim());
+    if (kind) params.set("kind", kind);
     return request<SharedObject[]>(`/api/v1/objects?${params}`);
   },
   object(id: string) {
