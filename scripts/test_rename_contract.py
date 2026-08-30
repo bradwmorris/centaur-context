@@ -54,7 +54,7 @@ def test_backup_metadata_accepts_canonical_and_legacy_products(tmp_path: Path) -
                     "product": product,
                     "product_version": "0.2.0" if product == "centaur-context" else "0.1.0",
                     "database": database,
-                    "schema_version": 8,
+                    "schema_version": 10,
                     "format": "pg_dump-custom",
                 }
             ),
@@ -71,7 +71,7 @@ def test_backup_metadata_rejects_unrelated_product(tmp_path: Path) -> None:
                 "product": "other-product",
                 "product_version": "1.0.0",
                 "database": "centaur_context",
-                "schema_version": 8,
+                "schema_version": 10,
                 "format": "pg_dump-custom",
             }
         ),
@@ -85,6 +85,31 @@ def test_backup_metadata_rejects_unrelated_product(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "unsupported product discriminator" in result.stderr
+
+
+def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
+    validator = ROOT / "scripts/validate-backup-metadata.py"
+    metadata = tmp_path / "backup.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "product": "centaur-context",
+                "product_version": "0.2.0",
+                "database": "centaur_context",
+                "schema_version": 11,
+                "format": "pg_dump-custom",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(validator), str(metadata)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "unsupported schema version" in result.stderr
 
 
 def fake_kubectl(tmp_path: Path) -> Path:
