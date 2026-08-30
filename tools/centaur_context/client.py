@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from urllib.parse import quote
-
-import httpx
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode
+from urllib.request import Request, urlopen
 
 DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:8081"
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
@@ -21,6 +21,56 @@ INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
 SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
+
+
+class _UrllibResponse:
+    def __init__(self, status_code: int, body: bytes) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> Any:
+        import json
+
+        return json.loads(self._body.decode("utf-8"))
+
+
+class _UrllibClient:
+    def __init__(self, timeout: float) -> None:
+        self.timeout = timeout
+
+    def close(self) -> None:
+        return None
+
+    def get(self, url: str) -> _UrllibResponse:
+        return self.request("GET", url)
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> _UrllibResponse:
+        import json as json_module
+
+        if params:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{urlencode(params)}"
+        body = None
+        request_headers = dict(headers or {})
+        if json is not None:
+            body = json_module.dumps(json, separators=(",", ":")).encode("utf-8")
+            request_headers["Content-Type"] = "application/json"
+        request = Request(url, data=body, headers=request_headers, method=method)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                return _UrllibResponse(response.status, response.read())
+        except HTTPError as exc:
+            return _UrllibResponse(exc.code, exc.read())
+        except URLError as exc:
+            raise RuntimeError(str(exc.reason)) from exc
 
 
 def _clean(value: str | None) -> str:
@@ -79,7 +129,7 @@ class CentaurContextClient:
         thread_key: str | None = None,
         console_url: str | None = None,
         timeout: float = 30.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: Any | None = None,
     ) -> None:
         self.base_url = (
             _clean(base_url)
@@ -108,7 +158,14 @@ class CentaurContextClient:
         self._explicit_source_intake_token = _clean(source_intake_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
-        self._http = httpx.Client(timeout=timeout, transport=transport)
+        if transport is None:
+            self._http = _UrllibClient(timeout)
+        else:
+            try:
+                import httpx
+            except ImportError as exc:
+                raise RuntimeError("httpx is required when a custom transport is used") from exc
+            self._http = httpx.Client(timeout=timeout, transport=transport)
 
     def close(self) -> None:
         self._http.close()
@@ -164,9 +221,10 @@ class CentaurContextClient:
 
         try:
             response = self._http.get(f"{self.console_url}{SANDBOX_PERMISSIONS_PATH}")
-            response.raise_for_status()
+            if response.status_code >= 400:
+                raise RuntimeError(f"HTTP {response.status_code}")
             payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
+        except (RuntimeError, ValueError) as exc:
             raise RuntimeError("could not resolve the current Centaur principal") from exc
         data = payload.get("data") if isinstance(payload, dict) else None
         principal_id = _clean(data.get("principal_id")) if isinstance(data, dict) else ""
@@ -218,19 +276,19 @@ class CentaurContextClient:
                 json=json,
                 headers=self._headers(idempotency_key, token=token),
             )
-            response.raise_for_status()
-            return _data(response.json())
-        except httpx.HTTPStatusError as exc:
+        except Exception as exc:
+            raise RuntimeError(f"Centaur Context request failed: {exc}") from exc
+        if response.status_code >= 400:
             try:
-                payload = exc.response.json()
+                payload = response.json()
                 error = payload.get("error", {})
                 message = error.get("message") or error.get("code")
             except (ValueError, AttributeError):
                 message = None
-            detail = message or f"HTTP {exc.response.status_code}"
-            raise RuntimeError(f"Centaur Context request failed: {detail}") from exc
-        except httpx.RequestError as exc:
-            raise RuntimeError(f"Centaur Context request failed: {exc}") from exc
+            detail = message or f"HTTP {response.status_code}"
+            raise RuntimeError(f"Centaur Context request failed: {detail}")
+        try:
+            return _data(response.json())
         except ValueError as exc:
             raise RuntimeError("Centaur Context returned invalid JSON") from exc
 

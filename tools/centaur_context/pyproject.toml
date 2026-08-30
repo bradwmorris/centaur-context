@@ -3,13 +3,10 @@ name = "centaur-context"
 description = "Use the constrained Centaur Context agent API"
 version = "0.2.0"
 requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.27.0,<1",
-    "typer>=0.12.0,<1",
-]
+dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=9.0.3,<10"]
+test = ["httpx>=0.27.0,<1", "pytest>=9.0.3,<10"]
 
 [project.scripts]
 centaur-context = "centaur_tool_centaur_context.cli:main"
