@@ -23,6 +23,15 @@ Memories, Sources, Notes, Themes, Curator Runs, Evals, and Schema surfaces.
 DNS, internet login, tunnels, and production deployment are deferred to a
 separate future RD.
 
+**Post-execution UI amendment — 2026-08-31:** Direct requester review supersedes
+every multi-panel, split-pane, tab, resize-divider, and “open beside” requirement
+below. Enyu Ops now uses one continuous workspace. Every collection must copy the
+current Context Objects list structure: full-width title, restrained add control,
+search/count strip, collection header, and compact single-line rows. Only Task
+board/calendar/detail and the focused Note editor intentionally depart from that
+collection structure. Any historical pane wording below is controlled by this
+amendment.
+
 1. Freeze the product and compatibility contracts, create the isolated private
    `enyu_ops` repository only after approval, and record the exact current
    Centaur Context API/schema version against which it is built.
@@ -34,8 +43,8 @@ separate future RD.
    Context product change.
 3. Build the Enyu Ops application foundation: a small server-side API gateway,
    loopback-only access boundary, typed Context client, route model, design tokens,
-   dark/light themes, error/loading/empty states, and an accessible two-pane
-   workspace whose layout and drag behavior are independently tested.
+   dark/light themes, error/loading/empty states, and one accessible continuous
+   workspace.
 4. Deliver current-surface parity, then the three focused product experiences:
    Linear-style Task management, an Obsidian-style Note workspace, and CRM-style
    Entity records. Keep secondary surfaces concise and reuse common list,
@@ -64,10 +73,9 @@ separate future RD.
 - [x] Present Entities as useful CRM-style profiles centred on description,
   generic identity metadata, connections, related records, and activity rather
   than a raw database record.
-- [x] Provide a desktop two-pane workspace where any supported list or detail can
-  open on either side, panes resize and swap reliably, tabs or records can move
-  between sides, layout is restored safely, and narrow screens fall back to one
-  usable pane.
+- [x] Provide one continuous workspace where lists and details replace each other
+  predictably, URLs and Back/Forward remain meaningful, and narrow screens retain
+  a usable compact list.
 - [x] Provide complete, intentionally designed dark and light themes with no
   flash of the wrong theme and no surface-specific unreadable states.
 - [x] Run Enyu Ops locally through a loopback-only application boundary that
@@ -81,7 +89,7 @@ separate future RD.
 
 - **Goal:** Provide one elegant, minimal, secure Enyu operations application for
   managing the existing Centaur Context workspace, with exceptional Task, Note,
-  Entity, pane, and theme experiences.
+  Entity, navigation, and theme experiences.
 - **Done:** A human with access to the local machine can open Enyu Ops on its
   loopback-only URL, browse all agreed Context surfaces, perform every currently
   supported human mutation,
@@ -127,8 +135,8 @@ separate future RD.
    Prefer one excellent list, one excellent detail view, and composable property
    controls over dashboards, cards, decorative charts, or configuration layers.
 3. **Fast paths stay visible.** Creation, search, status, due date, ownership,
-   opening a second pane, and returning to a list must take few predictable
-   actions and work from the keyboard.
+   opening a record, and returning to a list must take few predictable actions
+   and work from the keyboard.
 4. **Progressive disclosure.** Lists show only scan-critical identity and state.
    Details expose description, properties, relationships, and history without
    turning every record into a dense form.
@@ -270,37 +278,24 @@ separate future RD.
 
 ### Navigation and routing
 
-- Use a compact collapsible primary rail containing the agreed surfaces. Keep
-  direct, refresh-safe URLs for every list, record, filterable Task view, and
-  pane workspace state that is reasonable to share without embedding secrets.
-- Opening a record normally replaces the active pane; “open beside,” modifier
-  click, drag, or a context action opens it in the other pane. Browser Back/
-  Forward restores meaningful navigation rather than only local component state.
+- Use a compact primary rail containing the agreed surfaces. Keep direct,
+  refresh-safe URLs for every list, record, and filterable Task view without
+  embedding secrets.
+- Opening a record replaces the active collection in the single workspace.
+  Browser Back/Forward restores meaningful navigation rather than only local
+  component state.
 - Global search may search canonical Objects through the existing bounded API
-  and open a result in either pane. It does not become a command palette or AI
+  and open a result in the workspace. It does not become a command palette or AI
   assistant in this RD.
 
-### Two-pane workspace
+### Single workspace
 
-- Implement a reusable `SplitWorkspace` with one or two visible pane slots. Each
-  slot owns a small tab stack and one active route. Do not carry over The AGI
-  Post’s three-pane/chat/product-specific state machine.
-- Support: open left/right; close; collapse to one; reopen; swap sides; reorder
-  tabs inside a side; drag a tab or record to the other side; and keyboard/menu
-  equivalents for every drag-only operation.
-- Resize using Pointer Events and pointer capture so mouse, pen, and touch
-  cancellation are handled consistently. Clamp each pane to tested minimums,
-  preserve the divider while dragging, prevent text selection, and clean up
-  listeners/cursor state after pointer-up, cancellation, unmount, lost capture,
-  route change, or error.
-- Persist only a versioned, validated layout description—never fetched records,
-  Note drafts, credentials, or session assertions. Invalid/stale state resets to
-  a deterministic one-pane default without blanking the app.
-- At narrow widths, render one pane with an obvious back/switcher path. Do not
-  squeeze two unusable columns. Define and test the exact breakpoint from real
-  content rather than a device name.
-- Provide semantic pane labels, focus transfer, visible focus, separator ARIA,
-  arrow-key resizing, reduced-motion behavior, and announcements when tabs move.
+- Use one full-width continuous content canvas beside the primary rail. Do not
+  render tabs, split panes, drag dividers, resize handles, or open-beside actions.
+- Collections share one Context-derived structure and one-line row anatomy.
+  Details and specialist Task/Note modes replace the collection in place.
+- Preserve direct URLs, Back/Forward behavior, visible focus, reduced motion,
+  and a compact narrow-screen layout without persisting layout state.
 
 ### Visual system and themes
 
@@ -341,7 +336,7 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 
 - **Objects:** bounded search/list, kind/lifecycle filters, concise identity,
   description, protection/provenance, Connections, Object Events, edit/archive
-  actions, and open-in-other-pane.
+  actions, and direct record navigation.
 - **Chats:** list and current Chat detail/messages/participants only. Do not send
   messages or bypass Slack ingestion.
 - **Users:** list and identity detail, external identities, connected records,
@@ -418,8 +413,8 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
   is safely stored as the quality bar. Reproduce those relevant principles
   independently without adding the excluded vault/plugin/graph feature set.
 - Notes list provides search, updated ordering, compact title/description/content
-  excerpt, format, attribution, and new Note creation. It can occupy one pane
-  while the selected editor occupies the other.
+  excerpt, format, attribution, and new Note creation. Opening a Note replaces
+  the collection with the focused editor.
 - Editor uses one generous readable column, editable title and concise summary,
   a large Markdown writing surface, subtle formatting help, word/character
   feedback only where useful, and minimal chrome.
@@ -446,14 +441,14 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 
 - Entity list supports search, lifecycle, updated order,
   avatar/logo or deterministic initials, compact identity, description, key
-  relationship count, and open-beside behavior. Avoid arbitrary scoring or faux
+  relationship count, and direct record navigation. Avoid arbitrary scoring or faux
   sales metrics.
 - Entity detail presents: image, name/lifecycle, editable summary, explained
   incoming/outgoing Connections grouped by meaning;
   related Tasks, Notes, Sources, Memories, Themes, Chats, and Users; provenance;
   and chronological Object Events.
 - Related sections query canonical Connections and subtype APIs, not copied JSON
-  caches. Every relationship shows its explanation and opens in either pane.
+  caches. Every relationship shows its explanation and opens in the workspace.
 - Creation asks only for name, description, and optional image URL.
   Relationship creation is a separate explicit action with source, target, kind,
   and explanation. Detect likely duplicate names through search but do not block
@@ -500,14 +495,12 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 - Use synthetic fixtures and a disposable Context instance; do not point early UI
   development at production data.
 
-### Phase 3 — Two-pane workspace
+### Phase 3 — Single workspace and shared lists
 
-- Deliver the independently reusable split workspace, tab model, URL integration,
-  persistence validation, drag/drop, pointer and keyboard resize, swap/collapse,
-  narrow-screen behavior, and exhaustive state-transition tests.
-- Stress repeated open/close/swap/resize/drag and verify no leaked listeners,
-  stuck cursor, lost focus, invalid width, duplicated tabs, blank panes, or
-  inaccessible operation.
+- Deliver direct URL integration, Back/Forward navigation, narrow-screen
+  behavior, and one shared Context-style collection structure.
+- Verify every collection stays compact and single-line at supported widths and
+  that no split-pane, tab, divider, or open-beside controls remain.
 
 ### Phase 4 — Surface parity
 
@@ -545,11 +538,11 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 - Run automated accessibility checks plus keyboard/screen-reader-oriented manual
   scenarios. Resolve serious violations; do not waive missing labels, focus loss,
   contrast, or drag-only interaction.
-- Capture stable light/dark screenshots at agreed desktop, laptop, tablet/narrow,
-  one-pane, and two-pane viewports for primary states. Review populated, empty,
+- Capture stable light/dark screenshots at agreed desktop, laptop, and
+  tablet/narrow single-workspace viewports for primary states. Review populated, empty,
   loading, error, conflict, modal, long-content, and overflow states.
-- Measure initial load, navigation, search, Task drag, Note typing, theme toggle,
-  and pane resize on realistic data. Remove unnecessary dependencies and renders;
+- Measure initial load, navigation, search, Task drag, Note typing, and theme
+  toggle on realistic data. Remove unnecessary dependencies and renders;
   add virtualization only if measurement proves it necessary.
 - Document which pieces are generic upstream candidates, their Context coupling,
   and what must remain Enyu-specific. Do not upstream anything in this RD without
@@ -582,7 +575,7 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 - Create one Task, assign a canonical User, set priority and a `due_at` deadline,
   find it through client search/filter, move its status on the board, see its
   deterministic automatic placement, reschedule it in calendar, edit its
-  description, open a related record beside it, complete it, and verify
+  description, open a related record, complete it, and verify
   revisions, events, Eval attribution, and reload persistence.
 - Demonstrate today/tomorrow/overdue/timed/no-date presentation in the configured
   local timezone, including a daylight-saving boundary, without claiming or
@@ -596,13 +589,13 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
   interrupt connectivity, continue typing, reload, recover the draft, resolve a
   concurrent conflict, and verify exact server content and audit attribution.
 - Unsafe HTML/script content renders inert; links and Markdown remain usable;
-  rapid typing and pane resize do not lose focus, text, cursor, or scroll position.
+  rapid typing and navigation do not lose focus, text, cursor, or scroll position.
 
 ### Entities
 
 - Create or edit one representative Entity, add approved generic metadata and an
   explained Connection, then navigate its related Tasks, Notes, Sources,
-  Memories, Themes, Users, and activity across both panes without duplicated or
+  Memories, Themes, Users, and activity without duplicated or
   stale data.
 - A protected or stale Entity update is rejected visibly and safely; duplicate-
   name assistance informs but does not silently merge canonical Objects.
@@ -614,9 +607,8 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
   hierarchy, vertical section order, row-first relationships/activity, compact
   properties, avatar-stack clarity, and whitespace before specialized features
   are accepted.
-- Open lists/details in either pane; drag and keyboard-move tabs/records; resize,
-  swap, collapse, reload, navigate Back/Forward, cross the responsive breakpoint,
-  corrupt saved layout state, and recover without blank or inaccessible UI.
+- Open every list/detail in the single workspace; reload, navigate Back/Forward,
+  cross the responsive breakpoint, and recover without blank or inaccessible UI.
 - Complete primary scenarios in dark and light modes with system preference,
   explicit preference, reload, and no wrong-theme flash.
 - Non-loopback Host, cross-site mutation, unsupported Context version, and
@@ -657,19 +649,19 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
   unauthorized, forbidden, not-found, conflict, rate/limit, timeout, malformed,
   incompatible-version, and unavailable responses.
 - [x] Component tests cover common lists/forms/properties, themes, Task views,
-  Note save/recovery/conflict, Entity relations, and every split-workspace state
-  transition and keyboard equivalent.
+  Note save/recovery/conflict, Entity relations, single-workspace navigation, and
+  compact shared list behavior.
 - [x] Browser tests cover all Acceptance Scenarios at the agreed viewports and in
   both themes, with console/network failures treated as test failures.
 - [x] Accessibility automation and focused manual checks pass for navigation,
-  forms, dialogs, lists, board, calendar, editor, tabs, divider, drag alternatives,
-  focus restoration, announcements, reduced motion, and contrast.
+  forms, dialogs, lists, board, calendar, editor, focus restoration,
+  announcements, reduced motion, and contrast.
 - [x] Visual regression baselines are deliberately reviewed in both themes and
   include real-density, long-content, empty, loading, error, offline, stale, and
   conflict states. The dark-theme baseline explicitly compares the current
   Context reference Object list/detail against the corresponding Enyu Ops base
   surfaces so visual drift toward card-heavy dashboards fails review.
-- [x] Performance checks show no input lag while typing Notes or resizing panes,
+- [x] Performance checks show no input lag while typing Notes or navigating,
   no full-list refetch after a single mutation unless required, bounded payloads,
   and acceptable primary navigation on the production-like dataset.
 
@@ -680,7 +672,7 @@ Build parity through shared primitives before specialized Task/Note/Entity work.
 - [x] Loopback-only binding, Host/origin enforcement, gateway route allowlist,
   server-owned actor attribution, Context-unavailable behavior, and lack of
   public/LAN ingress are verified.
-- [x] The exact local release artifact passes approved Task, Note, Entity, pane,
+- [x] The exact local release artifact passes approved Task, Note, Entity, navigation,
   theme, parity, security, backup, and recovery checks.
 - [x] Approved live readback and synthetic mutations produce the expected
   canonical Objects, subtype rows, Connections, revisions, Object Events, and
