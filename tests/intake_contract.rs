@@ -50,12 +50,12 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
         "manifest_sha256":manifest_sha256,
         "objects":[
             {"client_key":"owner","kind":"user","title":"Test Owner","description":"Human owner of the synthetic imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"owner"},"user_kind":"human"},
-            {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":"https://example.test/paper","byline":null,"publisher":null,"published_at":null,"accessed_at":null,"language":"en","media_type":"text/plain","artifact_reference":null,"content_hash":content_hash}},
+            {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":"https://example.test/paper","byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":"en","original_media_type":"text/plain","original_artifact_reference":null}},
             {"client_key":"note-1","kind":"note","title":"A grounded research note","description":"A grounded note derived from the verified test source.","protected":true,"provenance":{"source_type":"test","source_ref":"note-1"},"note":{"content":"A durable, source-grounded observation.","content_format":"markdown"}},
             {"client_key":"theme-1","kind":"theme","title":"Durable Research","description":"A research vertical for durable, source-grounded evidence and related work.","protected":true,"provenance":{"source_type":"test","source_ref":"theme-1"},"theme":{"slug":"durable-research"}}
         ],
         "external_identities":[{"client_key":"owner-slack","user":{"client_key":"owner"},"provider":"slack","workspace_id":"TTEST","provider_user_id":"UTEST","display_name":"Test Owner"}],
-        "source_contents":[{"client_key":"source-1-v1","source":{"client_key":"source-1"},"content_kind":"paper_text","normalized_text":normalized_text,"content_hash":content_hash,"language":"en","extraction_method":"test","extraction_version":"1","artifact_reference":null,"locators":{}}],
+        "source_contents":[{"client_key":"source-1-v1","source":{"client_key":"source-1"},"content_kind":"paper_text","normalized_text":normalized_text,"content_sha256":content_hash,"language":"en","extraction_method":"test","extraction_version":"1","capture_artifact_reference":null,"coverage":"complete","captured_at":"2026-08-30T00:00:00Z","locators":{}}],
         "connections":[
             {"client_key":"note-source","source":{"client_key":"note-1"},"kind":"derived_from","target":{"client_key":"source-1"},"description":"The note is directly derived from this verified source.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-1"}},
             {"client_key":"source-theme","source":{"client_key":"source-1"},"kind":"themed","target":{"client_key":"theme-1"},"description":"The verified source is directly relevant to this approved research Theme.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-2"}}
@@ -103,7 +103,7 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
     assert_eq!(body["data"]["counts"]["objects"], 4);
     assert_eq!(body["data"]["counts"]["events"], 7);
     let stored_text: String =
-        sqlx::query_scalar("SELECT normalized_text FROM source_contents WHERE content_hash=$1")
+        sqlx::query_scalar("SELECT normalized_text FROM source_contents WHERE content_sha256=$1")
             .bind(&content_hash)
             .fetch_one(&pool)
             .await

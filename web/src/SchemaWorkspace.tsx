@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { objectPath, navigate, schemaPath, schemaRowPath, schemaView } from "./routing";
-import type { SchemaColumn, SchemaForeignKey, SchemaRowPage, SchemaSnapshot, SchemaTable, SchemaViewMode } from "./types";
+import { interceptNavigation, objectPath, navigate, schemaPath, schemaRowPath, schemaView } from "./routing";
+import type { SchemaForeignKey, SchemaRowPage, SchemaSnapshot, SchemaTable } from "./types";
 
 interface Props {
   selectedTable: string | null;
@@ -11,7 +11,6 @@ const countFormatter = new Intl.NumberFormat(undefined, { notation: "compact", m
 
 export function SchemaWorkspace({ selectedTable }: Props) {
   const [snapshot, setSnapshot] = useState<SchemaSnapshot | null>(null);
-  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mode = schemaView(window.location.pathname);
@@ -43,54 +42,16 @@ export function SchemaWorkspace({ selectedTable }: Props) {
   }, [refresh]);
 
   const table = snapshot?.tables.find((item) => item.name === selectedTable) ?? null;
-  const visibleTables = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return snapshot?.tables.filter((item) => !needle || item.name.toLowerCase().includes(needle)) ?? [];
-  }, [query, snapshot]);
-
   return <section className="schema-workspace" aria-label="Database schema">
-    <aside className="schema-catalog">
-      <div className="schema-catalog-head">
-        <div><strong>Schema</strong><span>{snapshot?.tables.length ?? 0} tables</span></div>
-        <button className="schema-refresh" onClick={() => void refresh()} aria-label="Refresh schema" title="Refresh schema">↻</button>
-      </div>
-      <label className="schema-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a table" aria-label="Find a table" /></label>
-      <select className="schema-mobile-table-select" aria-label="Choose a schema table" value={selectedTable ?? ""} onChange={(event) => navigate(event.target.value ? schemaPath(event.target.value) : schemaPath())}>
-        <option value="">Schema map</option>
-        {snapshot?.tables.map((item) => <option key={item.name} value={item.name}>{tableLabel(item.name)}</option>)}
-      </select>
-      <nav aria-label="Schema tables" className="schema-table-list">
-        {(["canonical", "subtype", "supporting"] as const).map((classification) => {
-          const tables = visibleTables.filter((item) => item.classification === classification);
-          if (tables.length === 0) return null;
-          return <section key={classification} className="schema-table-group">
-            <h2>{classification === "canonical" ? "Canonical" : classification === "subtype" ? "Object subtypes" : "Supporting"}</h2>
-            {tables.map((item) => <button key={item.name} className={item.name === selectedTable ? "active" : ""} aria-current={item.name === selectedTable ? "page" : undefined} onClick={() => navigate(schemaPath(item.name))}>
-              <span>{tableLabel(item.name)}</span><small>{formatCount(item.estimated_row_count)}</small>
-            </button>)}
-          </section>;
-        })}
-      </nav>
-      {snapshot && <small className="schema-fingerprint" title={snapshot.fingerprint}>Live · {snapshot.fingerprint.slice(0, 7)}</small>}
-    </aside>
-
     <div className="schema-main">
-      <header className="schema-toolbar">
-        <div><h1>{table ? tableLabel(table.name) : "Schema map"}</h1><p>{table ? `${table.classification} table · ${table.columns.length} columns` : "Live structure of the Centaur Context database"}</p></div>
-        <div className="schema-view-switch" aria-label="Schema view">
-          <ViewButton mode="map" current={mode} table={selectedTable}>Map</ViewButton>
-          <ViewButton mode="structure" current={mode} table={selectedTable} disabled={!table}>Structure</ViewButton>
-          <ViewButton mode="rows" current={mode} table={selectedTable} disabled={!table}>Rows</ViewButton>
-        </div>
-      </header>
+      {mode === "rows" && table && <header className="schema-toolbar">
+        <a className="schema-back-link" href={schemaPath()} onClick={(event) => interceptNavigation(event, schemaPath())}>← Schema map</a>
+        <div><h1>{tableLabel(table.name)}</h1><p>{table.classification} table · {table.columns.length} columns</p></div>
+      </header>}
       {error && <div className="schema-message error">{error}<button onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
-      {loading && !snapshot ? <div className="schema-blank">Reading the live schema…</div> : !snapshot ? <div className="schema-blank">Schema unavailable.</div> : mode === "map" ? <SchemaMap snapshot={snapshot} /> : !table ? <div className="schema-blank">Choose a table to inspect.</div> : mode === "structure" ? <TableStructure table={table} foreignKeys={snapshot.foreign_keys} /> : <TableRows table={table} fingerprint={snapshot.fingerprint} foreignKeys={snapshot.foreign_keys} />}
+      {loading && !snapshot ? <div className="schema-blank">Reading the live schema…</div> : !snapshot ? <div className="schema-blank">Schema unavailable.</div> : mode === "map" ? <SchemaMap snapshot={snapshot} /> : !table ? <div className="schema-blank">Choose a table to inspect.</div> : <TableRows table={table} fingerprint={snapshot.fingerprint} foreignKeys={snapshot.foreign_keys} />}
     </div>
   </section>;
-}
-
-function ViewButton({ mode, current, table, disabled, children }: { mode: SchemaViewMode; current: SchemaViewMode; table: string | null; disabled?: boolean; children: string }) {
-  return <button className={mode === current ? "active" : ""} aria-pressed={mode === current} disabled={disabled} onClick={() => navigate(schemaPath(table ?? undefined, mode))}>{children}</button>;
 }
 
 interface NodePosition { x: number; y: number; }
@@ -132,7 +93,6 @@ function SchemaMap({ snapshot }: { snapshot: SchemaSnapshot }) {
         </button>;
       })}
     </div>
-    <RelationshipList foreignKeys={snapshot.foreign_keys} />
   </div>;
 }
 
@@ -175,57 +135,6 @@ function schemaLayout(snapshot: SchemaSnapshot) {
   });
   const maximumLevel = Math.max(0, ...groups.keys());
   return { positions, width: Math.max(760, (maximumLevel + 1) * 270 + 20), height: Math.max(460, maxRows * 88 + 30) };
-}
-
-function TableStructure({ table, foreignKeys }: { table: SchemaTable; foreignKeys: SchemaForeignKey[] }) {
-  const relationships = foreignKeys.filter((edge) => edge.source_table === table.name || edge.target_table === table.name);
-  return <div className="schema-structure">
-    <section className="schema-summary">
-      <div><span>Classification</span><strong>{table.classification}</strong></div>
-      <div><span>Columns</span><strong>{table.columns.length}</strong></div>
-      <div><span>Rows</span><strong>≈ {formatCount(table.estimated_row_count)}</strong></div>
-      <div><span>Relationships</span><strong>{relationships.length}</strong></div>
-    </section>
-    <section className="schema-section">
-      <h2>Columns</h2>
-      <div className="schema-columns">
-        {table.columns.map((column) => <ColumnRow key={column.name} column={column} table={table} foreignKeys={foreignKeys} />)}
-      </div>
-    </section>
-    <section className="schema-section">
-      <h2>Relationships</h2>
-      {relationships.length ? <RelationshipList foreignKeys={relationships} selected={table.name} /> : <p className="schema-muted">No foreign-key relationships.</p>}
-    </section>
-    <section className="schema-section schema-constraints">
-      <h2>Constraints</h2>
-      {table.constraints.map((constraint) => <details key={constraint.name}><summary><span>{constraint.name}</span><small>{constraint.kind.replaceAll("_", " ")}</small></summary><code>{constraint.definition}</code></details>)}
-    </section>
-  </div>;
-}
-
-function ColumnRow({ column, table, foreignKeys }: { column: SchemaColumn; table: SchemaTable; foreignKeys: SchemaForeignKey[] }) {
-  const constraints = table.constraints.filter((constraint) => constraint.columns.includes(column.name));
-  const isPk = constraints.some((constraint) => constraint.kind === "primary_key");
-  const isUnique = constraints.some((constraint) => constraint.kind === "unique");
-  const fk = foreignKeys.find((edge) => edge.source_table === table.name && edge.source_columns.includes(column.name));
-  return <div className="schema-column">
-    <div><strong>{column.name}</strong><code>{column.data_type}</code></div>
-    <div className="schema-badges">{isPk && <span>PK</span>}{fk && <button onClick={() => navigate(schemaPath(fk.target_table))}>FK → {fk.target_table}</button>}{isUnique && <span>Unique</span>}{column.nullable && <span>Nullable</span>}{column.identity && <span>Identity</span>}{column.generated && <span>Generated</span>}{column.default && <span title={column.default}>Default</span>}</div>
-  </div>;
-}
-
-function RelationshipList({ foreignKeys, selected }: { foreignKeys: SchemaForeignKey[]; selected?: string }) {
-  return <ul className="schema-relationships" aria-label="Schema relationships">{foreignKeys.map((edge) => {
-    const outward = !selected || edge.source_table === selected;
-    const target = outward ? edge.target_table : edge.source_table;
-    const sourceColumns = outward ? edge.source_columns : edge.target_columns;
-    const targetColumns = outward ? edge.target_columns : edge.source_columns;
-    return <li key={`${edge.source_table}:${edge.name}`}><button onClick={() => navigate(schemaPath(target))}>
-      <span><strong>{outward ? edge.source_table : edge.target_table}</strong><code>{sourceColumns.join(", ")}</code></span>
-      <b aria-label={edge.one_to_one_subtype ? "one-to-one subtype relationship" : edge.nullable ? "optional foreign key relationship" : "required foreign key relationship"}>{edge.one_to_one_subtype ? "1:1" : edge.nullable ? "0..1 →" : "→"}</b>
-      <span><strong>{target}</strong><code>{targetColumns.join(", ")}</code></span>
-    </button></li>;
-  })}</ul>;
 }
 
 function TableRows({ table, fingerprint, foreignKeys }: { table: SchemaTable; fingerprint: string; foreignKeys: SchemaForeignKey[] }) {

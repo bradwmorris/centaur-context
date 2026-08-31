@@ -24,10 +24,12 @@ describe("durable application routes", () => {
     expect(sectionPath("curator")).toBe("/curator-runs");
     expect(detailPath("tasks", "task-id")).toBe("/tasks/task-id");
     expect(schemaPath()).toBe("/schema");
+    expect(schemaPath("objects")).toBe("/schema/objects/rows");
     expect(schemaPath("objects", "rows")).toBe("/schema/objects/rows");
     expect(schemaRowPath("users", "object_id", "an id")).toBe("/schema/users/rows?focus_column=object_id&focus_value=an+id");
     expect(schemaView("/schema")).toBe("map");
     expect(schemaView("/schema/objects/rows")).toBe("rows");
+    expect(schemaView("/schema/objects/structure")).toBe("rows");
     expect(detailPath("notes", "note-id")).toBe("/notes/note-id");
   });
 

@@ -1,4 +1,4 @@
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, Theme, ThemeProposal, User } from "./types";
+import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalVerdict, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, SchemaProfile, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourcePage, Task, Theme, ThemeProposal, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -58,11 +58,22 @@ export const api = {
     }
     return request<SchemaRowPage>(`/api/v1/schema/tables/${encodeURIComponent(table)}/rows?${params}`);
   },
-  objects(query = "", kind?: string) {
-    const params = new URLSearchParams({ lifecycle: "active", limit: "500" });
-    if (query.trim()) params.set("q", query.trim());
-    if (kind) params.set("kind", kind);
-    return request<SharedObject[]>(`/api/v1/objects?${params}`);
+  schemaProfile(table: string) {
+    return request<SchemaProfile>(`/api/v1/schema/tables/${encodeURIComponent(table)}/profile`);
+  },
+  async objects(query = "", kind?: string) {
+    const items: SharedObject[] = [];
+    let cursor: string | undefined;
+    do {
+      const params = new URLSearchParams({ lifecycle: "active", limit: "500" });
+      if (query.trim()) params.set("q", query.trim());
+      if (kind) params.set("kind", kind);
+      if (cursor) params.set("cursor", cursor);
+      const page = await request<SharedObject[]>(`/api/v1/objects?${params}`);
+      items.push(...page);
+      cursor = kind && page.length === 500 ? page.at(-1)?.id : undefined;
+    } while (cursor);
+    return items;
   },
   object(id: string) {
     return request<SharedObject>(`/api/v1/objects/${id}`);
@@ -75,6 +86,8 @@ export const api = {
     title: string;
     description: string;
     provenance: Record<string, string>;
+    entity_kind?: string;
+    happened_at?: string;
   }) {
     return request<SharedObject>("/api/v1/objects", write("POST", body));
   },

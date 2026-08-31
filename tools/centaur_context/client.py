@@ -630,8 +630,8 @@ class CentaurContextClient:
             raise ValueError("title must be at most 300 characters")
         if not description:
             raise ValueError("description is required")
-        if len(description) > 1_000:
-            raise ValueError("description must be at most 1000 characters")
+        if len(description) > 2_000:
+            raise ValueError("description must be at most 2000 characters")
         if not content:
             raise ValueError("content is required")
         if len(content) > MAX_NOTE_CONTENT:

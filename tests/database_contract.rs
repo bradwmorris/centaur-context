@@ -82,6 +82,8 @@ async fn themes_are_canonical_and_agent_vocabulary_requires_human_approval() {
             title: format!("Theme subject {suffix}"),
             description: "A specific organization used to verify Theme relationship rules.".into(),
             provenance: json!({"source_type":"test"}),
+            entity_kind: Some("organization".into()),
+            happened_at: None,
         },
         &format!("theme-subject-{suffix}"),
     )
@@ -214,6 +216,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             title: "Shared context".to_owned(),
             description: "One canonical record".to_owned(),
             provenance: json!({"source_type": "human"}),
+            entity_kind: None,
+            happened_at: Some(OffsetDateTime::now_utc()),
         },
         "create-first",
     )
@@ -238,6 +242,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             title: "Ignored retry".to_owned(),
             description: "Ignored retry description".to_owned(),
             provenance: json!({}),
+            entity_kind: None,
+            happened_at: Some(OffsetDateTime::now_utc()),
         },
         "create-first",
     )
@@ -253,6 +259,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             title: "Centaur Context".to_owned(),
             description: "The canonical product under test.".to_owned(),
             provenance: json!({"source_type": "human"}),
+            entity_kind: Some("product".to_owned()),
+            happened_at: None,
         },
         "create-second",
     )
@@ -267,6 +275,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             title: "Unclear record".to_owned(),
             description: "TBD".to_owned(),
             provenance: json!({"source_type": "human"}),
+            entity_kind: Some("other".to_owned()),
+            happened_at: None,
         },
         "reject-weak-create",
     )
@@ -296,6 +306,8 @@ async fn canonical_ontology_and_revision_conflicts() {
                 title: format!("Canonical {kind}"),
                 description: format!("A canonical {kind} used by the contract test."),
                 provenance: json!({"source_type": "human"}),
+                entity_kind: None,
+                happened_at: None,
             },
             key,
         )
@@ -317,6 +329,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             query: Some("SHARED CONTEXT".to_owned()),
             kind: None,
             lifecycle: None,
+            cursor: None,
             limit: 20,
             text_search_config: TextSearchConfig::SIMPLE,
         },
@@ -332,6 +345,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             query: Some("canonical record".to_owned()),
             kind: None,
             lifecycle: None,
+            cursor: None,
             limit: 20,
             text_search_config: TextSearchConfig::SIMPLE,
         },
@@ -348,6 +362,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 query: Some(literal_wildcard.to_owned()),
                 kind: None,
                 lifecycle: None,
+                cursor: None,
                 limit: 20,
                 text_search_config: TextSearchConfig::SIMPLE,
             },
@@ -481,6 +496,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             title: "東京移行計画 Northwind-42".to_owned(),
             description: "Les équipes françaises préparent les migrations client.".to_owned(),
             provenance: json!({"source_type": "human"}),
+            entity_kind: Some("organization".to_owned()),
+            happened_at: None,
         },
         "create-multilingual-search-fixture",
     )
@@ -772,6 +789,8 @@ async fn canonical_ontology_and_revision_conflicts() {
                 title: format!("Ranking eval {index}"),
                 description: "A distinct Object used to prove the context packet limit.".to_owned(),
                 provenance: json!({"source_type": "human"}),
+                entity_kind: None,
+                happened_at: Some(OffsetDateTime::now_utc()),
             },
             &format!("ranking-eval-{index}"),
         )
@@ -800,15 +819,19 @@ async fn canonical_ontology_and_revision_conflicts() {
             status: "todo".to_owned(),
             priority: "high".to_owned(),
             owner_object_id: None,
-            agent_eligible: true,
+            agent_suitable: true,
+            blocked_reason: None,
             due_at: None,
+            completed_at: None,
+            github_issue_url: None,
+            brief_markdown: None,
         },
         "create-task",
     )
     .await
     .unwrap();
     assert_eq!(task.revision, 1);
-    assert!(task.agent_eligible);
+    assert!(task.agent_suitable);
     assert_eq!(task.priority, "high");
     assert_eq!(
         db::get_object(&pool, task.object_id).await.unwrap().id,
@@ -848,11 +871,11 @@ async fn canonical_ontology_and_revision_conflicts() {
             byline: Some("Fixture Research Team".to_owned()),
             publisher: Some("Fixture Research".to_owned()),
             published_at: None,
-            accessed_at: None,
-            language: Some("en".to_owned()),
-            media_type: Some("text/html".to_owned()),
-            artifact_reference: Some("artifact:synthetic-article".to_owned()),
-            content_hash: Some("a".repeat(64)),
+            published_at_precision: None,
+            last_accessed_at: None,
+            original_language: Some("en".to_owned()),
+            original_media_type: Some("text/html".to_owned()),
+            original_artifact_reference: Some("artifact:synthetic-article".to_owned()),
         },
         "create-synthetic-article",
     ).await.unwrap();
@@ -867,7 +890,9 @@ async fn canonical_ontology_and_revision_conflicts() {
             language: Some("en".to_owned()),
             extraction_method: Some("synthetic_fixture".to_owned()),
             extraction_version: Some("1".to_owned()),
-            artifact_reference: Some("artifact:synthetic-article".to_owned()),
+            capture_artifact_reference: Some("artifact:synthetic-article".to_owned()),
+            coverage: "complete".to_owned(),
+            captured_at: None,
             locators: json!({"section":"full"}),
         },
         "append-synthetic-article",
@@ -876,7 +901,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     assert_eq!(article_content.version, 1);
     assert_eq!(article_content.size_bytes, article_text.len() as i64);
-    assert_eq!(article_content.content_hash.len(), 64);
+    assert_eq!(article_content.content_sha256.len(), 64);
     let first_window = db::get_source_content_window(&pool, article.object_id, None, 0, 200)
         .await
         .unwrap();
@@ -920,7 +945,9 @@ async fn canonical_ontology_and_revision_conflicts() {
             language: Some("en".to_owned()),
             extraction_method: Some("synthetic_fixture".to_owned()),
             extraction_version: Some("2".to_owned()),
-            artifact_reference: None,
+            capture_artifact_reference: None,
+            coverage: "partial".to_owned(),
+            captured_at: None,
             locators: json!({"page":1}),
         },
         "append-synthetic-article-v2",
@@ -928,6 +955,27 @@ async fn canonical_ontology_and_revision_conflicts() {
     .await
     .unwrap();
     assert_eq!(article_v2.version, 2);
+    let duplicate_v1 = db::append_source_content(
+        &pool,
+        &actor(),
+        article.object_id,
+        NewSourceContent {
+            expected_revision: 1,
+            content_kind: "article_text".to_owned(),
+            normalized_text: article_text.clone(),
+            language: Some("en".to_owned()),
+            extraction_method: Some("repeat_capture".to_owned()),
+            extraction_version: Some("2".to_owned()),
+            capture_artifact_reference: None,
+            coverage: "complete".to_owned(),
+            captured_at: None,
+            locators: json!({}),
+        },
+        "append-synthetic-article-duplicate-v1",
+    )
+    .await
+    .unwrap();
+    assert_eq!(duplicate_v1.id, article_content.id);
     assert_eq!(
         db::list_source_contents(&pool, article.object_id)
             .await
@@ -952,16 +1000,16 @@ async fn canonical_ontology_and_revision_conflicts() {
                 "A synthetic podcast fixture discussing a fictional capital allocation decision."
                     .to_owned(),
             provenance: json!({"source_type":"human"}),
-            source_kind: "podcast".to_owned(),
+            source_kind: "podcast_episode".to_owned(),
             canonical_uri: Some("https://example.test/podcast/1".to_owned()),
             byline: Some("Fixture Host".to_owned()),
             publisher: Some("Fixture Audio".to_owned()),
             published_at: None,
-            accessed_at: None,
-            language: Some("en".to_owned()),
-            media_type: Some("audio/mpeg".to_owned()),
-            artifact_reference: Some("artifact:synthetic-audio".to_owned()),
-            content_hash: Some("b".repeat(64)),
+            published_at_precision: None,
+            last_accessed_at: None,
+            original_language: Some("en".to_owned()),
+            original_media_type: Some("audio/mpeg".to_owned()),
+            original_artifact_reference: Some("artifact:synthetic-audio".to_owned()),
         },
         "create-synthetic-transcript",
     )
@@ -979,7 +1027,9 @@ async fn canonical_ontology_and_revision_conflicts() {
             language: Some("en".to_owned()),
             extraction_method: Some("synthetic_fixture".to_owned()),
             extraction_version: Some("1".to_owned()),
-            artifact_reference: None,
+            capture_artifact_reference: None,
+            coverage: "partial".to_owned(),
+            captured_at: None,
             locators: json!({"start_seconds":12,"end_seconds":18}),
         },
         "append-synthetic-transcript",
@@ -1369,7 +1419,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     .unwrap();
     assert_eq!(counts, (1, 2, 5, 2, 2));
     let windows: Vec<(String, i32)> =
-        sqlx::query_as("SELECT trigger,message_count FROM curator_runs ORDER BY created_at,id")
+        sqlx::query_as("SELECT trigger,message_count FROM curator_runs ORDER BY queued_at,id")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -1512,6 +1562,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             description: "The user asked for a project summary and the agent supplied it."
                 .to_owned(),
             supporting_message_ids: vec![supporting_message_id],
+            entity_kind: None,
             task: None,
             memory: Some(MemoryFields {
                 primary_event: true,
@@ -1550,6 +1601,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             description: "The user asked for a project summary and the agent supplied it."
                 .to_owned(),
             supporting_message_ids: vec![supporting_message_id],
+            entity_kind: None,
             task: None,
             memory: Some(MemoryFields {
                 primary_event: true,
@@ -1638,7 +1690,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     let undo = curator::undo_as(&pool, run_id, &actor()).await.unwrap();
     assert_eq!(undo["status"], "reversed");
     let reversed: (String, i64, i64) = sqlx::query_as(
-        r#"SELECT o.lifecycle,o.revision,
+        r#"SELECT CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END,o.revision,
                   (SELECT count(*) FROM connections WHERE source_object_id=o.id AND archived_at IS NULL)
            FROM objects o WHERE o.id=$1"#,
     )
@@ -1683,6 +1735,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             description: "The existing Slack thread received a later user message and agent reply."
                 .to_owned(),
             supporting_message_ids: vec![update_supporting_message_id],
+            entity_kind: None,
             task: None,
             memory: Some(MemoryFields {
                 primary_event: true,
@@ -1871,6 +1924,7 @@ async fn canonical_ontology_and_revision_conflicts() {
                 title: "Customer import verification was confirmed".to_owned(),
                 description: "The users explicitly confirmed that customer import verification should be tracked as a task.".to_owned(),
                 supporting_message_ids: vec![dm_supporting_message_id],
+                entity_kind: None,
                 task: None,
                 memory: Some(MemoryFields {
                     primary_event: true,
@@ -1885,13 +1939,17 @@ async fn canonical_ontology_and_revision_conflicts() {
                 description: "Verify the customer import as explicitly requested and confirmed in the Slack DM."
                     .to_owned(),
                 supporting_message_ids: vec![dm_supporting_message_id],
+                entity_kind: None,
                 task: Some(TaskFields {
                     confirmed: true,
                     status: "todo".to_owned(),
                     priority: "medium".to_owned(),
                     owner_object_id: None,
-                    agent_eligible: false,
+                    agent_suitable: false,
+                    blocked_reason: None,
                     due_at: Some(timestamp("2026-05-30T00:00:00Z")),
+                    github_issue_url: None,
+                    brief_markdown: None,
                 }),
                 memory: None,
                 source: None,
@@ -1933,6 +1991,8 @@ async fn canonical_ontology_and_revision_conflicts() {
             description: "A validation system used by the migration verification workflow."
                 .to_owned(),
             provenance: json!({"source_type": "human"}),
+            entity_kind: Some("product".to_owned()),
+            happened_at: None,
         },
         "create-context-graph-entity",
     )
@@ -2324,7 +2384,7 @@ async fn canonical_ontology_and_revision_conflicts() {
     assert_eq!(inactive.status(), StatusCode::BAD_REQUEST);
 
     let baseline_schema = schema::inspect_schema(&pool).await.unwrap();
-    assert_eq!(baseline_schema.tables.len(), 23);
+    assert_eq!(baseline_schema.tables.len(), 24);
     let mut application_tables = sqlx::query_scalar::<_, String>(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename NOT IN ('_sqlx_migrations', 'schema_visualizer_tables') ORDER BY tablename",
     )
@@ -2348,7 +2408,7 @@ async fn canonical_ontology_and_revision_conflicts() {
             .is_some_and(|table| table.classification == "canonical")
     );
     for subtype in [
-        "tasks", "chats", "users", "entities", "memories", "sources", "notes",
+        "tasks", "chats", "users", "entities", "memories", "sources", "notes", "themes",
     ] {
         assert!(
             baseline_schema
@@ -2372,6 +2432,23 @@ async fn canonical_ontology_and_revision_conflicts() {
             && foreign_key.target_table == "objects"
             && foreign_key.one_to_one_subtype
     }));
+    let objects_schema = baseline_schema
+        .tables
+        .iter()
+        .find(|table| table.name == "objects")
+        .unwrap();
+    assert!(
+        objects_schema
+            .indexes
+            .iter()
+            .any(|index| index.name == "objects_pkey" && index.constraint_backed)
+    );
+    assert!(
+        objects_schema
+            .triggers
+            .iter()
+            .any(|trigger| trigger.name == "objects_queue_embedding")
+    );
     assert!(matches!(
         schema::read_rows(&pool, "schema_visualizer_tables", None, None, None).await,
         Err(schema::SchemaError::UnknownTable)
@@ -2420,6 +2497,19 @@ async fn canonical_ontology_and_revision_conflicts() {
     .execute(&pool)
     .await
     .unwrap();
+    let profile = schema::profile_table(&pool, "schema_visualizer_dynamic_fixture")
+        .await
+        .unwrap();
+    assert!(profile.exact);
+    assert_eq!(profile.row_count, Some(3));
+    let optional_text_profile = profile
+        .columns
+        .iter()
+        .find(|column| column.name == "optional_text")
+        .unwrap();
+    assert_eq!(optional_text_profile.null_count, 1);
+    assert_eq!(optional_text_profile.empty_count, Some(1));
+    assert_eq!(optional_text_profile.distinct_count, 2);
     let after_data = schema::inspect_schema(&pool).await.unwrap();
     assert_eq!(registered_schema.fingerprint, after_data.fingerprint);
     let first_page = schema::read_rows(

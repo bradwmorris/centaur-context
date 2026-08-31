@@ -89,7 +89,7 @@ pub fn optional_text(
 }
 
 pub fn object_description(title: &str, value: String) -> Result<String, ValidationError> {
-    let value = required_text(value, "description", 1000)?;
+    let value = required_text(value, "description", 2000)?;
     validate_object_description(title, &value)?;
     Ok(value)
 }
@@ -227,11 +227,20 @@ pub const CONNECTION_KINDS: &[&str] = &[
     "derived_from",
     "themed",
 ];
-pub const TASK_STATUSES: &[&str] = &["todo", "doing", "blocked", "review", "done"];
+pub const TASK_STATUSES: &[&str] = &["backlog", "todo", "doing", "review", "done", "blocked"];
 pub const TASK_PRIORITIES: &[&str] = &["low", "medium", "high"];
 pub const USER_KINDS: &[&str] = &["human", "agent"];
 pub const SOURCE_KINDS: &[&str] = &[
-    "article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page",
+    "article",
+    "paper",
+    "podcast_episode",
+    "video",
+    "book",
+    "report",
+    "document",
+    "dataset",
+    "web_page",
+    "social_post",
     "other",
 ];
 pub const SOURCE_CONTENT_KINDS: &[&str] = &[
@@ -369,7 +378,17 @@ mod tests {
                 "weak description was accepted: {description}"
             );
         }
-        assert!(object_description("Long", "x".repeat(1001)).is_err());
+        assert!(object_description("Long", "x".repeat(2001)).is_err());
+        assert!(
+            object_description(
+                "Long",
+                format!(
+                    "A concrete description with enough room for the agreed ontology context: {}",
+                    "x".repeat(1100)
+                )
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub struct SchemaTable {
     pub estimated_row_count: i64,
     pub columns: Vec<SchemaColumn>,
     pub constraints: Vec<SchemaConstraint>,
+    pub indexes: Vec<SchemaIndex>,
+    pub triggers: Vec<SchemaTrigger>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -57,6 +59,41 @@ pub struct SchemaConstraint {
     pub kind: String,
     pub columns: Vec<String>,
     pub definition: String,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct SchemaIndex {
+    pub name: String,
+    pub unique: bool,
+    pub primary: bool,
+    pub constraint_backed: bool,
+    pub definition: String,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct SchemaTrigger {
+    pub name: String,
+    pub enabled: String,
+    pub definition: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SchemaProfile {
+    pub schema_fingerprint: String,
+    pub table: String,
+    pub exact: bool,
+    pub row_count: Option<i64>,
+    pub columns: Vec<SchemaColumnProfile>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SchemaColumnProfile {
+    pub name: String,
+    pub null_count: i64,
+    pub empty_count: Option<i64>,
+    pub distinct_count: i64,
+    pub default_count: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -123,6 +160,8 @@ pub async fn inspect_schema(pool: &PgPool) -> Result<SchemaSnapshot, SchemaError
     .await?;
 
     let columns = column_rows(pool).await?;
+    let indexes = index_rows(pool).await?;
+    let triggers = trigger_rows(pool).await?;
 
     let constraint_rows = sqlx::query_as::<_, ConstraintRow>(
         r#"
@@ -188,11 +227,21 @@ pub async fn inspect_schema(pool: &PgPool) -> Result<SchemaSnapshot, SchemaError
             "supporting"
         };
         tables.push(SchemaTable {
-            name: table.name,
+            name: table.name.clone(),
             classification: classification.to_owned(),
             estimated_row_count: table.estimated_row_count,
             columns: table_columns,
             constraints: table_constraints,
+            indexes: indexes
+                .iter()
+                .filter(|(name, _)| name == &table.name)
+                .map(|(_, index)| index.clone())
+                .collect(),
+            triggers: triggers
+                .iter()
+                .filter(|(name, _)| name == &table.name)
+                .map(|(_, trigger)| trigger.clone())
+                .collect(),
         });
     }
 
@@ -239,6 +288,93 @@ pub async fn inspect_schema(pool: &PgPool) -> Result<SchemaSnapshot, SchemaError
         tables,
         foreign_keys,
     })
+}
+
+async fn index_rows(pool: &PgPool) -> Result<Vec<(String, SchemaIndex)>, sqlx::Error> {
+    #[derive(FromRow)]
+    struct IndexRow {
+        table_name: String,
+        name: String,
+        unique: bool,
+        primary: bool,
+        constraint_backed: bool,
+        definition: String,
+    }
+    let rows = sqlx::query_as::<_, IndexRow>(
+        r#"
+        SELECT r.table_name,
+               index_class.relname AS name,
+               index.indisunique AS "unique",
+               index.indisprimary AS "primary",
+               EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid=index.indexrelid)
+                   AS constraint_backed,
+               pg_get_indexdef(index.indexrelid) AS definition
+        FROM schema_visualizer_tables r
+        JOIN pg_namespace namespace ON namespace.nspname='public'
+        JOIN pg_class table_class ON table_class.relnamespace=namespace.oid
+                                  AND table_class.relname=r.table_name
+        JOIN pg_index index ON index.indrelid=table_class.oid
+        JOIN pg_class index_class ON index_class.oid=index.indexrelid
+        ORDER BY r.table_name,index_class.relname
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.table_name,
+                SchemaIndex {
+                    name: row.name,
+                    unique: row.unique,
+                    primary: row.primary,
+                    constraint_backed: row.constraint_backed,
+                    definition: row.definition,
+                },
+            )
+        })
+        .collect())
+}
+
+async fn trigger_rows(pool: &PgPool) -> Result<Vec<(String, SchemaTrigger)>, sqlx::Error> {
+    #[derive(FromRow)]
+    struct TriggerRow {
+        table_name: String,
+        name: String,
+        enabled: String,
+        definition: String,
+    }
+    let rows = sqlx::query_as::<_, TriggerRow>(
+        r#"
+        SELECT r.table_name,trigger.tgname AS name,
+               CASE trigger.tgenabled WHEN 'O' THEN 'enabled' WHEN 'D' THEN 'disabled'
+                    WHEN 'R' THEN 'replica' WHEN 'A' THEN 'always' ELSE trigger.tgenabled::text END
+                    AS enabled,
+               pg_get_triggerdef(trigger.oid,true) AS definition
+        FROM schema_visualizer_tables r
+        JOIN pg_namespace namespace ON namespace.nspname='public'
+        JOIN pg_class table_class ON table_class.relnamespace=namespace.oid
+                                  AND table_class.relname=r.table_name
+        JOIN pg_trigger trigger ON trigger.tgrelid=table_class.oid AND NOT trigger.tgisinternal
+        ORDER BY r.table_name,trigger.tgname
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.table_name,
+                SchemaTrigger {
+                    name: row.name,
+                    enabled: row.enabled,
+                    definition: row.definition,
+                },
+            )
+        })
+        .collect())
 }
 
 async fn column_rows(pool: &PgPool) -> Result<Vec<(String, SchemaColumn)>, sqlx::Error> {
@@ -292,6 +428,116 @@ async fn column_rows(pool: &PgPool) -> Result<Vec<(String, SchemaColumn)>, sqlx:
             )
         })
         .collect())
+}
+
+pub async fn profile_table(pool: &PgPool, table_name: &str) -> Result<SchemaProfile, SchemaError> {
+    let snapshot = inspect_schema(pool).await?;
+    let table = snapshot
+        .tables
+        .iter()
+        .find(|table| table.name == table_name)
+        .ok_or(SchemaError::UnknownTable)?;
+    let unavailable = |reason: String| SchemaProfile {
+        schema_fingerprint: snapshot.fingerprint.clone(),
+        table: table_name.to_owned(),
+        exact: false,
+        row_count: None,
+        columns: Vec::new(),
+        unavailable_reason: Some(reason),
+    };
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout='2000ms'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL transaction_read_only=on")
+        .execute(&mut *tx)
+        .await?;
+    let quoted_table = quote_identifier(table_name);
+    let row_count = match sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT count(*)::bigint FROM public.{quoted_table}"
+    ))
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tx.rollback().await.ok();
+            tracing::warn!(table = table_name, %error, "exact schema profile failed");
+            return Ok(unavailable(
+                "exact profile exceeded its time bound or contains an unsupported value type"
+                    .to_owned(),
+            ));
+        }
+    };
+    let mut profiles = Vec::with_capacity(table.columns.len());
+    for column in &table.columns {
+        let quoted_column = quote_identifier(&column.name);
+        let empty_expression = if column.data_type == "text"
+            || column.data_type.starts_with("character varying")
+            || column.data_type.starts_with("character(")
+        {
+            format!("count(*) FILTER (WHERE btrim({quoted_column})='')::bigint")
+        } else {
+            "NULL::bigint".to_owned()
+        };
+        let default_expression = column
+            .default
+            .as_deref()
+            .filter(|value| safe_profile_default(value))
+            .map(|value| {
+                format!(
+                    "count(*) FILTER (WHERE {quoted_column} IS NOT DISTINCT FROM ({value}))::bigint"
+                )
+            })
+            .unwrap_or_else(|| "NULL::bigint".to_owned());
+        let sql = format!(
+            "SELECT count(*) FILTER (WHERE {quoted_column} IS NULL)::bigint AS null_count, \
+             {empty_expression} AS empty_count, \
+             count(DISTINCT {quoted_column}::text)::bigint AS distinct_count, \
+             {default_expression} AS default_count FROM public.{quoted_table}"
+        );
+        let row = match sqlx::query(&sql).fetch_one(&mut *tx).await {
+            Ok(row) => row,
+            Err(error) => {
+                tx.rollback().await.ok();
+                tracing::warn!(table = table_name, column = column.name, %error, "exact schema column profile failed");
+                return Ok(unavailable(
+                    "exact profile exceeded its time bound or contains an unsupported value type"
+                        .to_owned(),
+                ));
+            }
+        };
+        profiles.push(SchemaColumnProfile {
+            name: column.name.clone(),
+            null_count: row.try_get("null_count")?,
+            empty_count: row.try_get("empty_count")?,
+            distinct_count: row.try_get("distinct_count")?,
+            default_count: row.try_get("default_count")?,
+        });
+    }
+    tx.commit().await?;
+    Ok(SchemaProfile {
+        schema_fingerprint: snapshot.fingerprint,
+        table: table_name.to_owned(),
+        exact: true,
+        row_count: Some(row_count),
+        columns: profiles,
+        unavailable_reason: None,
+    })
+}
+
+fn safe_profile_default(value: &str) -> bool {
+    value.len() <= 500
+        && !value
+            .chars()
+            .any(|character| matches!(character, ';' | '(' | ')'))
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(
+                    character,
+                    '\'' | ':' | '[' | ']' | '{' | '}' | '_' | '-' | '+' | '.' | ' '
+                )
+        })
 }
 
 pub async fn read_rows(
@@ -422,6 +668,7 @@ async fn validate_database(pool: &PgPool) -> Result<(), SchemaError> {
         .fetch_one(pool)
         .await?;
     let allowed = database == "centaur_context"
+        || database == "centaur_context_enyu"
         || database == "centaur_os"
         || database.contains("centaur_context_test")
         || database.contains("centaur_os_test");
@@ -467,6 +714,8 @@ fn fingerprint(
             "classification": table.classification,
             "columns": table.columns,
             "constraints": table.constraints,
+            "indexes": table.indexes,
+            "triggers": table.triggers,
         })).collect::<Vec<_>>(),
         "foreign_keys": foreign_keys,
     });

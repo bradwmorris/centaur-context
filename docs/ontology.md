@@ -5,28 +5,34 @@ Centaur Context stores a business as Objects and Connections.
 ## Objects
 
 Every first-class node starts with one row in `objects`. That row holds its
-title, plain-language description, type, revision, lifecycle, and provenance.
+title, explicit plain-language description, type, revision, attribution,
+provenance, and archive time. `archived_at` is the persisted state: `NULL` means
+active, while a timestamp means archived. APIs derive the human-facing
+`lifecycle` value from it.
 
 An Object may have one matching subtype row:
 
 | Type | Meaning |
 | --- | --- |
-| Task | Confirmed work to do |
+| Task | Confirmed work tracked as backlog, todo, doing, review, done, or blocked |
 | Chat | One conversation thread |
 | User | A human or agent |
-| Entity | A company, project, product, place, or other named thing |
+| Entity | A named person, organization, product, project, publication, place, concept, or other subject |
 | Memory | A simple record of what happened |
-| Source | An article, paper, podcast, video, book, report, document, dataset, or web page used as evidence |
+| Source | An article, paper, podcast episode, video, book, report, document, dataset, web page, or social post used as evidence |
 | Note | Useful human- or agent-authored Markdown or plain text |
+| Theme | A human-approved stable taxonomy category |
 
 The Object is canonical. The subtype stores fields specific to that type.
 
-A Source stores only bounded bibliographic and artifact metadata in its subtype.
+A Source stores only bounded bibliographic and original-artifact metadata in its subtype.
 Immutable versions of normalized article text or transcripts live separately in
 `source_contents`; the current version is selected without overwriting older
 evidence. Original binary files remain outside PostgreSQL and are referenced by
-an opaque artifact identifier and integrity hash. Source list and agent APIs
-never return complete long-form text accidentally.
+an opaque artifact identifier. Each captured content version records its own
+SHA-256 digest, completeness, capture time, recording time, extraction lineage,
+and optional capture-artifact reference. Source list and agent APIs never return
+complete long-form text accidentally.
 
 A Note keeps its concise identity and summary in the canonical Object row while
 its bounded Markdown or plain-text body lives in the one-to-one `notes`
@@ -53,7 +59,7 @@ They support the graph but are not first-class business nodes.
 
 ## Connections
 
-A Connection joins two Objects. It must use one of five types and include a
+A Connection joins two Objects. It must use one of six types and include a
 short explanation.
 
 | Type | Use |
@@ -63,13 +69,16 @@ short explanation.
 | `related_to` | The Objects have a useful general link |
 | `depends_on` | One Object needs another first |
 | `derived_from` | An Object came from a source Chat or evidentiary Source |
+| `themed` | A non-Theme Object is assigned to a human-approved Theme |
 
 ## Rules
 
-- Every Object needs a clear, concise description.
+- Every Object needs a direct, evidence-grounded 50–150 word description that
+  says what it is, what it is about, and its current context.
 - Every Object has one primary type.
 - Each subtype row belongs to exactly one Object.
-- Each Curator Run creates exactly one primary Memory.
+- A Curator Run creates zero or more Memories only when the messages contain
+  durable events or insights worth retaining.
 - Sources represent evidence; Memories represent events or derived insights.
 - A Task is created only from an explicit instruction or commitment.
 - Updates use revisions so newer changes are not overwritten.

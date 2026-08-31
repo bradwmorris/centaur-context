@@ -27,6 +27,10 @@ use crate::{
 const MAX_SOURCE_INTAKE_BODY_BYTES: usize = 1024 * 1024;
 const CONTRACT_VERSION: &str = "centaur-context-source-intake-v1";
 
+fn default_coverage() -> String {
+    "unknown".to_owned()
+}
+
 #[derive(Clone)]
 struct SourceIntakeState {
     app: AppState,
@@ -139,14 +143,23 @@ pub struct SourceManifest {
     pub byline: Option<String>,
     pub publisher: Option<String>,
     pub published_at: Option<String>,
-    pub accessed_at: Option<String>,
-    pub language: Option<String>,
-    pub media_type: Option<String>,
-    pub artifact_reference: Option<String>,
+    pub published_at_precision: Option<String>,
+    #[serde(alias = "accessed_at")]
+    pub last_accessed_at: Option<String>,
+    #[serde(alias = "language")]
+    pub original_language: Option<String>,
+    #[serde(alias = "media_type")]
+    pub original_media_type: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    pub original_artifact_reference: Option<String>,
+    pub capture_artifact_reference: Option<String>,
     pub content_kind: String,
     pub content: String,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
+    #[serde(default = "default_coverage")]
+    pub coverage: String,
+    pub captured_at: Option<String>,
     #[serde(default)]
     pub provenance: Option<Value>,
 }
@@ -176,23 +189,24 @@ async fn prepared(
         object_id: Uuid,
         protected: bool,
         current_content_id: Option<Uuid>,
-        content_hash: Option<String>,
+        content_sha256: Option<String>,
         provenance: Value,
         canonical_uri: Option<String>,
         same_batch: bool,
     }
     let conflicts: Vec<Conflict> = sqlx::query_as(
-        r#"SELECT s.object_id,o.protected,s.current_content_id,s.content_hash,o.provenance,
+        r#"SELECT s.object_id,o.protected,s.current_content_id,sc.content_sha256,o.provenance,
                   s.canonical_uri,EXISTS(
                     SELECT 1 FROM object_events e
                     WHERE e.object_id=s.object_id AND e.changes->>'intake_batch_id'=$3
                   ) AS same_batch
            FROM sources s JOIN objects o ON o.id=s.object_id
-           WHERE o.lifecycle='active'
-             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR s.content_hash=$2)"#,
+           LEFT JOIN source_contents sc ON sc.id=s.current_content_id
+           WHERE o.archived_at IS NULL
+             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR sc.content_sha256=$2)"#,
     )
     .bind(&source.canonical_uri)
-    .bind(&source.content_hash)
+    .bind(&prepared.request.source_contents[0].content_sha256)
     .bind(&prepared.request.batch_id)
     .fetch_all(&state.app.pool)
     .await?;
@@ -208,7 +222,7 @@ async fn prepared(
         }
         let curator_placeholder = !conflict.protected
             && conflict.current_content_id.is_none()
-            && conflict.content_hash.is_none()
+            && conflict.content_sha256.is_none()
             && conflict.canonical_uri == source.canonical_uri
             && conflict
                 .provenance
@@ -255,7 +269,7 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
                 .map_err(|error| IntakeError::Internal(error.to_string()))?
         )
     );
-    let content_hash = format!("{:x}", Sha256::digest(request.source.content.as_bytes()));
+    let content_sha256 = format!("{:x}", Sha256::digest(request.source.content.as_bytes()));
     let mut connection_keys = HashSet::new();
     let mut connections = Vec::new();
     for (index, connection) in request.connections.into_iter().enumerate() {
@@ -324,17 +338,18 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
             protected: true,
             provenance: source.provenance.clone(),
             user_kind: None,
+            entity_kind: None,
             source: Some(IntakeSource {
                 source_kind: source.source_kind,
                 canonical_uri: source.canonical_uri,
                 byline: source.byline,
                 publisher: source.publisher,
                 published_at: source.published_at,
-                accessed_at: source.accessed_at,
-                language: source.language.clone(),
-                media_type: source.media_type,
-                artifact_reference: source.artifact_reference.clone(),
-                content_hash: Some(content_hash.clone()),
+                published_at_precision: source.published_at_precision,
+                last_accessed_at: source.last_accessed_at,
+                original_language: source.original_language.clone(),
+                original_media_type: source.original_media_type,
+                original_artifact_reference: source.original_artifact_reference,
             }),
             note: None,
             theme: None,
@@ -348,11 +363,13 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
             },
             content_kind: source.content_kind,
             normalized_text: source.content,
-            content_hash,
-            language: source.language,
+            content_sha256,
+            language: source.original_language,
             extraction_method: source.extraction_method,
             extraction_version: source.extraction_version,
-            artifact_reference: source.artifact_reference,
+            capture_artifact_reference: source.capture_artifact_reference,
+            coverage: source.coverage,
+            captured_at: source.captured_at,
             locators: Some(json!({"canonical_uri":canonical_uri})),
         }],
         connections,
@@ -508,14 +525,18 @@ mod tests {
                 byline: None,
                 publisher: None,
                 published_at: None,
-                accessed_at: None,
-                language: Some("en".into()),
-                media_type: Some("text/plain".into()),
-                artifact_reference: None,
+                published_at_precision: None,
+                last_accessed_at: None,
+                original_language: Some("en".into()),
+                original_media_type: Some("text/plain".into()),
+                original_artifact_reference: None,
+                capture_artifact_reference: None,
                 content_kind: "article_text".into(),
                 content: "Captured source text".into(),
                 extraction_method: Some("enyu-researcher".into()),
                 extraction_version: Some("1".into()),
+                coverage: "complete".into(),
+                captured_at: None,
                 provenance: Some(json!({"source_type":"enyu_workflow"})),
             },
             connections: Vec::new(),
@@ -530,7 +551,7 @@ mod tests {
         assert_eq!(batch.objects[0].kind, "source");
         assert!(batch.objects[0].protected);
         assert_eq!(batch.source_contents.len(), 1);
-        assert_eq!(batch.source_contents[0].content_hash.len(), 64);
+        assert_eq!(batch.source_contents[0].content_sha256.len(), 64);
     }
 
     #[test]
@@ -559,5 +580,50 @@ mod tests {
                 .as_deref(),
             Some("https://example.test/source")
         );
+    }
+
+    #[test]
+    fn v1_manifest_accepts_explicit_legacy_field_aliases() {
+        let parsed: SourceIntakeRequest = serde_json::from_value(json!({
+            "version": CONTRACT_VERSION,
+            "idempotency_key": "legacy-run",
+            "source": {
+                "title": "Legacy fixture",
+                "description": "A legacy v1 Source manifest retained to verify rollout compatibility.",
+                "source_kind": "article",
+                "canonical_uri": "https://example.test/legacy",
+                "byline": null,
+                "publisher": null,
+                "published_at": null,
+                "accessed_at": "2026-08-30T00:00:00Z",
+                "language": "en",
+                "media_type": "text/plain",
+                "artifact_reference": "artifact:legacy",
+                "capture_artifact_reference": null,
+                "content_kind": "article_text",
+                "content": "Legacy content",
+                "extraction_method": "legacy-client",
+                "extraction_version": "1",
+                "captured_at": null,
+                "provenance": {}
+            },
+            "connections": [],
+            "originating_chat_object_id": null
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed.source.last_accessed_at.as_deref(),
+            Some("2026-08-30T00:00:00Z")
+        );
+        assert_eq!(parsed.source.original_language.as_deref(), Some("en"));
+        assert_eq!(
+            parsed.source.original_media_type.as_deref(),
+            Some("text/plain")
+        );
+        assert_eq!(
+            parsed.source.original_artifact_reference.as_deref(),
+            Some("artifact:legacy")
+        );
+        assert_eq!(parsed.source.coverage, "unknown");
     }
 }

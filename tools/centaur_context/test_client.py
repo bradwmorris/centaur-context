@@ -614,7 +614,7 @@ def test_create_note_never_falls_back_to_the_read_token(
         ({"title": " "}, "title is required"),
         ({"title": "x" * 301}, "title must be at most 300"),
         ({"description": " "}, "description is required"),
-        ({"description": "x" * 1_001}, "description must be at most 1000"),
+        ({"description": "x" * 2_001}, "description must be at most 2000"),
         ({"content": " "}, "content is required"),
         ({"content": "x" * 100_001}, "content must be at most 100000"),
         ({"content_format": "html"}, "content_format must be"),

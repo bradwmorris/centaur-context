@@ -9,7 +9,7 @@ import type { Section } from "./routing";
 import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, Theme, ThemeProposal, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
-const taskStatuses: TaskStatus[] = ["todo", "doing", "blocked", "review", "done"];
+const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
 const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
@@ -25,7 +25,7 @@ const descriptionExamples: Record<ObjectKind, string> = {
   note: "A short summary that helps people recognize what this note contains.",
   theme: "A research vertical used to group related work for retrieval and audience interests.",
 };
-const sourceKinds: SourceKind[] = ["article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page", "other"];
+const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video", "book", "report", "document", "dataset", "web_page", "social_post", "other"];
 
 export default function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
@@ -149,7 +149,7 @@ export default function App() {
                   <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
                   <ObjectId id={canonicalObjectId(item)} rowPill />
                   <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /><DescriptionSnippet description={itemDescription(item)} /></span>
-                  <time>{relative("updated_at" in item ? item.updated_at : item.created_at)}</time>
+                  <time>{relative("updated_at" in item ? item.updated_at : item.queued_at)}</time>
                 </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
@@ -256,7 +256,7 @@ function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (i
       onCreated(await api.createTheme({ title: String(data.get("title")), slug: String(data.get("slug")), description: String(data.get("description")), protected: true, provenance: { source_type: "human", note: "Approved and created in Centaur Context" } }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
-  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
+  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
@@ -270,14 +270,19 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
       onCreated(await api.createObject({
         kind, title: String(data.get("title")), description: String(data.get("description")),
         provenance: { source_type: "human", note: "Created in Centaur Context" },
+        entity_kind: kind === "entity" ? String(data.get("entity_kind")) : undefined,
+        happened_at:
+          kind === "memory" ? (optionalDate(data, "happened_at") ?? undefined) : undefined,
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
     <DescriptionHelp id="new-object-description-help" kind={kind} />
+    {kind === "entity" && <Field label="Entity kind"><select name="entity_kind" defaultValue="person"><option value="person">Person</option><option value="organization">Organization</option><option value="product">Product</option><option value="project">Project</option><option value="publication">Publication</option><option value="place">Place</option><option value="concept">Concept</option><option value="other">Other</option></select></Field>}
+    {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
@@ -288,15 +293,15 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_eligible: data.get("agent_eligible") === "on", provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
+    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
     catch (cause) { setError(message(cause)); setBusy(false); }
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
     <DescriptionHelp id="new-task-description-help" kind="task" />
     {error && <p className="form-error">{error}</p>}
-    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_eligible" /> Agent eligible</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
+    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
 }
 
@@ -317,7 +322,7 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
-    <textarea className="create-description" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
+    <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
     <DescriptionHelp id="new-note-description-help" kind="note" />
     <Field label="Content"><textarea className="create-body" name="content" rows={14} required placeholder="Write plain text or Markdown…" aria-label="Note content" /></Field>
     {error && <p className="form-error">{error}</p>}
@@ -331,18 +336,20 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try {
+      const publishedAt = optionalDate(data, "published_at");
       onCreated(await api.createSource({
         title: String(data.get("title")), description: String(data.get("description")), source_kind: String(data.get("source_kind")),
         canonical_uri: optional(data, "canonical_uri"), byline: optional(data, "byline"), publisher: optional(data, "publisher"),
-        published_at: optionalDate(data, "published_at"), accessed_at: optionalDate(data, "accessed_at"), language: optional(data, "language"),
-        media_type: optional(data, "media_type"), artifact_reference: optional(data, "artifact_reference"), content_hash: optional(data, "content_hash"),
+        published_at: publishedAt, published_at_precision: publishedAt ? String(data.get("published_at_precision")) : undefined,
+        last_accessed_at: optionalDate(data, "last_accessed_at"), original_language: optional(data, "original_language"),
+        original_media_type: optional(data, "original_media_type"), original_artifact_reference: optional(data, "original_artifact_reference"),
         provenance: { source_type: "human", note: "Created in Centaur Context" },
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
   return <CreateModal title="New source" onClose={onCancel}><form className="create-form source-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Source title" aria-label="Source title" />
-    <textarea className="create-body" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
+    <textarea className="create-body" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
     <DescriptionHelp id="new-source-description-help" kind="source" />
     <div className="source-fields">
       <Field label="Kind"><select name="source_kind" aria-label="Source kind">{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
@@ -350,11 +357,11 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
       <Field label="Byline"><input name="byline" maxLength={500} /></Field>
       <Field label="Publisher"><input name="publisher" maxLength={300} /></Field>
       <Field label="Published"><input name="published_at" type="datetime-local" /></Field>
-      <Field label="Accessed"><input name="accessed_at" type="datetime-local" /></Field>
-      <Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field>
-      <Field label="Media type"><input name="media_type" maxLength={100} placeholder="text/html" /></Field>
-      <Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} /></Field>
-      <Field label="Content hash"><input name="content_hash" maxLength={64} pattern="[0-9a-f]{64}" placeholder="64-character lowercase SHA-256" /></Field>
+      <Field label="Published precision"><select name="published_at_precision" defaultValue="instant"><option value="instant">Exact instant</option><option value="day">Day</option><option value="month">Month</option><option value="year">Year</option></select></Field>
+      <Field label="Accessed"><input name="last_accessed_at" type="datetime-local" /></Field>
+      <Field label="Original language"><input name="original_language" maxLength={35} placeholder="en" /></Field>
+      <Field label="Original media type"><input name="original_media_type" maxLength={100} placeholder="text/html" /></Field>
+      <Field label="Original artifact reference"><input name="original_artifact_reference" maxLength={1000} /></Field>
     </div>
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><span className="property-chip">Source</span><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create source"}</button></div></div>
@@ -393,14 +400,13 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
         <Property label="Canonical URL">{source.canonical_uri ? <a href={source.canonical_uri} target="_blank" rel="noreferrer">{source.canonical_uri}</a> : "Not set"}</Property>
         <Property label="Byline"><span className="property-value-wrap">{source.byline ?? "Not set"}</span></Property>
         <Property label="Publisher"><span className="property-value-wrap">{source.publisher ?? "Not set"}</span></Property>
-        <Property label="Published">{source.published_at ? new Date(source.published_at).toLocaleString() : "Not set"}</Property>
-        <Property label="Accessed">{source.accessed_at ? new Date(source.accessed_at).toLocaleString() : "Not set"}</Property>
-        <Property label="Language">{source.language ?? "Not set"}</Property>
-        <Property label="Media type">{source.media_type ?? "Not set"}</Property>
-        <Property label="Artifact reference"><span className="property-value-wrap">{source.artifact_reference ?? "Not set"}</span></Property>
-        <Property label="Content hash"><span className="property-value-wrap">{source.content_hash ?? "Not set"}</span></Property>
+        <Property label="Published">{source.published_at ? `${new Date(source.published_at).toLocaleString()} (${source.published_at_precision})` : "Not set"}</Property>
+        <Property label="Accessed">{source.last_accessed_at ? new Date(source.last_accessed_at).toLocaleString() : "Not set"}</Property>
+        <Property label="Original language">{source.original_language ?? "Not set"}</Property>
+        <Property label="Original media type">{source.original_media_type ?? "Not set"}</Property>
+        <Property label="Original artifact reference"><span className="property-value-wrap">{source.original_artifact_reference ?? "Not set"}</span></Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
+      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
       <DescriptionHelp id="source-description-help" kind="source" />
       <button className="secondary save-button">Save changes</button>
     </form>
@@ -429,7 +435,7 @@ function SourceContents({ sourceId, sourceRevision, versions, currentContentId, 
   const append = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try {
-      await api.createSourceContent(sourceId, { expected_revision: sourceRevision, content_kind: String(data.get("content_kind")), normalized_text: String(data.get("text")), language: optional(data, "language"), extraction_method: optional(data, "extraction_method"), extraction_version: optional(data, "extraction_version"), artifact_reference: optional(data, "artifact_reference") });
+      await api.createSourceContent(sourceId, { expected_revision: sourceRevision, content_kind: String(data.get("content_kind")), normalized_text: String(data.get("text")), language: optional(data, "language"), extraction_method: optional(data, "extraction_method"), extraction_version: optional(data, "extraction_version"), capture_artifact_reference: optional(data, "capture_artifact_reference"), coverage: String(data.get("coverage")), captured_at: optionalDate(data, "captured_at") });
       setPasteOpen(false); setPreview([]); await onCreated();
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
@@ -437,7 +443,7 @@ function SourceContents({ sourceId, sourceRevision, versions, currentContentId, 
   const nextOffset = preview.at(-1)?.next_offset ?? null;
   return <Section title="Content" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Paste version</button>}>
     {pasteOpen && <form className="form source-content-form" onSubmit={append}>
-      <div className="source-fields"><Field label="Content kind"><select name="content_kind" aria-label="Content kind"><option value="article_text">Article text</option><option value="transcript">Transcript</option><option value="paper_text">Paper text</option><option value="document_text">Document text</option><option value="dataset_description">Dataset description</option><option value="other">Other</option></select></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Extraction method"><input name="extraction_method" maxLength={200} defaultValue="human_paste" /></Field><Field label="Extraction version"><input name="extraction_version" maxLength={100} /></Field><Field label="Artifact reference"><input name="artifact_reference" maxLength={1000} /></Field></div>
+      <div className="source-fields"><Field label="Content kind"><select name="content_kind" aria-label="Content kind"><option value="article_text">Article text</option><option value="transcript">Transcript</option><option value="paper_text">Paper text</option><option value="document_text">Document text</option><option value="dataset_description">Dataset description</option><option value="other">Other</option></select></Field><Field label="Coverage"><select name="coverage" defaultValue="unknown"><option value="complete">Complete</option><option value="partial">Partial</option><option value="unknown">Unknown</option></select></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Extraction method"><input name="extraction_method" maxLength={200} defaultValue="human_paste" /></Field><Field label="Extraction version"><input name="extraction_version" maxLength={100} /></Field><Field label="Capture artifact reference"><input name="capture_artifact_reference" maxLength={1000} /></Field></div>
       <Field label="Normalized text"><textarea name="text" aria-label="Normalized source text" rows={12} required placeholder="Paste the normalized article or transcript…" /></Field>
       <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save new version"}</button></div>
     </form>}
@@ -453,7 +459,7 @@ function SourceContents({ sourceId, sourceRevision, versions, currentContentId, 
 
 function SourceVersionSummary({ version }: { version: SourceContentVersion | undefined }) {
   if (!version) return null;
-  return <p className="content-version-summary">{version.content_kind.replaceAll("_", " ")} · {version.size_bytes.toLocaleString()} bytes · {version.language ?? "language unspecified"} · {relative(version.created_at)}</p>;
+  return <p className="content-version-summary">{version.content_kind.replaceAll("_", " ")} · {version.coverage} · {version.size_bytes.toLocaleString()} bytes · {version.language ?? "language unspecified"} · {relative(version.recorded_at)}</p>;
 }
 
 function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
@@ -493,7 +499,7 @@ function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
         <Property label="Format"><select name="content_format" aria-label="Note content format" defaultValue={note.content_format} key={`${note.object_id}-${note.revision}-format`}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
         <Property label="Updated">{relative(note.updated_at)}</Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
+      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
       <Section title="Content"><textarea className="note-content note-content-editor" name="content" aria-label="Note content" required maxLength={100000} defaultValue={note.content} key={`${note.object_id}-${note.revision}-content`} rows={16} /></Section>
       <button className="secondary save-button">Save note</button>
     </form>
@@ -534,7 +540,7 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
+        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
         <DescriptionHelp id="object-description-help" kind={item.kind} />
         <button className="secondary save-button">Save changes</button>
       </form>
@@ -631,7 +637,11 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
   useEffect(() => { void load(); }, [load]);
   if (!task || !object) return <DetailLoading error={error} />;
   const save = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), protected: task.protected, status: String(data.get("status")), priority: String(data.get("priority")), agent_eligible: data.get("agent_eligible") === "on" }); await Promise.all([load(), onChanged()]); }
+    const status = String(data.get("status"));
+    const blockedReason = optional(data, "blocked_reason");
+    const issueUrl = optional(data, "github_issue_url");
+    const brief = optional(data, "brief_markdown");
+    try { await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), protected: task.protected, status, priority: String(data.get("priority")), agent_suitable: data.get("agent_suitable") === "on", blocked_reason: status === "blocked" ? blockedReason : undefined, clear_blocked_reason: status !== "blocked", github_issue_url: issueUrl, clear_github_issue_url: !issueUrl, brief_markdown: brief, clear_brief_markdown: !brief }); await Promise.all([load(), onChanged()]); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page">
@@ -645,14 +655,18 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
             <Property label="Source">{visuals.get(task.object_id)?.source_provider ? <SourceBadge provider={visuals.get(task.object_id)?.source_provider} /> : textValue(task.provenance.source_type, "Unspecified")}</Property>
             <Property label="Users">{(visuals.get(task.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(task.object_id)?.users ?? []} /> : "None"}</Property>
             <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
-            <Property label="Agent access"><label className="check"><input type="checkbox" name="agent_eligible" defaultChecked={task.agent_eligible} key={`${task.object_id}-${task.revision}-eligible`} /> Eligible</label></Property>
+            <Property label="Agent suitability"><label className="check"><input type="checkbox" name="agent_suitable" defaultChecked={task.agent_suitable} key={`${task.object_id}-${task.revision}-suitable`} /> Suitable</label></Property>
             <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
             <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
+            <Property label="Completed">{task.completed_at ? new Date(task.completed_at).toLocaleString() : "Not complete"}</Property>
+            <Field label="Blocked reason"><input name="blocked_reason" maxLength={2000} defaultValue={task.blocked_reason ?? ""} key={`${task.object_id}-${task.revision}-blocked`} /></Field>
+            <Field label="GitHub issue"><input name="github_issue_url" type="url" maxLength={2000} defaultValue={task.github_issue_url ?? ""} key={`${task.object_id}-${task.revision}-issue`} placeholder="https://github.com/owner/repo/issues/123" /></Field>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
+        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
+        <Field label="Requirement brief"><textarea name="brief_markdown" maxLength={100000} defaultValue={task.brief_markdown ?? ""} key={`${task.object_id}-${task.revision}-brief`} rows={10} placeholder="Scope, constraints, acceptance criteria, and verification…" /></Field>
         <DescriptionHelp id="task-description-help" kind="task" />
         <button className="secondary save-button">Save changes</button>
       </form>
@@ -694,7 +708,7 @@ function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; object
       <Property label="Attempts">{run.attempts}</Property>
       <Property label="Model">{run.model ?? "Not assigned"}</Property>
       <Property label="Prompt">{run.prompt_version ?? "Not assigned"}</Property>
-      <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property>
+      <Property label="Queued">{new Date(run.queued_at).toLocaleString()}</Property>
     </div></section>
     {run.error_message && <p className="run-error">{run.error_message}</p>}
     {error && <p className="form-error">{error}</p>}

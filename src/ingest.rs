@@ -409,7 +409,6 @@ pub async fn ingest(
     crate::evals::attach_slack_chat(&mut tx, eval_id, chat_object_id).await?;
     let mut participants = BTreeSet::new();
     let mut inserted_message_count = 0usize;
-    let mut last_ingested_message_id = None;
 
     for message in &input.messages {
         let user_object_id =
@@ -424,7 +423,7 @@ pub async fn ingest(
             &message.sender.display_name,
         )
         .await?;
-        if let Some(message_id) = insert_message(
+        if insert_message(
             &mut tx,
             &actor,
             eval_id,
@@ -433,9 +432,9 @@ pub async fn ingest(
             message,
         )
         .await?
+        .is_some()
         {
             inserted_message_count += 1;
-            last_ingested_message_id = Some(message_id);
         }
     }
 
@@ -447,16 +446,14 @@ pub async fn ingest(
         .expect("validated interactions contain messages");
     sqlx::query(
         r#"UPDATE chats
-           SET last_message_at=GREATEST(COALESCE(last_message_at, $2), $2),
+           SET latest_source_message_at=GREATEST(COALESCE(latest_source_message_at, $2), $2),
                channel_name=COALESCE($3, channel_name),
-               last_ingested_message_id=COALESCE($4,last_ingested_message_id),
-               updated_at=now()
+               processing_updated_at=now()
            WHERE object_id=$1"#,
     )
     .bind(chat_object_id)
     .bind(latest_message_at)
     .bind(&input.channel_name)
-    .bind(last_ingested_message_id)
     .execute(&mut *tx)
     .await?;
 
@@ -853,11 +850,11 @@ async fn queue_next_window(
         r#"SELECT m.id
            FROM chat_messages m
            WHERE m.chat_object_id=$1
-             AND m.ingested_sequence > COALESCE(
-                 (SELECT previous.ingested_sequence FROM chat_messages previous
-                  JOIN chats c ON c.last_queued_message_id=previous.id
+             AND m.ingestion_sequence > COALESCE(
+                 (SELECT previous.ingestion_sequence FROM chat_messages previous
+                  JOIN chats c ON c.curation_queued_through_message_id=previous.id
                   WHERE c.object_id=$1), 0)
-           ORDER BY m.ingested_sequence"#,
+           ORDER BY m.ingestion_sequence"#,
     )
     .bind(chat_object_id)
     .fetch_all(&mut **tx)
@@ -883,7 +880,7 @@ async fn queue_next_window(
     ))
     .execute(&mut **tx)
     .await?;
-    sqlx::query("UPDATE chats SET last_queued_message_id=$2,updated_at=now() WHERE object_id=$1")
+    sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
         .bind(chat_object_id)
         .bind(last_message_id)
         .execute(&mut **tx)
@@ -926,15 +923,15 @@ pub async fn queue_inactive_interactions(
     let chats: Vec<(Uuid, String, String, String)> = sqlx::query_as(
         r#"SELECT c.object_id,c.workspace_id,c.channel_id,c.thread_id
            FROM chats c
-           WHERE c.provider='slack' AND c.last_message_at <= $1
+           WHERE c.provider='slack' AND c.latest_source_message_at <= $1
              AND EXISTS (
                  SELECT 1 FROM chat_messages m
                  WHERE m.chat_object_id=c.object_id
-                   AND m.ingested_sequence > COALESCE(
-                       (SELECT previous.ingested_sequence FROM chat_messages previous
-                        WHERE previous.id=c.last_queued_message_id), 0)
+                   AND m.ingestion_sequence > COALESCE(
+                       (SELECT previous.ingestion_sequence FROM chat_messages previous
+                        WHERE previous.id=c.curation_queued_through_message_id), 0)
              )
-           ORDER BY c.last_message_at,c.object_id
+           ORDER BY c.latest_source_message_at,c.object_id
            LIMIT 100 FOR UPDATE SKIP LOCKED"#,
     )
     .bind(cutoff)
