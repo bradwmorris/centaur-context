@@ -32,6 +32,10 @@ const MAX_BATCH_RESOURCES: usize = 500;
 const MAX_BATCH_BODY_BYTES: usize = 12 * 1024 * 1024;
 const INTAKE_NAMESPACE: Uuid = Uuid::from_u128(0x5b18f36b_699f_4da2_8b3e_9e744a7b941d);
 
+fn default_coverage() -> String {
+    "unknown".to_owned()
+}
+
 #[derive(Clone)]
 struct IntakeState {
     app: AppState,
@@ -149,6 +153,8 @@ pub struct IntakeObject {
     #[serde(default)]
     pub user_kind: Option<String>,
     #[serde(default)]
+    pub entity_kind: Option<String>,
+    #[serde(default)]
     pub source: Option<IntakeSource>,
     #[serde(default)]
     pub note: Option<IntakeNote>,
@@ -170,11 +176,15 @@ pub struct IntakeSource {
     pub byline: Option<String>,
     pub publisher: Option<String>,
     pub published_at: Option<String>,
-    pub accessed_at: Option<String>,
-    pub language: Option<String>,
-    pub media_type: Option<String>,
-    pub artifact_reference: Option<String>,
-    pub content_hash: Option<String>,
+    pub published_at_precision: Option<String>,
+    #[serde(alias = "accessed_at")]
+    pub last_accessed_at: Option<String>,
+    #[serde(alias = "language")]
+    pub original_language: Option<String>,
+    #[serde(alias = "media_type")]
+    pub original_media_type: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    pub original_artifact_reference: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -203,11 +213,16 @@ pub struct IntakeSourceContent {
     pub source: IntakeObjectRef,
     pub content_kind: String,
     pub normalized_text: String,
-    pub content_hash: String,
+    #[serde(alias = "content_hash")]
+    pub content_sha256: String,
     pub language: Option<String>,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
-    pub artifact_reference: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    pub capture_artifact_reference: Option<String>,
+    #[serde(default = "default_coverage")]
+    pub coverage: String,
+    pub captured_at: Option<String>,
     #[serde(default)]
     pub locators: Option<Value>,
 }
@@ -443,13 +458,33 @@ pub(crate) async fn prepare_batch_for_app(
                     "user_kind",
                     USER_KINDS,
                 )?);
-                if object.source.is_some() || object.note.is_some() || object.theme.is_some() {
+                if object.entity_kind.is_some()
+                    || object.source.is_some()
+                    || object.note.is_some()
+                    || object.theme.is_some()
+                {
                     return Err(IntakeError::BadRequest(
                         "user Objects cannot contain source or note data".into(),
                     ));
                 }
             }
             "entity" => {
+                object.entity_kind = Some(allowed(
+                    object.entity_kind.clone().ok_or_else(|| {
+                        IntakeError::BadRequest("entity_kind is required for entity Objects".into())
+                    })?,
+                    "entity_kind",
+                    &[
+                        "person",
+                        "organization",
+                        "product",
+                        "project",
+                        "publication",
+                        "place",
+                        "concept",
+                        "other",
+                    ],
+                )?);
                 if object.user_kind.is_some()
                     || object.source.is_some()
                     || object.note.is_some()
@@ -461,7 +496,11 @@ pub(crate) async fn prepare_batch_for_app(
                 }
             }
             "source" => {
-                if object.user_kind.is_some() || object.note.is_some() || object.theme.is_some() {
+                if object.user_kind.is_some()
+                    || object.entity_kind.is_some()
+                    || object.note.is_some()
+                    || object.theme.is_some()
+                {
                     return Err(IntakeError::BadRequest(
                         "source Objects contain only source subtype data".into(),
                     ));
@@ -471,7 +510,11 @@ pub(crate) async fn prepare_batch_for_app(
                 })?)?;
             }
             "note" => {
-                if object.user_kind.is_some() || object.source.is_some() || object.theme.is_some() {
+                if object.user_kind.is_some()
+                    || object.entity_kind.is_some()
+                    || object.source.is_some()
+                    || object.theme.is_some()
+                {
                     return Err(IntakeError::BadRequest(
                         "note Objects contain only note subtype data".into(),
                     ));
@@ -481,7 +524,11 @@ pub(crate) async fn prepare_batch_for_app(
                 })?)?;
             }
             "theme" => {
-                if object.user_kind.is_some() || object.source.is_some() || object.note.is_some() {
+                if object.user_kind.is_some()
+                    || object.entity_kind.is_some()
+                    || object.source.is_some()
+                    || object.note.is_some()
+                {
                     return Err(IntakeError::BadRequest(
                         "theme Objects may contain only theme subtype data".into(),
                     ));
@@ -545,9 +592,9 @@ pub(crate) async fn prepare_batch_for_app(
             "normalized_text",
             10_000_000,
         )?;
-        content.content_hash = validate_hash(&content.content_hash, "content_hash")?;
+        content.content_sha256 = validate_hash(&content.content_sha256, "content_sha256")?;
         let actual = hex_sha256(content.normalized_text.as_bytes());
-        if actual != content.content_hash {
+        if actual != content.content_sha256 {
             return Err(IntakeError::BadRequest(format!(
                 "source content {} hash mismatch",
                 content.client_key
@@ -558,11 +605,17 @@ pub(crate) async fn prepare_batch_for_app(
             optional_text(content.extraction_method.take(), "extraction_method", 200)?;
         content.extraction_version =
             optional_text(content.extraction_version.take(), "extraction_version", 100)?;
-        content.artifact_reference = optional_text(
-            content.artifact_reference.take(),
-            "artifact_reference",
+        content.capture_artifact_reference = optional_text(
+            content.capture_artifact_reference.take(),
+            "capture_artifact_reference",
             1000,
         )?;
+        content.coverage = allowed(
+            content.coverage.clone(),
+            "coverage",
+            &["complete", "partial", "unknown"],
+        )?;
+        parse_time(content.captured_at.as_deref(), "captured_at")?;
         let locators = content.locators.get_or_insert_with(|| json!({}));
         if !locators.is_object() {
             return Err(IntakeError::BadRequest(
@@ -662,17 +715,49 @@ fn validate_source(source: &mut IntakeSource) -> Result<(), IntakeError> {
     }
     source.byline = optional_text(source.byline.take(), "byline", 500)?;
     source.publisher = optional_text(source.publisher.take(), "publisher", 300)?;
-    source.language = optional_text(source.language.take(), "language", 35)?;
-    source.media_type = optional_text(source.media_type.take(), "media_type", 255)?;
-    source.artifact_reference =
-        optional_text(source.artifact_reference.take(), "artifact_reference", 1000)?;
-    source.content_hash = source
-        .content_hash
+    source.original_language =
+        optional_text(source.original_language.take(), "original_language", 35)?;
+    source.original_media_type = optional_text(
+        source.original_media_type.take(),
+        "original_media_type",
+        255,
+    )?;
+    source.original_artifact_reference = optional_text(
+        source.original_artifact_reference.take(),
+        "original_artifact_reference",
+        1000,
+    )?;
+    let published_at = parse_time(source.published_at.as_deref(), "published_at")?;
+    if source.published_at_precision.is_none()
+        && let Some(timestamp) = published_at
+    {
+        let utc = timestamp.to_offset(time::UtcOffset::UTC);
+        source.published_at_precision = Some(
+            if utc.hour() == 0 && utc.minute() == 0 && utc.second() == 0 && utc.nanosecond() == 0 {
+                "day"
+            } else {
+                "instant"
+            }
+            .to_owned(),
+        );
+    }
+    source.published_at_precision = source
+        .published_at_precision
         .take()
-        .map(|hash| validate_hash(&hash, "content_hash"))
+        .map(|value| {
+            allowed(
+                value,
+                "published_at_precision",
+                &["instant", "day", "month", "year"],
+            )
+        })
         .transpose()?;
-    parse_time(source.published_at.as_deref(), "published_at")?;
-    parse_time(source.accessed_at.as_deref(), "accessed_at")?;
+    if published_at.is_some() != source.published_at_precision.is_some() {
+        return Err(IntakeError::BadRequest(
+            "published_at and published_at_precision must be provided together".into(),
+        ));
+    }
+    parse_time(source.last_accessed_at.as_deref(), "last_accessed_at")?;
     Ok(())
 }
 
@@ -718,7 +803,7 @@ async fn resolve_ref(
         }
         (None, Some(id)) => {
             let kind: Option<String> =
-                sqlx::query_scalar("SELECT kind FROM objects WHERE id=$1 AND lifecycle='active'")
+                sqlx::query_scalar("SELECT kind FROM objects WHERE id=$1 AND archived_at IS NULL")
                     .bind(id)
                     .fetch_optional(pool)
                     .await?;
@@ -798,8 +883,8 @@ pub(crate) async fn write_batch(
             let source = object.source.as_ref().expect("validated adopted Source");
             let current: Option<(i64, Value)> = sqlx::query_as(
                 r#"SELECT o.revision,o.provenance FROM objects o JOIN sources s ON s.object_id=o.id
-                   WHERE o.id=$1 AND o.kind='source' AND o.lifecycle='active' AND NOT o.protected
-                     AND s.current_content_id IS NULL AND s.content_hash IS NULL
+                   WHERE o.id=$1 AND o.kind='source' AND o.archived_at IS NULL AND NOT o.protected
+                     AND s.current_content_id IS NULL
                    FOR UPDATE"#,
             )
             .bind(id)
@@ -834,8 +919,9 @@ pub(crate) async fn write_batch(
             .await?;
             sqlx::query(
                 r#"UPDATE sources SET source_kind=$2,canonical_uri=$3,byline=$4,publisher=$5,
-                   published_at=$6,accessed_at=$7,language=$8,media_type=$9,
-                   artifact_reference=$10,updated_at=now() WHERE object_id=$1"#,
+                   published_at=$6,published_at_precision=$7,last_accessed_at=$8,
+                   original_language=$9,original_media_type=$10,
+                   original_artifact_reference=$11 WHERE object_id=$1"#,
             )
             .bind(id)
             .bind(&source.source_kind)
@@ -843,10 +929,14 @@ pub(crate) async fn write_batch(
             .bind(&source.byline)
             .bind(&source.publisher)
             .bind(parse_time(source.published_at.as_deref(), "published_at")?)
-            .bind(parse_time(source.accessed_at.as_deref(), "accessed_at")?)
-            .bind(&source.language)
-            .bind(&source.media_type)
-            .bind(&source.artifact_reference)
+            .bind(&source.published_at_precision)
+            .bind(parse_time(
+                source.last_accessed_at.as_deref(),
+                "last_accessed_at",
+            )?)
+            .bind(&source.original_language)
+            .bind(&source.original_media_type)
+            .bind(&source.original_artifact_reference)
             .execute(&mut *tx)
             .await?;
             insert_intake_event(
@@ -881,8 +971,14 @@ pub(crate) async fn write_batch(
                     .await?;
             }
             "entity" => {
-                sqlx::query("INSERT INTO entities (object_id) VALUES ($1)")
+                sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
                     .bind(id)
+                    .bind(
+                        object
+                            .entity_kind
+                            .as_deref()
+                            .expect("validated entity kind"),
+                    )
                     .execute(&mut *tx)
                     .await?;
             }
@@ -899,13 +995,29 @@ pub(crate) async fn write_batch(
             }
             "source" => {
                 let source = object.source.as_ref().expect("validated source");
-                sqlx::query(r#"INSERT INTO sources
-                    (object_id,source_kind,canonical_uri,byline,publisher,published_at,accessed_at,language,media_type,artifact_reference,content_hash)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#)
-                    .bind(id).bind(&source.source_kind).bind(&source.canonical_uri).bind(&source.byline).bind(&source.publisher)
-                    .bind(parse_time(source.published_at.as_deref(), "published_at")?).bind(parse_time(source.accessed_at.as_deref(), "accessed_at")?)
-                    .bind(&source.language).bind(&source.media_type).bind(&source.artifact_reference).bind(&source.content_hash)
-                    .execute(&mut *tx).await?;
+                sqlx::query(
+                    r#"INSERT INTO sources
+                    (object_id,source_kind,canonical_uri,byline,publisher,published_at,
+                     published_at_precision,last_accessed_at,original_language,
+                     original_media_type,original_artifact_reference)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
+                )
+                .bind(id)
+                .bind(&source.source_kind)
+                .bind(&source.canonical_uri)
+                .bind(&source.byline)
+                .bind(&source.publisher)
+                .bind(parse_time(source.published_at.as_deref(), "published_at")?)
+                .bind(&source.published_at_precision)
+                .bind(parse_time(
+                    source.last_accessed_at.as_deref(),
+                    "last_accessed_at",
+                )?)
+                .bind(&source.original_language)
+                .bind(&source.original_media_type)
+                .bind(&source.original_artifact_reference)
+                .execute(&mut *tx)
+                .await?;
             }
             "theme" => {
                 let theme = object.theme.as_ref().expect("validated theme");
@@ -961,18 +1073,37 @@ pub(crate) async fn write_batch(
         .bind(source_id)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query(r#"INSERT INTO source_contents
-            (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,extraction_version,content_hash,size_bytes,artifact_reference,locators)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#)
-            .bind(content_id).bind(source_id).bind(version).bind(&content.content_kind).bind(&content.normalized_text)
-            .bind(&content.language).bind(&content.extraction_method).bind(&content.extraction_version).bind(&content.content_hash)
-            .bind(content.normalized_text.len() as i64).bind(&content.artifact_reference).bind(content.locators.as_ref().expect("validated locators"))
-            .execute(&mut *tx).await?;
-        sqlx::query("UPDATE sources SET current_content_id=$2,content_hash=$3,updated_at=now() WHERE object_id=$1")
-            .bind(source_id).bind(content_id).bind(&content.content_hash).execute(&mut *tx).await?;
+        sqlx::query(
+            r#"INSERT INTO source_contents
+            (id,source_object_id,version,content_kind,normalized_text,language,
+             extraction_method,extraction_version,content_sha256,size_bytes,
+             capture_artifact_reference,coverage,captured_at,locators)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+        )
+        .bind(content_id)
+        .bind(source_id)
+        .bind(version)
+        .bind(&content.content_kind)
+        .bind(&content.normalized_text)
+        .bind(&content.language)
+        .bind(&content.extraction_method)
+        .bind(&content.extraction_version)
+        .bind(&content.content_sha256)
+        .bind(content.normalized_text.len() as i64)
+        .bind(&content.capture_artifact_reference)
+        .bind(&content.coverage)
+        .bind(parse_time(content.captured_at.as_deref(), "captured_at")?)
+        .bind(content.locators.as_ref().expect("validated locators"))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
+            .bind(source_id)
+            .bind(content_id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query("UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
             .bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut *tx).await?;
-        insert_intake_event(&mut tx, actor, "source_content", content_id, source_id, "content_version_created", revision + 1, batch, "content", &content.client_key, json!({"content_kind":content.content_kind,"version":version,"content_hash":content.content_hash,"size_bytes":content.normalized_text.len()})).await?;
+        insert_intake_event(&mut tx, actor, "source_content", content_id, source_id, "content_version_created", revision + 1, batch, "content", &content.client_key, json!({"content_kind":content.content_kind,"version":version,"content_sha256":content.content_sha256,"size_bytes":content.normalized_text.len()})).await?;
     }
     for connection in &batch.request.connections {
         let id = batch.connection_ids[&connection.client_key];

@@ -46,18 +46,20 @@
               "byline": "Fixture Research Team",
               "publisher": "Fixture Research",
               "published_at": null,
-              "accessed_at": null,
-              "language": "en",
-              "media_type": "text/plain",
-              "artifact_reference": "artifact:synthetic-report",
-              "content_hash": null,
+              "published_at_precision": null,
+              "last_accessed_at": null,
+              "original_language": "en",
+              "original_media_type": "text/plain",
+              "original_artifact_reference": "artifact:synthetic-report",
               "content": {
                 "content_kind": "document_text",
                 "normalized_text": "This synthetic report states that fictional demand increased during the test period.",
                 "language": "en",
                 "extraction_method": "explicit_message_evidence",
                 "extraction_version": "1",
-                "artifact_reference": null,
+                "capture_artifact_reference": null,
+                "coverage": "complete",
+                "captured_at": "2026-08-28T00:00:00Z",
                 "locators": {"page": 1}
               }
             }

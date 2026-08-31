@@ -13,6 +13,7 @@ const typeVisuals: Record<ObjectKind, { icon: string; label: string }> = {
 };
 
 const statusVisuals: Record<TaskStatus, { icon: string; label: string }> = {
+  backlog: { icon: "◌", label: "Backlog" },
   todo: { icon: "○", label: "To do" },
   doing: { icon: "◐", label: "Doing" },
   blocked: { icon: "!", label: "Blocked" },

@@ -66,6 +66,7 @@ pub struct CreateObject {
     pub title: String,
     pub description: String,
     pub supporting_message_ids: Vec<Uuid>,
+    pub entity_kind: Option<String>,
     pub task: Option<TaskFields>,
     pub memory: Option<MemoryFields>,
     #[serde(default)]
@@ -91,9 +92,12 @@ pub struct TaskFields {
     pub priority: String,
     pub owner_object_id: Option<Uuid>,
     #[serde(default)]
-    pub agent_eligible: bool,
+    pub agent_suitable: bool,
+    pub blocked_reason: Option<String>,
     #[serde(with = "time::serde::rfc3339::option", default)]
     pub due_at: Option<OffsetDateTime>,
+    pub github_issue_url: Option<String>,
+    pub brief_markdown: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -104,11 +108,20 @@ pub struct TaskPatch {
     pub owner_object_id: Option<Uuid>,
     #[serde(default)]
     pub clear_owner: bool,
-    pub agent_eligible: Option<bool>,
+    pub agent_suitable: Option<bool>,
+    pub blocked_reason: Option<String>,
+    #[serde(default)]
+    pub clear_blocked_reason: bool,
     #[serde(with = "time::serde::rfc3339::option", default)]
     pub due_at: Option<OffsetDateTime>,
     #[serde(default)]
     pub clear_due_at: bool,
+    pub github_issue_url: Option<String>,
+    #[serde(default)]
+    pub clear_github_issue_url: bool,
+    pub brief_markdown: Option<String>,
+    #[serde(default)]
+    pub clear_brief_markdown: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -126,12 +139,12 @@ pub struct SourceFields {
     pub publisher: Option<String>,
     #[serde(with = "time::serde::rfc3339::option", default)]
     pub published_at: Option<OffsetDateTime>,
+    pub published_at_precision: Option<String>,
     #[serde(with = "time::serde::rfc3339::option", default)]
-    pub accessed_at: Option<OffsetDateTime>,
-    pub language: Option<String>,
-    pub media_type: Option<String>,
-    pub artifact_reference: Option<String>,
-    pub content_hash: Option<String>,
+    pub last_accessed_at: Option<OffsetDateTime>,
+    pub original_language: Option<String>,
+    pub original_media_type: Option<String>,
+    pub original_artifact_reference: Option<String>,
     pub content: Option<SourceContentFields>,
 }
 
@@ -142,7 +155,10 @@ pub struct SourceContentFields {
     pub language: Option<String>,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
-    pub artifact_reference: Option<String>,
+    pub capture_artifact_reference: Option<String>,
+    pub coverage: String,
+    #[serde(with = "time::serde::rfc3339::option", default)]
+    pub captured_at: Option<OffsetDateTime>,
     #[serde(default = "empty_object")]
     pub locators: Value,
 }
@@ -201,7 +217,7 @@ pub struct CuratorRun {
     pub committed_plan: Option<Value>,
     pub result: Option<Value>,
     #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
+    pub queued_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -224,8 +240,12 @@ struct CurrentObject {
     status: Option<String>,
     priority: Option<String>,
     owner_object_id: Option<Uuid>,
-    agent_eligible: Option<bool>,
+    agent_suitable: Option<bool>,
+    blocked_reason: Option<String>,
     due_at: Option<OffsetDateTime>,
+    completed_at: Option<OffsetDateTime>,
+    github_issue_url: Option<String>,
+    brief_markdown: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -354,7 +374,7 @@ pub async fn get_run(pool: &PgPool, id: Uuid) -> Result<CuratorRun, CuratorError
     sqlx::query_as(
         r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
                   idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  created_at,started_at,completed_at,reversed_at,error_message
+                  queued_at,started_at,completed_at,reversed_at,error_message
            FROM curator_runs WHERE id=$1"#,
     )
     .bind(id)
@@ -367,8 +387,8 @@ pub async fn list_runs(pool: &PgPool, limit: i64) -> Result<Vec<CuratorRun>, Cur
     Ok(sqlx::query_as(
         r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
                   idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  created_at,started_at,completed_at,reversed_at,error_message
-           FROM curator_runs ORDER BY created_at DESC,id DESC LIMIT $1"#,
+                  queued_at,started_at,completed_at,reversed_at,error_message
+           FROM curator_runs ORDER BY queued_at DESC,id DESC LIMIT $1"#,
     )
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
@@ -380,14 +400,14 @@ pub async fn run_detail(pool: &PgPool, id: Uuid) -> Result<CuratorRunDetail, Cur
     let messages: Vec<crate::db::ChatMessage> = sqlx::query_as(
         r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
                   o.title AS sender_title,u.user_kind AS sender_kind,m.content,
-                  m.source_created_at,m.ingested_sequence,m.ingested_at
+                  m.source_created_at,m.ingestion_sequence,m.ingested_at
            FROM chat_messages m
            JOIN users u ON u.object_id=m.sender_user_object_id
            JOIN objects o ON o.id=u.object_id
-           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
-             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
-             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
-           ORDER BY m.ingested_sequence"#,
+           WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
+             (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingestion_sequence"#,
     )
     .bind(run.chat_object_id)
     .bind(run.first_message_id)
@@ -691,7 +711,7 @@ async fn reconcile_owned(
         r#"UPDATE curator_runs SET status='completed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
                   committed_plan=$2,result=$3,error_message=NULL WHERE id=$1"#,
     ).bind(run_id).bind(&plan_json).bind(&result).execute(&mut *tx).await?;
-    sqlx::query("UPDATE chats SET last_curated_message_id=$2,updated_at=now() WHERE object_id=$1")
+    sqlx::query("UPDATE chats SET curated_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
         .bind(run.chat_object_id)
         .bind(run.last_message_id)
         .execute(&mut *tx)
@@ -793,19 +813,6 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         ));
     }
     let mut clients = HashSet::new();
-    let primary_memories = plan
-        .create_objects
-        .iter()
-        .filter(|item| {
-            item.kind.trim().eq_ignore_ascii_case("memory")
-                && item.memory.as_ref().is_some_and(|m| m.primary_event)
-        })
-        .count();
-    if primary_memories != 1 {
-        return Err(CuratorError::Invalid(
-            "each curator run must create exactly one primary event Memory".into(),
-        ));
-    }
     for item in &mut plan.create_objects {
         item.client_id = required_text(std::mem::take(&mut item.client_id), "client_id", 100)
             .map_err(invalid)?;
@@ -831,7 +838,7 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                     CuratorError::Invalid("Task creation requires task fields".into())
                 })?;
                 validate_task_fields(task)?;
-                if item.memory.is_some() {
+                if item.entity_kind.is_some() || item.memory.is_some() {
                     return Err(CuratorError::Invalid(
                         "Task creation cannot include memory fields".into(),
                     ));
@@ -843,14 +850,18 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                 }
             }
             "memory" => {
-                if item.memory.is_none() || item.task.is_some() || item.source.is_some() {
+                if item.entity_kind.is_some()
+                    || item.memory.is_none()
+                    || item.task.is_some()
+                    || item.source.is_some()
+                {
                     return Err(CuratorError::Invalid(
                         "Memory creation requires only memory fields".into(),
                     ));
                 }
             }
             "source" => {
-                if item.task.is_some() || item.memory.is_some() {
+                if item.entity_kind.is_some() || item.task.is_some() || item.memory.is_some() {
                     return Err(CuratorError::Invalid(
                         "Source creation requires only source fields".into(),
                     ));
@@ -859,12 +870,33 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                     CuratorError::Invalid("Source creation requires source fields".into())
                 })?)?;
             }
-            _ if item.task.is_some() || item.memory.is_some() || item.source.is_some() => {
-                return Err(CuratorError::Invalid(
-                    "Entity creation cannot include typed fields".into(),
-                ));
+            "entity" => {
+                if item.task.is_some() || item.memory.is_some() || item.source.is_some() {
+                    return Err(CuratorError::Invalid(
+                        "Entity creation cannot include other typed fields".into(),
+                    ));
+                }
+                item.entity_kind = Some(
+                    allowed(
+                        item.entity_kind.take().ok_or_else(|| {
+                            CuratorError::Invalid("Entity creation requires entity_kind".into())
+                        })?,
+                        "entity_kind",
+                        &[
+                            "person",
+                            "organization",
+                            "product",
+                            "project",
+                            "publication",
+                            "place",
+                            "concept",
+                            "other",
+                        ],
+                    )
+                    .map_err(invalid)?,
+                );
             }
-            _ => {}
+            _ => unreachable!(),
         }
     }
     let mut updated_object_ids = HashSet::new();
@@ -911,6 +943,37 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
             if task.clear_due_at && task.due_at.is_some() {
                 return Err(CuratorError::Invalid(
                     "clear_due_at conflicts with due_at".into(),
+                ));
+            }
+            task.blocked_reason = optional_text(task.blocked_reason.take(), "blocked_reason", 2000)
+                .map_err(invalid)?;
+            if task.clear_blocked_reason && task.blocked_reason.is_some() {
+                return Err(CuratorError::Invalid(
+                    "clear_blocked_reason conflicts with blocked_reason".into(),
+                ));
+            }
+            if task.status.as_deref() == Some("blocked")
+                && (task.clear_blocked_reason || task.blocked_reason.is_none())
+            {
+                return Err(CuratorError::Invalid(
+                    "blocked Task updates require blocked_reason".into(),
+                ));
+            }
+            task.github_issue_url =
+                optional_text(task.github_issue_url.take(), "github_issue_url", 2000)
+                    .map_err(invalid)?;
+            validate_github_issue_url(task.github_issue_url.as_deref())?;
+            if task.clear_github_issue_url && task.github_issue_url.is_some() {
+                return Err(CuratorError::Invalid(
+                    "clear_github_issue_url conflicts with github_issue_url".into(),
+                ));
+            }
+            task.brief_markdown =
+                optional_text(task.brief_markdown.take(), "brief_markdown", 100_000)
+                    .map_err(invalid)?;
+            if task.clear_brief_markdown && task.brief_markdown.is_some() {
+                return Err(CuratorError::Invalid(
+                    "clear_brief_markdown conflicts with brief_markdown".into(),
                 ));
             }
         }
@@ -987,24 +1050,37 @@ fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError>
     }
     source.byline = optional_text(source.byline.take(), "byline", 500).map_err(invalid)?;
     source.publisher = optional_text(source.publisher.take(), "publisher", 300).map_err(invalid)?;
-    source.language = optional_text(source.language.take(), "language", 35).map_err(invalid)?;
-    source.media_type =
-        optional_text(source.media_type.take(), "media_type", 255).map_err(invalid)?;
-    source.artifact_reference =
-        optional_text(source.artifact_reference.take(), "artifact_reference", 1000)
-            .map_err(invalid)?;
-    source.content_hash =
-        optional_text(source.content_hash.take(), "content_hash", 64).map_err(invalid)?;
-    if source.content_hash.as_ref().is_some_and(|hash| {
-        hash.len() != 64
-            || !hash
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    }) {
+    source.published_at_precision = source
+        .published_at_precision
+        .take()
+        .map(|value| {
+            allowed(
+                value,
+                "published_at_precision",
+                &["instant", "day", "month", "year"],
+            )
+        })
+        .transpose()
+        .map_err(invalid)?;
+    if source.published_at.is_some() != source.published_at_precision.is_some() {
         return Err(CuratorError::Invalid(
-            "content_hash must be a lowercase SHA-256 hex digest".into(),
+            "published_at and published_at_precision must be provided together".into(),
         ));
     }
+    source.original_language =
+        optional_text(source.original_language.take(), "original_language", 35).map_err(invalid)?;
+    source.original_media_type = optional_text(
+        source.original_media_type.take(),
+        "original_media_type",
+        255,
+    )
+    .map_err(invalid)?;
+    source.original_artifact_reference = optional_text(
+        source.original_artifact_reference.take(),
+        "original_artifact_reference",
+        1000,
+    )
+    .map_err(invalid)?;
     if let Some(content) = &mut source.content {
         content.content_kind = allowed(
             std::mem::take(&mut content.content_kind),
@@ -1026,10 +1102,16 @@ fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError>
         content.extraction_version =
             optional_text(content.extraction_version.take(), "extraction_version", 100)
                 .map_err(invalid)?;
-        content.artifact_reference = optional_text(
-            content.artifact_reference.take(),
-            "artifact_reference",
+        content.capture_artifact_reference = optional_text(
+            content.capture_artifact_reference.take(),
+            "capture_artifact_reference",
             1000,
+        )
+        .map_err(invalid)?;
+        content.coverage = allowed(
+            std::mem::take(&mut content.coverage),
+            "coverage",
+            &["complete", "partial", "unknown"],
         )
         .map_err(invalid)?;
         if !content.locators.is_object() {
@@ -1059,6 +1141,39 @@ fn validate_task_fields(task: &mut TaskFields) -> Result<(), CuratorError> {
         TASK_PRIORITIES,
     )
     .map_err(invalid)?;
+    task.blocked_reason =
+        optional_text(task.blocked_reason.take(), "blocked_reason", 2000).map_err(invalid)?;
+    if (task.status == "blocked") != task.blocked_reason.is_some() {
+        return Err(CuratorError::Invalid(
+            "blocked_reason is required exactly when status is blocked".into(),
+        ));
+    }
+    task.github_issue_url =
+        optional_text(task.github_issue_url.take(), "github_issue_url", 2000).map_err(invalid)?;
+    validate_github_issue_url(task.github_issue_url.as_deref())?;
+    task.brief_markdown =
+        optional_text(task.brief_markdown.take(), "brief_markdown", 100_000).map_err(invalid)?;
+    Ok(())
+}
+
+fn validate_github_issue_url(value: Option<&str>) -> Result<(), CuratorError> {
+    if let Some(url) = value {
+        let valid = url
+            .strip_prefix("https://github.com/")
+            .map(|path| path.split('/').collect::<Vec<_>>())
+            .is_some_and(|parts| {
+                parts.len() == 4
+                    && !parts[0].is_empty()
+                    && !parts[1].is_empty()
+                    && parts[2] == "issues"
+                    && parts[3].parse::<u64>().is_ok_and(|number| number > 0)
+            });
+        if !valid {
+            return Err(CuratorError::Invalid(
+                "github_issue_url must be a canonical HTTPS GitHub Issue URL".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1083,7 +1198,7 @@ async fn lock_run(
     sqlx::query_as(
         r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
                   idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  created_at,started_at,completed_at,reversed_at,error_message
+                  queued_at,started_at,completed_at,reversed_at,error_message
            FROM curator_runs WHERE id=$1 FOR UPDATE"#,
     )
     .bind(id)
@@ -1098,10 +1213,10 @@ async fn load_message_window(
 ) -> Result<HashSet<Uuid>, CuratorError> {
     let ids: Vec<Uuid> = sqlx::query_scalar(
         r#"SELECT m.id FROM chat_messages m
-           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
-             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
-             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
-           ORDER BY m.ingested_sequence"#,
+           WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
+             (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingestion_sequence"#,
     )
     .bind(run.chat_object_id)
     .bind(run.first_message_id)
@@ -1219,11 +1334,29 @@ async fn insert_object(
             if let Some(owner_id) = task.owner_object_id {
                 ensure_user(tx, owner_id).await?;
             }
-            sqlx::query("INSERT INTO tasks (object_id,status,priority,owner_object_id,agent_eligible,due_at) VALUES ($1,$2,$3,$4,$5,$6)").bind(id).bind(&task.status).bind(&task.priority).bind(task.owner_object_id).bind(task.agent_eligible).bind(task.due_at).execute(&mut **tx).await?;
+            sqlx::query(
+                r#"INSERT INTO tasks
+                (object_id,status,priority,owner_object_id,agent_suitable,blocked_reason,
+                 due_at,completed_at,github_issue_url,brief_markdown)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
+            )
+            .bind(id)
+            .bind(&task.status)
+            .bind(&task.priority)
+            .bind(task.owner_object_id)
+            .bind(task.agent_suitable)
+            .bind(&task.blocked_reason)
+            .bind(task.due_at)
+            .bind((task.status == "done").then(OffsetDateTime::now_utc))
+            .bind(&task.github_issue_url)
+            .bind(&task.brief_markdown)
+            .execute(&mut **tx)
+            .await?;
         }
         "entity" => {
-            sqlx::query("INSERT INTO entities (object_id) VALUES ($1)")
+            sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
                 .bind(id)
+                .bind(item.entity_kind.as_deref().expect("validated"))
                 .execute(&mut **tx)
                 .await?;
         }
@@ -1236,23 +1369,51 @@ async fn insert_object(
         }
         "source" => {
             let source = item.source.as_ref().expect("validated");
-            sqlx::query(r#"INSERT INTO sources
-                (object_id,source_kind,canonical_uri,byline,publisher,published_at,accessed_at,language,media_type,artifact_reference,content_hash)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#)
-                .bind(id).bind(&source.source_kind).bind(&source.canonical_uri).bind(&source.byline)
-                .bind(&source.publisher).bind(source.published_at).bind(source.accessed_at)
-                .bind(&source.language).bind(&source.media_type).bind(&source.artifact_reference)
-                .bind(&source.content_hash).execute(&mut **tx).await?;
+            sqlx::query(
+                r#"INSERT INTO sources
+                (object_id,source_kind,canonical_uri,byline,publisher,published_at,
+                 published_at_precision,last_accessed_at,original_language,
+                 original_media_type,original_artifact_reference)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
+            )
+            .bind(id)
+            .bind(&source.source_kind)
+            .bind(&source.canonical_uri)
+            .bind(&source.byline)
+            .bind(&source.publisher)
+            .bind(source.published_at)
+            .bind(&source.published_at_precision)
+            .bind(source.last_accessed_at)
+            .bind(&source.original_language)
+            .bind(&source.original_media_type)
+            .bind(&source.original_artifact_reference)
+            .execute(&mut **tx)
+            .await?;
             if let Some(content) = &source.content {
                 let content_id = Uuid::new_v4();
                 let hash = format!("{:x}", Sha256::digest(content.normalized_text.as_bytes()));
-                sqlx::query(r#"INSERT INTO source_contents
-                    (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,extraction_version,content_hash,size_bytes,artifact_reference,locators)
-                    VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#)
-                    .bind(content_id).bind(id).bind(&content.content_kind).bind(&content.normalized_text)
-                    .bind(&content.language).bind(&content.extraction_method).bind(&content.extraction_version)
-                    .bind(hash).bind(content.normalized_text.len() as i64).bind(&content.artifact_reference)
-                    .bind(&content.locators).execute(&mut **tx).await?;
+                sqlx::query(
+                    r#"INSERT INTO source_contents
+                    (id,source_object_id,version,content_kind,normalized_text,language,
+                     extraction_method,extraction_version,content_sha256,size_bytes,
+                     capture_artifact_reference,coverage,captured_at,locators)
+                    VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+                )
+                .bind(content_id)
+                .bind(id)
+                .bind(&content.content_kind)
+                .bind(&content.normalized_text)
+                .bind(&content.language)
+                .bind(&content.extraction_method)
+                .bind(&content.extraction_version)
+                .bind(hash)
+                .bind(content.normalized_text.len() as i64)
+                .bind(&content.capture_artifact_reference)
+                .bind(&content.coverage)
+                .bind(content.captured_at)
+                .bind(&content.locators)
+                .execute(&mut **tx)
+                .await?;
                 sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
                     .bind(id)
                     .bind(content_id)
@@ -1270,8 +1431,9 @@ async fn current_object(
     id: Uuid,
 ) -> Result<CurrentObject, CuratorError> {
     sqlx::query_as(
-        r#"SELECT o.id,o.kind,o.title,o.description,o.protected,o.lifecycle,o.revision,o.provenance,
-                  t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at
+        r#"SELECT o.id,o.kind,o.title,o.description,o.protected,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,
+                  t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
+                  t.completed_at,t.github_issue_url,t.brief_markdown
            FROM objects o LEFT JOIN tasks t ON t.object_id=o.id WHERE o.id=$1 FOR UPDATE OF o"#,
     )
     .bind(id)
@@ -1281,7 +1443,7 @@ async fn current_object(
 }
 
 fn current_object_json(o: &CurrentObject) -> Value {
-    json!({"id":o.id,"kind":o.kind,"title":o.title,"description":o.description,"protected":o.protected,"lifecycle":o.lifecycle,"revision":o.revision,"provenance":o.provenance,"status":o.status,"priority":o.priority,"owner_object_id":o.owner_object_id,"agent_eligible":o.agent_eligible,"due_at":o.due_at})
+    json!({"id":o.id,"kind":o.kind,"title":o.title,"description":o.description,"protected":o.protected,"lifecycle":o.lifecycle,"revision":o.revision,"provenance":o.provenance,"status":o.status,"priority":o.priority,"owner_object_id":o.owner_object_id,"agent_suitable":o.agent_suitable,"blocked_reason":o.blocked_reason,"due_at":o.due_at,"completed_at":o.completed_at,"github_issue_url":o.github_issue_url,"brief_markdown":o.brief_markdown})
 }
 
 async fn update_object(
@@ -1293,7 +1455,7 @@ async fn update_object(
     let result = sqlx::query(
         r#"UPDATE objects SET title=COALESCE($3,title),description=COALESCE($4,description),provenance=$5,
                   revision=revision+1,updated_by_type='system',updated_by_id='context-curator',updated_at=now()
-           WHERE id=$1 AND revision=$2 AND lifecycle='active' AND protected=false"#,
+           WHERE id=$1 AND revision=$2 AND archived_at IS NULL AND protected=false"#,
     ).bind(item.object_id).bind(item.expected_revision).bind(&item.title).bind(&item.description).bind(provenance).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
@@ -1313,10 +1475,58 @@ async fn update_object(
         } else {
             task.due_at.or(current.due_at)
         };
+        let status = task
+            .status
+            .as_deref()
+            .or(current.status.as_deref())
+            .expect("Task status");
+        let blocked_reason = if status == "blocked" {
+            if task.clear_blocked_reason {
+                return Err(CuratorError::Invalid(
+                    "a blocked Task cannot clear blocked_reason".into(),
+                ));
+            }
+            task.blocked_reason
+                .as_deref()
+                .or(current.blocked_reason.as_deref())
+                .ok_or_else(|| {
+                    CuratorError::Invalid("a blocked Task requires blocked_reason".into())
+                })?
+                .to_owned()
+                .into()
+        } else {
+            None
+        };
+        let completed_at = if status == "done" {
+            current
+                .completed_at
+                .or_else(|| Some(OffsetDateTime::now_utc()))
+        } else {
+            None
+        };
+        let github_issue_url = if task.clear_github_issue_url {
+            None
+        } else {
+            task.github_issue_url
+                .as_deref()
+                .or(current.github_issue_url.as_deref())
+                .map(str::to_owned)
+        };
+        let brief_markdown = if task.clear_brief_markdown {
+            None
+        } else {
+            task.brief_markdown
+                .as_deref()
+                .or(current.brief_markdown.as_deref())
+                .map(str::to_owned)
+        };
         sqlx::query(
             r#"UPDATE tasks SET status=COALESCE($2,status),priority=COALESCE($3,priority),owner_object_id=$4,
-                  agent_eligible=COALESCE($5,agent_eligible),due_at=$6,updated_at=now() WHERE object_id=$1"#,
-        ).bind(item.object_id).bind(&task.status).bind(&task.priority).bind(owner).bind(task.agent_eligible).bind(due).execute(&mut **tx).await?;
+                  agent_suitable=COALESCE($5,agent_suitable),blocked_reason=$6,due_at=$7,
+                  completed_at=$8,github_issue_url=$9,brief_markdown=$10 WHERE object_id=$1"#,
+        ).bind(item.object_id).bind(&task.status).bind(&task.priority).bind(owner)
+            .bind(task.agent_suitable).bind(&blocked_reason).bind(due).bind(completed_at)
+            .bind(&github_issue_url).bind(&brief_markdown).execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -1326,7 +1536,7 @@ async fn ensure_active_object(
     id: Uuid,
 ) -> Result<(), CuratorError> {
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND lifecycle='active')",
+        "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND archived_at IS NULL)",
     )
     .bind(id)
     .fetch_one(&mut **tx)
@@ -1340,7 +1550,7 @@ async fn ensure_active_object(
 
 async fn ensure_user(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(), CuratorError> {
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM objects o JOIN users u ON u.object_id=o.id WHERE o.id=$1 AND o.lifecycle='active')",
+        "SELECT EXISTS(SELECT 1 FROM objects o JOIN users u ON u.object_id=o.id WHERE o.id=$1 AND o.archived_at IS NULL)",
     )
     .bind(id)
     .fetch_one(&mut **tx)
@@ -1486,7 +1696,7 @@ async fn archive_created_object(
     if active_edges {
         return Err(CuratorError::Conflict);
     }
-    let result = sqlx::query("UPDATE objects SET lifecycle='archived',archived_at=now(),revision=revision+1,updated_by_type=$3,updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+    let result = sqlx::query("UPDATE objects SET archived_at=now(),revision=revision+1,updated_by_type=$3,updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
         .bind(change.entity_id).bind(change.after_revision).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
@@ -1520,7 +1730,7 @@ async fn restore_object(
         .before_state
         .as_ref()
         .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
-    let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now() WHERE id=$1 AND revision=$2 AND lifecycle='active'")
+    let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
         .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
@@ -1538,8 +1748,34 @@ async fn restore_object(
             .map(|v| OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339))
             .transpose()
             .map_err(|_| CuratorError::Invalid("invalid due_at in journal".into()))?;
-        sqlx::query("UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,agent_eligible=$5,due_at=$6,updated_at=now() WHERE object_id=$1")
-            .bind(change.entity_id).bind(value_str(before,"status")?).bind(value_str(before,"priority")?).bind(owner).bind(before.get("agent_eligible").and_then(Value::as_bool).unwrap_or(false)).bind(due).execute(&mut **tx).await?;
+        let completed_at = before
+            .get("completed_at")
+            .and_then(Value::as_str)
+            .map(|v| OffsetDateTime::parse(v, &time::format_description::well_known::Rfc3339))
+            .transpose()
+            .map_err(|_| CuratorError::Invalid("invalid completed_at in journal".into()))?;
+        sqlx::query(
+            r#"UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,
+            agent_suitable=$5,blocked_reason=$6,due_at=$7,completed_at=$8,
+            github_issue_url=$9,brief_markdown=$10 WHERE object_id=$1"#,
+        )
+        .bind(change.entity_id)
+        .bind(value_str(before, "status")?)
+        .bind(value_str(before, "priority")?)
+        .bind(owner)
+        .bind(
+            before
+                .get("agent_suitable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .bind(before.get("blocked_reason").and_then(Value::as_str))
+        .bind(due)
+        .bind(completed_at)
+        .bind(before.get("github_issue_url").and_then(Value::as_str))
+        .bind(before.get("brief_markdown").and_then(Value::as_str))
+        .execute(&mut **tx)
+        .await?;
     }
     Ok(())
 }
@@ -1715,7 +1951,7 @@ async fn claim_run(
                    (status IN ('queued','failed') AND available_at <= now())
                    OR (status='running' AND lease_started_at < now() - interval '10 minutes')
                  )
-               ORDER BY available_at,created_at,id
+               ORDER BY available_at,queued_at,id
                FOR UPDATE SKIP LOCKED
                LIMIT 1
            )
@@ -1726,7 +1962,7 @@ async fn claim_run(
            FROM candidate c WHERE r.id=c.id
            RETURNING r.id,r.chat_object_id,r.first_message_id,r.last_message_id,r.trigger,r.status,
                      r.message_count,r.idempotency_key,r.attempts,r.worker_id,r.model,r.prompt_version,
-                     r.proposed_plan,r.committed_plan,r.result,r.created_at,r.started_at,r.completed_at,
+                     r.proposed_plan,r.committed_plan,r.result,r.queued_at,r.started_at,r.completed_at,
                      r.reversed_at,r.error_message"#,
     )
     .bind(worker_id)
@@ -1750,10 +1986,10 @@ async fn worker_context(
            FROM chat_messages m
            JOIN objects o ON o.id=m.sender_user_object_id
            JOIN users u ON u.object_id=m.sender_user_object_id
-           WHERE m.chat_object_id=$1 AND m.ingested_sequence BETWEEN
-             (SELECT ingested_sequence FROM chat_messages WHERE id=$2)
-             AND (SELECT ingested_sequence FROM chat_messages WHERE id=$3)
-           ORDER BY m.ingested_sequence"#,
+           WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
+             (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
+             AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3)
+           ORDER BY m.ingestion_sequence"#,
     )
     .bind(run.chat_object_id)
     .bind(run.first_message_id)
@@ -1814,9 +2050,9 @@ async fn request_plan(
 {"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
 
 Every create_objects entry MUST contain all of these fields:
-{"client_id":"unique-local-name","kind":"memory|task|entity|source","title":"...","description":"...","supporting_message_ids":["UUID"],"task":null,"memory":null,"source":null}.
-client_id is a short unique name used only to reference that new Object from create_connections. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"todo|doing|blocked|review|done","priority":"low|medium|high|urgent","owner_object_id":null,"agent_eligible":false,"due_at":null}.
-For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast|video|book|report|document|dataset|web_page|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"accessed_at":null,"language":null,"media_type":null,"artifact_reference":null,"content_hash":null,"content":null}. Optional content is {"content_kind":"article_text|transcript|paper_text|document_text|dataset_description|other","normalized_text":"...","language":null,"extraction_method":null,"extraction_version":null,"artifact_reference":null,"locators":{}}. Use only text explicitly present in the evidence; never fetch or invent source content.
+{"client_id":"unique-local-name","kind":"memory|task|entity|source","title":"...","description":"...","supporting_message_ids":["UUID"],"entity_kind":null,"task":null,"memory":null,"source":null}.
+client_id is a short unique name used only to reference that new Object from create_connections. For an Entity, set entity_kind to person|organization|product|project|publication|place|concept|other. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"backlog|todo|doing|review|done|blocked","priority":"low|medium|high","owner_object_id":null,"agent_suitable":false,"blocked_reason":null,"due_at":null,"github_issue_url":null,"brief_markdown":null}; blocked_reason is required exactly for blocked Tasks.
+For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast_episode|video|book|report|document|dataset|web_page|social_post|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":null,"original_media_type":null,"original_artifact_reference":null,"content":null}. Optional content is {"content_kind":"article_text|transcript|paper_text|document_text|dataset_description|other","normalized_text":"...","language":null,"extraction_method":null,"extraction_version":null,"capture_artifact_reference":null,"coverage":"unknown","captured_at":null,"locators":{}}. Use only text explicitly present in the evidence; never fetch or invent source content.
 
 Every update_objects entry MUST contain all of these fields:
 {"object_id":"UUID","expected_revision":1,"title":null,"description":null,"supporting_message_ids":["UUID"],"task":null}.
@@ -1825,7 +2061,7 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Every run creates exactly one primary event Memory with kind=memory. Create additional Memories only for clearly separate events. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; record the request in the primary Memory because the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must name the specific subject and state the concrete fact, event, responsibility, identity, or outcome in one or two plain-language sentences. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Create zero or more Memories: only create a Memory for a concrete event or insight worth retaining, and use primary_event=true for at most one central event. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -2057,21 +2293,26 @@ fn reconciliation_plan_schema() -> Value {
             "message_ids": {"type": "array", "items": {"$ref": "#/$defs/uuid"}},
             "task_fields": {
                 "type": "object", "additionalProperties": false,
-                "required": ["confirmed", "status", "priority", "owner_object_id", "agent_eligible", "due_at"],
+                "required": ["confirmed", "status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "github_issue_url", "brief_markdown"],
                 "properties": {
                     "confirmed": {"type": "boolean"}, "status": {"type": "string"},
                     "priority": {"type": "string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
-                    "agent_eligible": {"type": "boolean"}, "due_at": {"$ref": "#/$defs/nullable_string"}
+                    "agent_suitable": {"type": "boolean"}, "blocked_reason": {"$ref": "#/$defs/nullable_string"},
+                    "due_at": {"$ref": "#/$defs/nullable_string"}, "github_issue_url": {"$ref": "#/$defs/nullable_string"},
+                    "brief_markdown": {"$ref": "#/$defs/nullable_string"}
                 }
             },
             "task_patch": {
                 "type": "object", "additionalProperties": false,
-                "required": ["confirmed", "status", "priority", "owner_object_id", "clear_owner", "agent_eligible", "due_at", "clear_due_at"],
+                "required": ["confirmed", "status", "priority", "owner_object_id", "clear_owner", "agent_suitable", "blocked_reason", "clear_blocked_reason", "due_at", "clear_due_at", "github_issue_url", "clear_github_issue_url", "brief_markdown", "clear_brief_markdown"],
                 "properties": {
                     "confirmed": {"type": "boolean"}, "status": {"$ref": "#/$defs/nullable_string"},
                     "priority": {"$ref": "#/$defs/nullable_string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
-                    "clear_owner": {"type": "boolean"}, "agent_eligible": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
-                    "due_at": {"$ref": "#/$defs/nullable_string"}, "clear_due_at": {"type": "boolean"}
+                    "clear_owner": {"type": "boolean"}, "agent_suitable": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+                    "blocked_reason": {"$ref": "#/$defs/nullable_string"}, "clear_blocked_reason": {"type": "boolean"},
+                    "due_at": {"$ref": "#/$defs/nullable_string"}, "clear_due_at": {"type": "boolean"},
+                    "github_issue_url": {"$ref": "#/$defs/nullable_string"}, "clear_github_issue_url": {"type": "boolean"},
+                    "brief_markdown": {"$ref": "#/$defs/nullable_string"}, "clear_brief_markdown": {"type": "boolean"}
                 }
             },
             "memory_fields": {
@@ -2081,23 +2322,25 @@ fn reconciliation_plan_schema() -> Value {
             },
             "source_content": {
                 "type": "object", "additionalProperties": false,
-                "required": ["content_kind", "normalized_text", "language", "extraction_method", "extraction_version", "artifact_reference", "locators"],
+                "required": ["content_kind", "normalized_text", "language", "extraction_method", "extraction_version", "capture_artifact_reference", "coverage", "captured_at", "locators"],
                 "properties": {
                     "content_kind": {"type": "string"}, "normalized_text": {"type": "string"},
                     "language": {"$ref": "#/$defs/nullable_string"}, "extraction_method": {"$ref": "#/$defs/nullable_string"},
-                    "extraction_version": {"$ref": "#/$defs/nullable_string"}, "artifact_reference": {"$ref": "#/$defs/nullable_string"},
+                    "extraction_version": {"$ref": "#/$defs/nullable_string"}, "capture_artifact_reference": {"$ref": "#/$defs/nullable_string"},
+                    "coverage": {"type": "string"}, "captured_at": {"$ref": "#/$defs/nullable_string"},
                     "locators": {"type": "object", "additionalProperties": false, "properties": {}}
                 }
             },
             "source_fields": {
                 "type": "object", "additionalProperties": false,
-                "required": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "accessed_at", "language", "media_type", "artifact_reference", "content_hash", "content"],
+                "required": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "published_at_precision", "last_accessed_at", "original_language", "original_media_type", "original_artifact_reference", "content"],
                 "properties": {
                     "source_kind": {"type": "string"}, "canonical_uri": {"$ref": "#/$defs/nullable_string"},
                     "byline": {"$ref": "#/$defs/nullable_string"}, "publisher": {"$ref": "#/$defs/nullable_string"},
-                    "published_at": {"$ref": "#/$defs/nullable_string"}, "accessed_at": {"$ref": "#/$defs/nullable_string"},
-                    "language": {"$ref": "#/$defs/nullable_string"}, "media_type": {"$ref": "#/$defs/nullable_string"},
-                    "artifact_reference": {"$ref": "#/$defs/nullable_string"}, "content_hash": {"$ref": "#/$defs/nullable_string"},
+                    "published_at": {"$ref": "#/$defs/nullable_string"}, "published_at_precision": {"$ref": "#/$defs/nullable_string"},
+                    "last_accessed_at": {"$ref": "#/$defs/nullable_string"},
+                    "original_language": {"$ref": "#/$defs/nullable_string"}, "original_media_type": {"$ref": "#/$defs/nullable_string"},
+                    "original_artifact_reference": {"$ref": "#/$defs/nullable_string"},
                     "content": {"anyOf": [{"$ref": "#/$defs/source_content"}, {"type": "null"}]}
                 }
             },
@@ -2109,10 +2352,11 @@ fn reconciliation_plan_schema() -> Value {
             },
             "create_object": {
                 "type": "object", "additionalProperties": false,
-                "required": ["client_id", "kind", "title", "description", "supporting_message_ids", "task", "memory", "source"],
+                "required": ["client_id", "kind", "title", "description", "supporting_message_ids", "entity_kind", "task", "memory", "source"],
                 "properties": {
                     "client_id": {"type": "string"}, "kind": {"type": "string"}, "title": {"type": "string"},
                     "description": {"type": "string"}, "supporting_message_ids": {"$ref": "#/$defs/message_ids"},
+                    "entity_kind": {"$ref": "#/$defs/nullable_string"},
                     "task": {"anyOf": [{"$ref": "#/$defs/task_fields"}, {"type": "null"}]},
                     "memory": {"anyOf": [{"$ref": "#/$defs/memory_fields"}, {"type": "null"}]},
                     "source": {"anyOf": [{"$ref": "#/$defs/source_fields"}, {"type": "null"}]}
@@ -2307,14 +2551,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_requires_one_primary_memory() {
+    fn plan_allows_work_without_a_memory() {
         let mut plan = ReconciliationPlan {
-            create_objects: vec![],
+            create_objects: vec![CreateObject {
+                client_id: "task".into(),
+                kind: "task".into(),
+                title: "A confirmed task".into(),
+                description:
+                    "A concrete confirmed task that does not require a fabricated event Memory."
+                        .into(),
+                supporting_message_ids: vec![Uuid::new_v4()],
+                entity_kind: None,
+                task: Some(TaskFields {
+                    confirmed: true,
+                    status: "todo".into(),
+                    priority: "medium".into(),
+                    owner_object_id: None,
+                    agent_suitable: false,
+                    blocked_reason: None,
+                    due_at: None,
+                    github_issue_url: None,
+                    brief_markdown: None,
+                }),
+                memory: None,
+                source: None,
+            }],
             update_objects: vec![],
             create_connections: vec![],
             update_connections: vec![],
         };
-        assert!(validate_plan(&mut plan).is_err());
+        assert!(validate_plan(&mut plan).is_ok());
     }
 
     #[test]
@@ -2324,8 +2590,11 @@ mod tests {
             status: "todo".into(),
             priority: "medium".into(),
             owner_object_id: None,
-            agent_eligible: false,
+            agent_suitable: false,
+            blocked_reason: None,
             due_at: None,
+            github_issue_url: None,
+            brief_markdown: None,
         };
         assert!(validate_task_fields(&mut task).is_err());
     }

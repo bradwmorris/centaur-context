@@ -99,7 +99,7 @@ Centaur Context centers everything important on one canonical `objects` record w
 - `entity`
 - `memory`
 
-Every Object has a mandatory concise description, lifecycle, optimistic revision, actor metadata, provenance, timestamps, and optional protection from curator changes. Task, Chat, User, Entity, and Memory records are one-to-one subtype rows keyed by the same canonical Object UUID. They are not separate competing identities.
+Every Object has a mandatory explicit description, optimistic revision, actor metadata, provenance, timestamps, an optional archive time, and optional protection from curator changes. The API derives active/archived lifecycle from that archive time. Task, Chat, User, Entity, Memory, Source, Note, and Theme records are one-to-one subtype rows keyed by the same canonical Object UUID. They are not separate competing identities.
 
 Connections join canonical Objects and must include both a controlled kind and a plain-language explanation. The MVP kinds are:
 

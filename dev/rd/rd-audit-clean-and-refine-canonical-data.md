@@ -1,20 +1,62 @@
 # RD: Audit, Clean, and Refine All Canonical Data
 
-**Status:** `backlog`
+**Status:** `in_progress`
 **Created:** 2026-08-30
+**GitHub Issue:** [#64](https://github.com/bradwmorris/centaur-context/issues/64)
 
 ## Execution Plan
 
 **Status:** `still needs work`
 
-**Basis checked:** Repository boundaries; migrations `0001`–`0011`; ontology,
+**Basis checked:** Repository boundaries; migrations `0001`–`0016`; ontology,
 schema/API/database/UI code; completed description, Schema visualizer,
 Source/Note, and POC-import RDs; and migration task
 `01a05018-465d-7bc1-9e95-906daa4fbe64`.
 
-**Missing:** A fresh authenticated read-only snapshot, Brad's review of the
-schema-cleanup proposals and Note wording, and approval for the resulting
-destructive schema/data change set.
+**Execution baseline:** Authenticated read-only inspection on 2026-08-31
+confirmed database schema version 15 and 24 registered application tables.
+Brad authorized end-to-end implementation on 2026-08-31. The exact hosted
+deletion/merge/write manifest and substantive Note wording remain behind the
+final approval boundary below.
+
+### Implementation checkpoint — 2026-08-31
+
+Schema version 16 is implemented on the issue branch, together with every known
+first-party consumer of the renamed or removed fields: Rust domain/database/API
+code, Slack ingestion, Curator, Note and Source intake, the standard payload
+contracts, the web application, tests, compatibility metadata, and ontology
+documentation. The migration has been replayed from migrations `0001`–`0016`
+on a fresh disposable PostgreSQL database. Representative legacy Entity, Task,
+Source, and Source Content rows migrated correctly, the migration's refusal
+guards rejected unclassified Entities and unevidenced blocked-Task reasons, and
+the four avatar fields remained present and unchanged.
+
+The read-only Schema workspace now exposes registered-table indexes and
+triggers and can run a separately requested exact column profile under a
+read-only transaction, registered-table allowlist, and two-second timeout. It
+reports unavailable results explicitly rather than substituting planner
+estimates. Kind-scoped cursor pagination now lets the UI retrieve every Object
+of a requested kind; this fixes the apparent loss of Entities without restoring
+or mutating any rows.
+
+Private snapshot-bound editorial manifests currently contain 116 Entity
+description proposals, 51 Note description proposals with Note bodies
+unchanged, 140 Source proposals, and 27 proposals across Users, Chats,
+Memories, Tasks, and Themes. The 15 formerly low-confidence Source proposals
+have now been researched individually to 12 high- and three medium-confidence
+descriptions. That research also identified case-damaged YouTube identifiers,
+one wrong Valar Atomics link and misspelled title, and an Engram title typo;
+these metadata corrections are separate from description edits and require
+fresh live-row validation.
+
+No hosted row has been written, archived, deleted, merged, or migrated. The
+editorial snapshots predate several newer Chat/Task rows, so a fresh
+authenticated API inventory and exact revision check are required before the
+final hosted manifest can be presented for approval.
+
+The temporary one-pass working ledger has been reconciled into this RD and
+removed. This file is now the single checked-in requirements and execution
+record.
 
 1. Inventory every schema object and value family; map consumers and classify
    each as required, rebuildable, redundant, low-quality, or uncertain.
@@ -30,12 +72,79 @@ destructive schema/data change set.
 5. Apply only the approved, reversible migration and bounded data changes;
    reconcile every row and run integrity, API, search, UI, and repository checks.
 
+## Table-by-Table Review Ledger
+
+Review structure and populated data separately, one table at a time. During
+review, make no schema or data changes. For each table, record its purpose,
+columns, constraints, indexes, triggers, consumers, keep/add/remove proposals,
+and the exact columns or value families requiring retrospective cleanup. Defer
+all approved structural and data changes into one reconciled forward-only
+migration and bounded cleanup manifest after every table has been reviewed.
+
+| Order | Table | Review status | Structure decision | Retrospective data focus |
+| ---: | --- | --- | --- | --- |
+| 1 | `objects` | `reviewed_implementing` | remove stored `lifecycle`; derive API value from `archived_at`; keep other reviewed fields; standardize provenance; keep search data generated | titles, descriptions, kinds, attribution, provenance, protection, archives, duplicates |
+| 2 | `users` | `reviewed` | keep `object_id`, `object_kind`, and stable `user_kind`; remove duplicate subtype timestamps | subtype completeness, human/agent classification, duplicate identities, references |
+| 3 | `external_identities` | `reviewed` | keep the table and working identity/avatar contract intact; consider only proven non-disruptive validation improvements | provider mappings, duplicates, names, asset hashes, provenance/licence, refresh timestamps, end-to-end avatar preservation |
+| 4 | `entities` | `reviewed` | keep subtype and Enyu Ops `image_url`; add required controlled `entity_kind`; remove duplicate subtype timestamps only after compatibility proof | classifications, descriptions, duplicates, User/person boundary, image references, synthetic acceptance row |
+| 5 | `tasks` | `reviewed` | keep `status` with `backlog`/`todo`/`doing`/`review`/`done`/`blocked`; add blocking reason, completion time, GitHub Issue URL, and Markdown brief; retain owner/priority/due/agent suitability; remove duplicate subtype timestamps after compatibility proof | statuses, blockers, completion events, owners, due dates, priority, agent suitability, evidenced Issue/RD links, synthetic acceptance task |
+| 6 | `chats` | `reviewed` | keep provider thread identity and channel metadata; remove redundant ingested pointer and creation time; rename source-time/queue/curation/processing fields explicitly; enforce same-Chat cursors; add narrowly scoped post-curation Chat summaries | provider identity, cursor ownership/order, channel names, participants, generic titles/descriptions, related outputs |
+| 7 | `chat_messages` | `reviewed` | retain immutable message evidence; rename `ingested_sequence` to `ingestion_sequence`; enforce same-Chat references; improve future Slack normalization without rewriting history | sender/Chat ownership, provider-ID uniqueness, source/ingestion timestamps, cursor/run boundaries, transport boilerplate |
+| 8 | `memories` | `reviewed` | retain event subtype and explicit `happened_at`; remove duplicate subtype timestamps and implicit current-time default; stop requiring one Memory per Curator run; order timelines by event time | event validity/value, evidenced occurrence time, descriptions, sequential attempts, likely low-value interactions |
+| 9 | `sources` | `reviewed` | retain bibliographic identity separately from versioned captured content; clarify URL/original-language/media/artifact names; add publication precision; remove duplicated content hash and subtype timestamps; normalize unique identities | canonical identity and semantic duplicates, bibliographic gaps, false timestamp precision, content pointers, generic or overlong descriptions |
+| 10 | `source_contents` | `reviewed_implementing` | retain immutable whole-capture versions; make content hash, artifact, provenance, capture/record time, kind, and completeness explicit; reject duplicate per-Source hashes | exact duplicate versions, capture completeness/kind, language, extraction lineage, artifacts, false locators |
+| 11 | `notes` | `reviewed_implementing` | retain Note content/format contract; remove duplicate subtype timestamps after compatibility proof | Brad-controlled body review, formatting, generic descriptions, protection, exact duplicates |
+| 12 | `themes` | `reviewed_implementing` | retain canonical Theme subtype and stable unique slug; remove duplicate subtype timestamps | taxonomy descriptions, slugs, duplicate/overlapping Themes, relationship coverage |
+| 13 | `connections` | `reviewed` | retain every column; explained, revisioned, attributable and protectable graph edges justify the current contract | semantic duplicates, weak descriptions, directions, kinds, provenance, endpoint validity |
+| 14 | `object_events` | `reviewed` | retain immutable audit table and every column; precise entity and parent Object identifiers are distinct | action/revision integrity, actor and execution provenance, idempotency, orphan semantic references |
+| 15 | `object_embedding_jobs` | `reviewed` | retain rebuildable operational queue and every column pending retrieval-strategy decision | 407 unattempted pending jobs, source-hash/format/mode consistency, worker readiness |
+| 16 | `object_embeddings` | `reviewed_implementing` | retain derived embedding store pending retrieval-strategy decision; remove only proven redundant index | currently empty; model/dimension/hash/format compatibility and rebuild proof |
+| 17 | `principal_permissions` | `reviewed` | retain explicit authorization contract and every column | sole Theme approver, principal validity, grant attribution |
+| 18 | `curator_runs` | `reviewed_implementing` | retain full queue/execution/plan/result record; rename creation time to queue time and enforce same-Chat message boundaries | statuses, retries, failures, time/lease invariants, message windows, plans/results/errors |
+| 19 | `curator_run_changes` | `reviewed` | retain exact before/after undo ledger and every column | sequence, revision, entity ownership, state accuracy, undo consistency |
+| 20 | `theme_proposals` | `reviewed` | retain empty governed proposal queue; it prevents agents from silently creating taxonomy entries | decision invariants, approver authorization, evidence/provenance, resulting Theme ownership |
+| 21 | `evals` | `reviewed` | retain evaluation lifecycle, annotation, sequence, identity, and timing fields | 55 unreviewed evals, completion/error consistency, actor/run/Chat links, annotation backlog |
+| 22 | `eval_objects` | `reviewed` | retain evaluation-to-Object role links and every column | role accuracy, link completeness, reverse lookup, large legacy/import sets |
+| 23 | `eval_trace_entries` | `reviewed_implementing` | retain provider-independent trace and usage fields; remove only proven redundant index | trace ordering, model-attempt identity, token/cost completeness, nullable-mode correctness, facts size |
+| 24 | `external_actions` | `reviewed` | retain the durable external-side-effect ledger and all columns; its operational timestamps are not redundant subtype timestamps | provider/action/key uniqueness, state-machine integrity, privacy-safe metadata, event/revision parity, synthetic preflight disposition |
+
+### Remaining-table one-pass baseline
+
+The detailed field decisions and row profiles for tables 10–24 are consolidated
+in this RD. No remaining whole table has a high-confidence deletion case. The
+current high-confidence
+structural removals are duplicate subtype timestamps on Notes and Themes, two
+redundant indexes subject to `EXPLAIN`, and two byte-identical Source Content
+version rows subject to complete reference/event reconciliation and Brad's
+approval in the final destructive manifest. Retain the empty Theme proposal and
+embedding output tables because they are deliberate governance and retrieval
+contracts, not test debris.
+
+Retain `curator_runs`, `curator_run_changes`, and `evals` as separate linked
+contracts. Curator Runs own queueing, retries, leases, message windows, plans,
+results, failures, and reversal state; Curator Run Changes own the exact ordered
+before/after journal required for undo; Evals own quality review, human verdicts,
+affected-Object roles, execution traces, model usage, tokens, and cost. Use the
+Eval as the primary human review surface for a completed Curator run and expose
+its linked plan/result/change detail there. Keep the standalone Curator Runs
+surface focused on queued/running/failed work, retry and lease diagnosis, and
+reversal. Do not duplicate complete plans or reversible states into Eval JSON.
+
+The execution baseline is current `origin/main`, whose migration lineage ends at
+schema version 15 and includes Themes, avatar assets, Entity images, and External
+Actions. Correct the stale schema-12 value in `compatibility.toml` as part of the
+schema-16 release. Also correct the Object-list contract: the UI currently
+loads only 50 mixed active Objects and then filters locally, while exact review
+shows 170 active and zero archived Entities. Add kind-scoped cursor pagination;
+no Entity restoration is required.
+
 ## What We Are Doing
 
 - [ ] Make every retained schema element and populated value justify its place;
   remove or consolidate genuinely irrelevant structure and data.
-- [ ] Make every Object accurate and high fidelity, with a one-sentence
-  description that states directly and simply what the Object is.
+- [ ] Make every Object accurate and high fidelity, with a concise 50–150 word
+  description that states directly what the Object is, what it is about, and
+  its evidenced current context in Brad's work and relationships.
 - [ ] Research each Source individually from its canonical page and best
   available primary evidence; correct identifiers and metadata and write the
   shortest summary that accurately distinguishes the Source.
@@ -79,9 +188,11 @@ destructive schema/data change set.
 - Delete valueless imports, correct useful inaccurate data, use `NULL` for
   unknown optional facts, and use archive/compensating events where history is
   immutable. Never fabricate values.
-- Object descriptions identify the thing, not its database type, provenance,
-  importance, or a long abstract. Put bibliographic facts in Source fields,
-  evidence in Source content, and detailed thinking in Note content.
+- Object descriptions identify the thing first, then naturally incorporate
+  evidenced current relevance from its relationships, activity, and place in
+  Brad's work. Do not add generic importance claims, database terminology,
+  provenance narration, or a long abstract. Put bibliographic facts in Source
+  fields, evidence in Source content, and detailed thinking in Note content.
 - Verify each Source's identity, metadata, capture/hash, and current content.
   Research must not silently replace retained evidence or violate rights.
 - Separate mechanical Note fixes (encoding, whitespace, broken Markdown) from
@@ -130,3 +241,34 @@ or merging data, unprotecting imported records, changing immutable evidence,
 writing to a hosted database, or deploying requires Brad's explicit approval of
 the exact manifest. External research is read-only; no publishing, sending,
 spending, public ingress, or new integration is authorized.
+
+### Preliminary destructive manifest — not yet approved or executed
+
+The snapshot audit identifies the following eight clearly synthetic acceptance
+Objects. The eventual action should archive each canonical Object and preserve
+its immutable events unless fresh reconciliation proves that a hard delete is
+both referentially complete and preferable. Treat the connected Chat and Memory
+as one cluster, and the Enyu Ops Task, Note, and Entity as one acceptance-test
+cluster. Re-read every row and require its current revision immediately before
+applying any action.
+
+| Kind | Object ID | Snapshot title |
+| --- | --- | --- |
+| Chat | `2813cc3f-0b2a-4c34-b1c4-9ab6040aa5f1` | Slack channel conversation |
+| Memory | `fe39f668-6842-4040-9e38-05402d3a0073` | Identity acceptance confirmed |
+| Task | `297cdc1c-1672-4988-b87f-88c9f6f3767f` | Enyu Ops live acceptance — 2026-08-31 |
+| Entity | `3426a296-5230-473a-a2cc-7ede7384ad2e` | Enyu Ops Acceptance Entity |
+| Note | `cbad201f-132b-4815-b5b5-31a2824ee5c2` | Enyu Ops live acceptance note — 2026-08-31 |
+| Source | `1475fc7a-1d84-523a-afcc-e27b10f2f225` | Enyu Source-ingestion deployment verification |
+| Source | `974dd73e-6858-577d-947c-79549d11ffc4` | Enyu Source-ingestion final acceptance |
+| Source | `a17dcd4f-69ff-572e-9f23-d25161064b55` | Enyu Editor publishing workflow acceptance |
+
+Two byte-identical same-Source content versions remain proposed for physical
+deletion only after current reference and event reconciliation:
+`a1fc03e1-b76e-5085-9465-f35f318336a0` and
+`a8cd4706-2323-508a-86c1-3c2c525225ff`. Only after that approved cleanup may
+the ordinary `(source_object_id, content_sha256)` index become unique.
+
+This list is preliminary because the local Kubernetes service was unavailable
+for a fresh authenticated HTTP read at the implementation checkpoint. It does
+not authorize any hosted mutation.

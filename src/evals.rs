@@ -182,7 +182,7 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<EvalDetail, DbError> {
     .fetch_all(pool)
     .await?;
     let objects = sqlx::query_as::<_, EvalObject>(
-        "SELECT eo.object_id,eo.role,o.kind,o.title,o.lifecycle FROM eval_objects eo JOIN objects o ON o.id=eo.object_id WHERE eo.eval_id=$1 ORDER BY eo.created_at,eo.object_id,eo.role")
+        "SELECT eo.object_id,eo.role,o.kind,o.title,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle FROM eval_objects eo JOIN objects o ON o.id=eo.object_id WHERE eo.eval_id=$1 ORDER BY eo.created_at,eo.object_id,eo.role")
         .bind(id).fetch_all(pool).await?;
     Ok(EvalDetail {
         eval,

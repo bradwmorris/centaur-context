@@ -227,11 +227,20 @@ pub const CONNECTION_KINDS: &[&str] = &[
     "derived_from",
     "themed",
 ];
-pub const TASK_STATUSES: &[&str] = &["todo", "doing", "blocked", "review", "done"];
+pub const TASK_STATUSES: &[&str] = &["backlog", "todo", "doing", "review", "done", "blocked"];
 pub const TASK_PRIORITIES: &[&str] = &["low", "medium", "high"];
 pub const USER_KINDS: &[&str] = &["human", "agent"];
 pub const SOURCE_KINDS: &[&str] = &[
-    "article", "paper", "podcast", "video", "book", "report", "document", "dataset", "web_page",
+    "article",
+    "paper",
+    "podcast_episode",
+    "video",
+    "book",
+    "report",
+    "document",
+    "dataset",
+    "web_page",
+    "social_post",
     "other",
 ];
 pub const SOURCE_CONTENT_KINDS: &[&str] = &[

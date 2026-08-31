@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { objectPath, navigate, schemaPath, schemaRowPath, schemaView } from "./routing";
-import type { SchemaColumn, SchemaForeignKey, SchemaRowPage, SchemaSnapshot, SchemaTable, SchemaViewMode } from "./types";
+import type { SchemaColumn, SchemaForeignKey, SchemaProfile, SchemaRowPage, SchemaSnapshot, SchemaTable, SchemaViewMode } from "./types";
 
 interface Props {
   selectedTable: string | null;
@@ -200,7 +200,35 @@ function TableStructure({ table, foreignKeys }: { table: SchemaTable; foreignKey
       <h2>Constraints</h2>
       {table.constraints.map((constraint) => <details key={constraint.name}><summary><span>{constraint.name}</span><small>{constraint.kind.replaceAll("_", " ")}</small></summary><code>{constraint.definition}</code></details>)}
     </section>
+    <section className="schema-section schema-constraints">
+      <h2>Indexes</h2>
+      {table.indexes.length ? table.indexes.map((index) => <details key={index.name}><summary><span>{index.name}</span><small>{index.primary ? "primary" : index.unique ? "unique" : "index"}{index.constraint_backed ? " · constraint-backed" : ""}</small></summary><code>{index.definition}</code></details>) : <p className="schema-muted">No indexes.</p>}
+    </section>
+    <section className="schema-section schema-constraints">
+      <h2>Triggers</h2>
+      {table.triggers.length ? table.triggers.map((trigger) => <details key={trigger.name}><summary><span>{trigger.name}</span><small>{trigger.enabled}</small></summary><code>{trigger.definition}</code></details>) : <p className="schema-muted">No table triggers.</p>}
+    </section>
+    <TableProfile table={table} />
   </div>;
+}
+
+function TableProfile({ table }: { table: SchemaTable }) {
+  const [profile, setProfile] = useState<SchemaProfile | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = async () => {
+    setLoading(true); setError(null);
+    try { setProfile(await api.schemaProfile(table.name)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "The exact profile could not be loaded."); }
+    finally { setLoading(false); }
+  };
+  return <section className="schema-section">
+    <h2>Exact value profile</h2>
+    {!profile && <><p className="schema-muted">Count null, empty, distinct, and safe static-default values on demand.</p><button className="secondary" type="button" disabled={loading} onClick={() => void load()}>{loading ? "Profiling…" : "Run exact profile"}</button></>}
+    {error && <div className="schema-message error">{error}</div>}
+    {profile && !profile.exact && <p className="schema-muted">{profile.unavailable_reason ?? "Exact profile unavailable."}</p>}
+    {profile?.exact && <div className="schema-grid-scroll"><table className="schema-grid" aria-label={`Exact profile for ${table.name}`}><thead><tr><th>Column</th><th>Null</th><th>Empty</th><th>Distinct</th><th>Static default</th></tr></thead><tbody>{profile.columns.map((column) => <tr key={column.name}><td>{column.name}</td><td>{column.null_count}</td><td>{column.empty_count ?? "N/A"}</td><td>{column.distinct_count}</td><td>{column.default_count ?? "N/A"}</td></tr>)}</tbody></table><p className="schema-muted">Exact row count: {profile.row_count}</p></div>}
+  </section>;
 }
 
 function ColumnRow({ column, table, foreignKeys }: { column: SchemaColumn; table: SchemaTable; foreignKeys: SchemaForeignKey[] }) {

@@ -243,6 +243,7 @@ fn service_router(state: AppState) -> Router {
                 .route("/evals/{id}", get(read_eval))
                 .route("/schema", get(read_schema))
                 .route("/schema/tables/{table}/rows", get(read_schema_rows))
+                .route("/schema/tables/{table}/profile", get(read_schema_profile))
                 .route(
                     "/evals/{id}/annotation",
                     axum::routing::patch(annotate_eval),
@@ -388,6 +389,14 @@ async fn read_schema_rows(
     )
     .await?;
     Ok(Json(json!({"data": page})))
+}
+
+async fn read_schema_profile(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let profile = schema::profile_table(&state.pool, &table).await?;
+    Ok(Json(json!({"data": profile})))
 }
 
 #[derive(Debug, Deserialize)]
@@ -842,11 +851,15 @@ struct CreateSourceRequest {
     byline: Option<String>,
     publisher: Option<String>,
     published_at: Option<String>,
-    accessed_at: Option<String>,
-    language: Option<String>,
-    media_type: Option<String>,
-    artifact_reference: Option<String>,
-    content_hash: Option<String>,
+    published_at_precision: Option<String>,
+    #[serde(alias = "accessed_at")]
+    last_accessed_at: Option<String>,
+    #[serde(alias = "language")]
+    original_language: Option<String>,
+    #[serde(alias = "media_type")]
+    original_media_type: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    original_artifact_reference: Option<String>,
     provenance: Option<Value>,
 }
 
@@ -863,17 +876,24 @@ fn source_uri(value: Option<String>) -> Result<Option<String>, ApiError> {
     Ok(value)
 }
 
-fn sha256(value: Option<String>, field: &'static str) -> Result<Option<String>, ApiError> {
-    let value = optional_text(value, field, 64)?;
-    if value.as_ref().is_some_and(|hash| {
-        hash.len() != 64
-            || !hash
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    }) {
-        return Err(ApiError::BadRequest(format!(
-            "{field} must be a lowercase SHA-256 hex digest"
-        )));
+fn github_issue_url(value: Option<String>) -> Result<Option<String>, ApiError> {
+    let value = optional_text(value, "github_issue_url", 2000)?;
+    if let Some(url) = value.as_deref() {
+        let parts = url
+            .strip_prefix("https://github.com/")
+            .map(|path| path.split('/').collect::<Vec<_>>());
+        let valid = parts.is_some_and(|parts| {
+            parts.len() == 4
+                && !parts[0].is_empty()
+                && !parts[1].is_empty()
+                && parts[2] == "issues"
+                && parts[3].parse::<u64>().is_ok_and(|number| number > 0)
+        });
+        if !valid {
+            return Err(ApiError::BadRequest(
+                "github_issue_url must be a canonical HTTPS GitHub Issue URL".into(),
+            ));
+        }
     }
     Ok(value)
 }
@@ -886,6 +906,23 @@ async fn create_source(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let title = required_text(input.title, "title", 300)?;
+    let published_at = parse_optional_timestamp(input.published_at, "published_at")?;
+    let published_at_precision = input
+        .published_at_precision
+        .map(|value| {
+            allowed(
+                value,
+                "published_at_precision",
+                &["instant", "day", "month", "year"],
+            )
+        })
+        .transpose()?
+        .or_else(|| published_at.map(inferred_publication_precision));
+    if published_at.is_some() != published_at_precision.is_some() {
+        return Err(ApiError::BadRequest(
+            "published_at and published_at_precision must be provided together".into(),
+        ));
+    }
     let source = db::create_source(
         &state.pool,
         &actor,
@@ -897,16 +934,20 @@ async fn create_source(
             canonical_uri: source_uri(input.canonical_uri)?,
             byline: optional_text(input.byline, "byline", 500)?,
             publisher: optional_text(input.publisher, "publisher", 300)?,
-            published_at: parse_due_at(input.published_at)?,
-            accessed_at: parse_due_at(input.accessed_at)?,
-            language: optional_text(input.language, "language", 35)?,
-            media_type: optional_text(input.media_type, "media_type", 255)?,
-            artifact_reference: optional_text(
-                input.artifact_reference,
-                "artifact_reference",
+            published_at,
+            published_at_precision,
+            last_accessed_at: parse_optional_timestamp(input.last_accessed_at, "last_accessed_at")?,
+            original_language: optional_text(input.original_language, "original_language", 35)?,
+            original_media_type: optional_text(
+                input.original_media_type,
+                "original_media_type",
+                255,
+            )?,
+            original_artifact_reference: optional_text(
+                input.original_artifact_reference,
+                "original_artifact_reference",
                 1000,
             )?,
-            content_hash: sha256(input.content_hash, "content_hash")?,
         },
         &key,
     )
@@ -931,11 +972,15 @@ struct UpdateSourceRequest {
     byline: Option<String>,
     publisher: Option<String>,
     published_at: Option<String>,
-    accessed_at: Option<String>,
-    language: Option<String>,
-    media_type: Option<String>,
-    artifact_reference: Option<String>,
-    content_hash: Option<String>,
+    published_at_precision: Option<String>,
+    #[serde(alias = "accessed_at")]
+    last_accessed_at: Option<String>,
+    #[serde(alias = "language")]
+    original_language: Option<String>,
+    #[serde(alias = "media_type")]
+    original_media_type: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    original_artifact_reference: Option<String>,
     #[serde(default)]
     clear_canonical_uri: bool,
     #[serde(default)]
@@ -945,15 +990,17 @@ struct UpdateSourceRequest {
     #[serde(default)]
     clear_published_at: bool,
     #[serde(default)]
-    clear_accessed_at: bool,
+    #[serde(alias = "clear_accessed_at")]
+    clear_last_accessed_at: bool,
     #[serde(default)]
-    clear_language: bool,
+    #[serde(alias = "clear_language")]
+    clear_original_language: bool,
     #[serde(default)]
-    clear_media_type: bool,
+    #[serde(alias = "clear_media_type")]
+    clear_original_media_type: bool,
     #[serde(default)]
-    clear_artifact_reference: bool,
-    #[serde(default)]
-    clear_content_hash: bool,
+    #[serde(alias = "clear_artifact_reference")]
+    clear_original_artifact_reference: bool,
     provenance: Option<Value>,
     protected: Option<bool>,
     #[serde(default)]
@@ -981,6 +1028,27 @@ async fn update_source(
     Json(input): Json<UpdateSourceRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let key = idempotency_key(&headers, actor.is_agent, &actor)?;
+    let published_at = input
+        .published_at
+        .map(|value| parse_optional_timestamp(Some(value), "published_at"))
+        .transpose()?
+        .flatten();
+    let published_at_precision = input
+        .published_at_precision
+        .map(|value| {
+            allowed(
+                value,
+                "published_at_precision",
+                &["instant", "day", "month", "year"],
+            )
+        })
+        .transpose()?
+        .or_else(|| published_at.map(inferred_publication_precision));
+    if !input.clear_published_at && (published_at.is_some() != published_at_precision.is_some()) {
+        return Err(ApiError::BadRequest(
+            "published_at and published_at_precision must be updated together".into(),
+        ));
+    }
     let source = db::update_source(
         &state.pool,
         &actor,
@@ -1017,43 +1085,39 @@ async fn update_source(
                 input.clear_publisher,
                 "publisher",
             )?,
-            published_at: nullable_change(
-                input
-                    .published_at
-                    .map(|v| parse_due_at(Some(v)))
-                    .transpose()?
-                    .flatten(),
+            published_at: nullable_change(published_at, input.clear_published_at, "published_at")?,
+            published_at_precision: nullable_change(
+                published_at_precision,
                 input.clear_published_at,
-                "published_at",
+                "published_at_precision",
             )?,
-            accessed_at: nullable_change(
+            last_accessed_at: nullable_change(
                 input
-                    .accessed_at
-                    .map(|v| parse_due_at(Some(v)))
+                    .last_accessed_at
+                    .map(|v| parse_optional_timestamp(Some(v), "last_accessed_at"))
                     .transpose()?
                     .flatten(),
-                input.clear_accessed_at,
-                "accessed_at",
+                input.clear_last_accessed_at,
+                "last_accessed_at",
             )?,
-            language: nullable_change(
-                optional_text(input.language, "language", 35)?,
-                input.clear_language,
-                "language",
+            original_language: nullable_change(
+                optional_text(input.original_language, "original_language", 35)?,
+                input.clear_original_language,
+                "original_language",
             )?,
-            media_type: nullable_change(
-                optional_text(input.media_type, "media_type", 255)?,
-                input.clear_media_type,
-                "media_type",
+            original_media_type: nullable_change(
+                optional_text(input.original_media_type, "original_media_type", 255)?,
+                input.clear_original_media_type,
+                "original_media_type",
             )?,
-            artifact_reference: nullable_change(
-                optional_text(input.artifact_reference, "artifact_reference", 1000)?,
-                input.clear_artifact_reference,
-                "artifact_reference",
-            )?,
-            content_hash: nullable_change(
-                sha256(input.content_hash, "content_hash")?,
-                input.clear_content_hash,
-                "content_hash",
+            original_artifact_reference: nullable_change(
+                optional_text(
+                    input.original_artifact_reference,
+                    "original_artifact_reference",
+                    1000,
+                )?,
+                input.clear_original_artifact_reference,
+                "original_artifact_reference",
             )?,
         },
         key.as_deref(),
@@ -1109,7 +1173,10 @@ struct CreateSourceContentRequest {
     language: Option<String>,
     extraction_method: Option<String>,
     extraction_version: Option<String>,
-    artifact_reference: Option<String>,
+    #[serde(alias = "artifact_reference")]
+    capture_artifact_reference: Option<String>,
+    coverage: Option<String>,
+    captured_at: Option<String>,
     locators: Option<Value>,
 }
 
@@ -1142,11 +1209,17 @@ async fn create_source_content(
             language: optional_text(input.language, "language", 35)?,
             extraction_method: optional_text(input.extraction_method, "extraction_method", 200)?,
             extraction_version: optional_text(input.extraction_version, "extraction_version", 100)?,
-            artifact_reference: optional_text(
-                input.artifact_reference,
-                "artifact_reference",
+            capture_artifact_reference: optional_text(
+                input.capture_artifact_reference,
+                "capture_artifact_reference",
                 1000,
             )?,
+            coverage: allowed(
+                input.coverage.unwrap_or_else(|| "unknown".to_owned()),
+                "coverage",
+                &["complete", "partial", "unknown"],
+            )?,
+            captured_at: parse_optional_timestamp(input.captured_at, "captured_at")?,
             locators,
         },
         &key,
@@ -1297,6 +1370,7 @@ struct ObjectListQuery {
     q: Option<String>,
     kind: Option<String>,
     lifecycle: Option<String>,
+    cursor: Option<Uuid>,
     limit: Option<i64>,
 }
 
@@ -1318,6 +1392,7 @@ async fn list_objects(
             query: optional_text(query.q, "q", 300)?,
             kind,
             lifecycle,
+            cursor: query.cursor,
             limit: bounded_object_limit(query.limit),
             text_search_config: state.text_search_config,
         },
@@ -1332,6 +1407,8 @@ struct CreateObjectRequest {
     title: String,
     description: String,
     provenance: Option<Value>,
+    entity_kind: Option<String>,
+    happened_at: Option<String>,
 }
 
 async fn create_object(
@@ -1342,10 +1419,35 @@ async fn create_object(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let kind = allowed(input.kind, "kind", OBJECT_KINDS)?;
-    if matches!(kind.as_str(), "task" | "user" | "source" | "note" | "theme") {
+    if !matches!(kind.as_str(), "chat" | "entity" | "memory") {
         return Err(ApiError::BadRequest(format!(
             "use the typed endpoint to create a {kind}"
         )));
+    }
+    let entity_kind = input
+        .entity_kind
+        .map(|value| {
+            allowed(
+                value,
+                "entity_kind",
+                &[
+                    "person",
+                    "organization",
+                    "product",
+                    "project",
+                    "publication",
+                    "place",
+                    "concept",
+                    "other",
+                ],
+            )
+        })
+        .transpose()?;
+    let happened_at = parse_optional_timestamp(input.happened_at, "happened_at")?;
+    if (kind == "entity") != entity_kind.is_some() || (kind == "memory") != happened_at.is_some() {
+        return Err(ApiError::BadRequest(
+            "entity_kind is required only for Entities and happened_at only for Memories".into(),
+        ));
     }
     let title = required_text(input.title, "title", 300)?;
     let description = crate::domain::object_description(&title, input.description)?;
@@ -1357,6 +1459,8 @@ async fn create_object(
             title,
             description,
             provenance: provenance(input.provenance)?,
+            entity_kind,
+            happened_at,
         },
         &key,
     )
@@ -1546,7 +1650,8 @@ async fn archive_connection(
 #[derive(Debug, Deserialize)]
 struct TaskListQuery {
     status: Option<String>,
-    agent_eligible: Option<bool>,
+    #[serde(alias = "agent_eligible")]
+    agent_suitable: Option<bool>,
     limit: Option<i64>,
 }
 
@@ -1562,7 +1667,7 @@ async fn list_tasks(
         &state.pool,
         db::TaskListFilter {
             status,
-            agent_eligible: query.agent_eligible,
+            agent_suitable: query.agent_suitable,
             limit: bounded_limit(query.limit),
         },
     )
@@ -1581,8 +1686,12 @@ struct CreateTaskRequest {
     priority: String,
     owner_object_id: Option<Uuid>,
     #[serde(default)]
-    agent_eligible: bool,
+    #[serde(alias = "agent_eligible")]
+    agent_suitable: bool,
+    blocked_reason: Option<String>,
     due_at: Option<String>,
+    github_issue_url: Option<String>,
+    brief_markdown: Option<String>,
 }
 
 fn default_task_status() -> String {
@@ -1602,6 +1711,13 @@ async fn create_task(
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let title = required_text(input.title, "title", 300)?;
     let description = crate::domain::object_description(&title, input.description)?;
+    let status = allowed(input.status, "status", TASK_STATUSES)?;
+    let blocked_reason = optional_text(input.blocked_reason, "blocked_reason", 2000)?;
+    if (status == "blocked") != blocked_reason.is_some() {
+        return Err(ApiError::BadRequest(
+            "blocked_reason is required exactly when status is blocked".into(),
+        ));
+    }
     let task = db::create_task(
         &state.pool,
         &actor,
@@ -1609,11 +1725,15 @@ async fn create_task(
             title,
             description,
             provenance: provenance(input.provenance)?,
-            status: allowed(input.status, "status", TASK_STATUSES)?,
+            status: status.clone(),
             priority: allowed(input.priority, "priority", TASK_PRIORITIES)?,
             owner_object_id: input.owner_object_id,
-            agent_eligible: input.agent_eligible,
+            agent_suitable: input.agent_suitable,
+            blocked_reason,
             due_at: parse_due_at(input.due_at)?,
+            completed_at: (status == "done").then(OffsetDateTime::now_utc),
+            github_issue_url: github_issue_url(input.github_issue_url)?,
+            brief_markdown: optional_text(input.brief_markdown, "brief_markdown", 100_000)?,
         },
         &key,
     )
@@ -1640,10 +1760,20 @@ struct UpdateTaskRequest {
     owner_object_id: Option<Uuid>,
     #[serde(default)]
     clear_owner: bool,
-    agent_eligible: Option<bool>,
+    #[serde(alias = "agent_eligible")]
+    agent_suitable: Option<bool>,
+    blocked_reason: Option<String>,
+    #[serde(default)]
+    clear_blocked_reason: bool,
     due_at: Option<String>,
     #[serde(default)]
     clear_due_at: bool,
+    github_issue_url: Option<String>,
+    #[serde(default)]
+    clear_github_issue_url: bool,
+    brief_markdown: Option<String>,
+    #[serde(default)]
+    clear_brief_markdown: bool,
 }
 
 async fn update_task(
@@ -1678,6 +1808,20 @@ async fn update_task(
             .flatten()
             .map(Some)
     };
+    let status = input
+        .status
+        .map(|value| allowed(value, "status", TASK_STATUSES))
+        .transpose()?;
+    let blocked_reason = nullable_change(
+        optional_text(input.blocked_reason, "blocked_reason", 2000)?,
+        input.clear_blocked_reason,
+        "blocked_reason",
+    )?;
+    if status.as_deref() == Some("blocked") && blocked_reason.as_ref().is_none_or(Option::is_none) {
+        return Err(ApiError::BadRequest(
+            "blocked_reason is required when status is blocked".into(),
+        ));
+    }
     let key = idempotency_key(&headers, actor.is_agent, &actor)?;
     let task = db::update_task(
         &state.pool,
@@ -1698,17 +1842,32 @@ async fn update_task(
                 .map(|value| provenance(Some(value)))
                 .transpose()?,
             protected: input.protected,
-            status: input
-                .status
-                .map(|value| allowed(value, "status", TASK_STATUSES))
-                .transpose()?,
+            status: status.clone(),
             priority: input
                 .priority
                 .map(|value| allowed(value, "priority", TASK_PRIORITIES))
                 .transpose()?,
             owner_object_id,
-            agent_eligible: input.agent_eligible,
+            agent_suitable: input.agent_suitable,
+            blocked_reason,
             due_at,
+            completed_at: status.as_deref().map(|value| {
+                if value == "done" {
+                    Some(OffsetDateTime::now_utc())
+                } else {
+                    None
+                }
+            }),
+            github_issue_url: nullable_change(
+                github_issue_url(input.github_issue_url)?,
+                input.clear_github_issue_url,
+                "github_issue_url",
+            )?,
+            brief_markdown: nullable_change(
+                optional_text(input.brief_markdown, "brief_markdown", 100_000)?,
+                input.clear_brief_markdown,
+                "brief_markdown",
+            )?,
         },
         key.as_deref(),
     )
@@ -1968,12 +2127,29 @@ fn map_curator_error(error: crate::curator::CuratorError) -> ApiError {
 }
 
 fn parse_due_at(value: Option<String>) -> Result<Option<OffsetDateTime>, ApiError> {
+    parse_optional_timestamp(value, "due_at")
+}
+
+fn parse_optional_timestamp(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<OffsetDateTime>, ApiError> {
     value
         .map(|value| {
             OffsetDateTime::parse(value.trim(), &Rfc3339)
-                .map_err(|_| ApiError::BadRequest("due_at must be RFC 3339".to_owned()))
+                .map_err(|_| ApiError::BadRequest(format!("{field} must be RFC 3339")))
         })
         .transpose()
+}
+
+fn inferred_publication_precision(timestamp: OffsetDateTime) -> String {
+    let utc = timestamp.to_offset(time::UtcOffset::UTC);
+    if utc.hour() == 0 && utc.minute() == 0 && utc.second() == 0 && utc.nanosecond() == 0 {
+        "day"
+    } else {
+        "instant"
+    }
+    .to_owned()
 }
 
 fn bounded_limit(limit: Option<i64>) -> i64 {
@@ -2138,12 +2314,21 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_limit, bounded_object_limit};
+    use super::{bounded_limit, bounded_object_limit, inferred_publication_precision};
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     #[test]
     fn object_lists_allow_the_full_local_workspace_without_widening_other_lists() {
         assert_eq!(bounded_object_limit(Some(500)), 500);
         assert_eq!(bounded_object_limit(Some(501)), 500);
         assert_eq!(bounded_limit(Some(500)), 100);
+    }
+
+    #[test]
+    fn legacy_publication_timestamps_receive_deterministic_precision() {
+        let day = OffsetDateTime::parse("2026-08-30T00:00:00Z", &Rfc3339).unwrap();
+        let instant = OffsetDateTime::parse("2026-08-30T00:00:01Z", &Rfc3339).unwrap();
+        assert_eq!(inferred_publication_precision(day), "day");
+        assert_eq!(inferred_publication_precision(instant), "instant");
     }
 }

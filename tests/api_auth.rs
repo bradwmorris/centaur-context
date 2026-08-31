@@ -305,7 +305,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.2.0");
     assert_eq!(metadata["api_version"], "v1");
     assert_eq!(metadata["ontology_version"], "v2");
-    assert_eq!(metadata["database_schema_version"], 15);
+    assert_eq!(metadata["database_schema_version"], 16);
     assert_eq!(metadata["tool_version"], "0.2.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -336,6 +336,7 @@ async fn human_api_rejects_a_weak_object_description_before_database_access() {
             .body(Body::from(
                 r#"{
                         "kind":"entity",
+                        "entity_kind":"organization",
                         "title":"Northwind",
                         "description":"Northwind"
                     }"#,
@@ -683,22 +684,28 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     .unwrap();
     assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
 
-    for method in ["POST", "PUT", "PATCH", "DELETE"] {
-        let response = human_router(
-            state(),
-            PathBuf::from("web/dist"),
-            PathBuf::from("identity-assets"),
-        )
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri("/api/v1/schema")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    for uri in [
+        "/api/v1/schema",
+        "/api/v1/schema/tables/objects/rows",
+        "/api/v1/schema/tables/objects/profile",
+    ] {
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            let response = human_router(
+                state(),
+                PathBuf::from("web/dist"),
+                PathBuf::from("identity-assets"),
+            )
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        }
     }
 }
 

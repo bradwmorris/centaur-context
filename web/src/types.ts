@@ -1,5 +1,5 @@
 export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme";
-export type TaskStatus = "todo" | "doing" | "blocked" | "review" | "done";
+export type TaskStatus = "backlog" | "todo" | "doing" | "review" | "done" | "blocked";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
 export type SchemaViewMode = "map" | "structure" | "rows";
 
@@ -26,6 +26,39 @@ export interface SchemaTable {
   estimated_row_count: number;
   columns: SchemaColumn[];
   constraints: SchemaConstraint[];
+  indexes: SchemaIndex[];
+  triggers: SchemaTrigger[];
+}
+
+export interface SchemaIndex {
+  name: string;
+  unique: boolean;
+  primary: boolean;
+  constraint_backed: boolean;
+  definition: string;
+}
+
+export interface SchemaTrigger {
+  name: string;
+  enabled: string;
+  definition: string;
+}
+
+export interface SchemaColumnProfile {
+  name: string;
+  null_count: number;
+  empty_count: number | null;
+  distinct_count: number;
+  default_count: number | null;
+}
+
+export interface SchemaProfile {
+  schema_fingerprint: string;
+  table: string;
+  exact: boolean;
+  row_count: number | null;
+  columns: SchemaColumnProfile[];
+  unavailable_reason: string | null;
 }
 
 export interface SchemaForeignKey {
@@ -131,13 +164,17 @@ export interface Task {
   status: TaskStatus;
   priority: "low" | "medium" | "high";
   owner_object_id: string | null;
-  agent_eligible: boolean;
+  agent_suitable: boolean;
+  blocked_reason: string | null;
   due_at: string | null;
+  completed_at: string | null;
+  github_issue_url: string | null;
+  brief_markdown: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type SourceKind = "article" | "paper" | "podcast" | "video" | "book" | "report" | "document" | "dataset" | "web_page" | "other";
+export type SourceKind = "article" | "paper" | "podcast_episode" | "video" | "book" | "report" | "document" | "dataset" | "web_page" | "social_post" | "other";
 
 export interface Source {
   object_id: string;
@@ -152,11 +189,11 @@ export interface Source {
   byline: string | null;
   publisher: string | null;
   published_at: string | null;
-  accessed_at: string | null;
-  language: string | null;
-  media_type: string | null;
-  artifact_reference: string | null;
-  content_hash: string | null;
+  published_at_precision: "instant" | "day" | "month" | "year" | null;
+  last_accessed_at: string | null;
+  original_language: string | null;
+  original_media_type: string | null;
+  original_artifact_reference: string | null;
   current_content_id: string | null;
   created_at: string;
   updated_at: string;
@@ -207,11 +244,13 @@ export interface SourceContentVersion {
   language: string | null;
   extraction_method: string | null;
   extraction_version: string | null;
-  content_hash: string;
+  content_sha256: string;
   size_bytes: number;
-  artifact_reference: string | null;
+  capture_artifact_reference: string | null;
+  coverage: "complete" | "partial" | "unknown";
+  captured_at: string | null;
   locators: Record<string, unknown>;
-  created_at: string;
+  recorded_at: string;
 }
 
 export interface SourceContentWindow extends SourceContentVersion {
@@ -243,7 +282,7 @@ export interface ChatMessage {
   sender_kind: "human" | "agent";
   content: string;
   source_created_at: string;
-  ingested_sequence: number;
+  ingestion_sequence: number;
   ingested_at: string;
 }
 
@@ -307,7 +346,7 @@ export interface CuratorRun {
   proposed_plan: Record<string, unknown> | null;
   committed_plan: Record<string, unknown> | null;
   result: Record<string, unknown> | null;
-  created_at: string;
+  queued_at: string;
   started_at: string | null;
   completed_at: string | null;
   reversed_at: string | null;

@@ -78,9 +78,14 @@ pub struct Task {
     pub status: String,
     pub priority: String,
     pub owner_object_id: Option<Uuid>,
-    pub agent_eligible: bool,
+    pub agent_suitable: bool,
+    pub blocked_reason: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub due_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub completed_at: Option<OffsetDateTime>,
+    pub github_issue_url: Option<String>,
+    pub brief_markdown: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -117,7 +122,7 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(with = "time::serde::rfc3339")]
     pub source_created_at: OffsetDateTime,
-    pub ingested_sequence: i64,
+    pub ingestion_sequence: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub ingested_at: OffsetDateTime,
 }
@@ -152,12 +157,12 @@ pub struct Source {
     pub publisher: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub published_at: Option<OffsetDateTime>,
+    pub published_at_precision: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
-    pub accessed_at: Option<OffsetDateTime>,
-    pub language: Option<String>,
-    pub media_type: Option<String>,
-    pub artifact_reference: Option<String>,
-    pub content_hash: Option<String>,
+    pub last_accessed_at: Option<OffsetDateTime>,
+    pub original_language: Option<String>,
+    pub original_media_type: Option<String>,
+    pub original_artifact_reference: Option<String>,
     pub current_content_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -176,12 +181,15 @@ pub struct SourceContent {
     pub language: Option<String>,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
-    pub content_hash: String,
+    pub content_sha256: String,
     pub size_bytes: i64,
-    pub artifact_reference: Option<String>,
+    pub capture_artifact_reference: Option<String>,
+    pub coverage: String,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub captured_at: Option<OffsetDateTime>,
     pub locators: Value,
     #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
+    pub recorded_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -520,6 +528,7 @@ pub struct ObjectListFilter {
     pub query: Option<String>,
     pub kind: Option<String>,
     pub lifecycle: Option<String>,
+    pub cursor: Option<Uuid>,
     pub limit: i64,
     pub text_search_config: crate::config::TextSearchConfig,
 }
@@ -545,6 +554,8 @@ pub struct NewObject {
     pub title: String,
     pub description: String,
     pub provenance: Value,
+    pub entity_kind: Option<String>,
+    pub happened_at: Option<OffsetDateTime>,
 }
 
 #[derive(Clone, Debug)]
@@ -557,11 +568,11 @@ pub struct NewSource {
     pub byline: Option<String>,
     pub publisher: Option<String>,
     pub published_at: Option<OffsetDateTime>,
-    pub accessed_at: Option<OffsetDateTime>,
-    pub language: Option<String>,
-    pub media_type: Option<String>,
-    pub artifact_reference: Option<String>,
-    pub content_hash: Option<String>,
+    pub published_at_precision: Option<String>,
+    pub last_accessed_at: Option<OffsetDateTime>,
+    pub original_language: Option<String>,
+    pub original_media_type: Option<String>,
+    pub original_artifact_reference: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -613,11 +624,11 @@ pub struct SourceChanges {
     pub byline: Option<Option<String>>,
     pub publisher: Option<Option<String>>,
     pub published_at: Option<Option<OffsetDateTime>>,
-    pub accessed_at: Option<Option<OffsetDateTime>>,
-    pub language: Option<Option<String>>,
-    pub media_type: Option<Option<String>>,
-    pub artifact_reference: Option<Option<String>>,
-    pub content_hash: Option<Option<String>>,
+    pub published_at_precision: Option<Option<String>>,
+    pub last_accessed_at: Option<Option<OffsetDateTime>>,
+    pub original_language: Option<Option<String>>,
+    pub original_media_type: Option<Option<String>>,
+    pub original_artifact_reference: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -628,7 +639,9 @@ pub struct NewSourceContent {
     pub language: Option<String>,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
-    pub artifact_reference: Option<String>,
+    pub capture_artifact_reference: Option<String>,
+    pub coverage: String,
+    pub captured_at: Option<OffsetDateTime>,
     pub locators: Value,
 }
 
@@ -662,7 +675,7 @@ pub struct ConnectionChanges {
 #[derive(Clone, Debug)]
 pub struct TaskListFilter {
     pub status: Option<String>,
-    pub agent_eligible: Option<bool>,
+    pub agent_suitable: Option<bool>,
     pub limit: i64,
 }
 
@@ -674,8 +687,12 @@ pub struct NewTask {
     pub status: String,
     pub priority: String,
     pub owner_object_id: Option<Uuid>,
-    pub agent_eligible: bool,
+    pub agent_suitable: bool,
+    pub blocked_reason: Option<String>,
     pub due_at: Option<OffsetDateTime>,
+    pub completed_at: Option<OffsetDateTime>,
+    pub github_issue_url: Option<String>,
+    pub brief_markdown: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -687,8 +704,12 @@ pub struct TaskChanges {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub owner_object_id: Option<Option<Uuid>>,
-    pub agent_eligible: Option<bool>,
+    pub agent_suitable: Option<bool>,
+    pub blocked_reason: Option<Option<String>>,
     pub due_at: Option<Option<OffsetDateTime>>,
+    pub completed_at: Option<Option<OffsetDateTime>>,
+    pub github_issue_url: Option<Option<String>>,
+    pub brief_markdown: Option<Option<String>>,
 }
 
 pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
@@ -728,12 +749,28 @@ pub async fn ready(pool: &PgPool) -> Result<(), DbError> {
 }
 
 pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec<Object>, DbError> {
-    let mut query = QueryBuilder::<Postgres>::new("SELECT * FROM objects WHERE true");
+    let mut query = QueryBuilder::<Postgres>::new(
+        "SELECT id,kind,title,description,protected,CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,revision,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at,archived_at FROM objects WHERE true",
+    );
+    let kind_scoped = filter.kind.is_some();
     if let Some(kind) = filter.kind {
         query.push(" AND kind = ").push_bind(kind);
     }
+    if let Some(cursor) = filter.cursor {
+        if !kind_scoped {
+            return Err(DbError::Validation(ValidationError::Unsupported {
+                field: "cursor",
+                value: "Object cursors require a kind filter".to_owned(),
+            }));
+        }
+        query.push(" AND id > ").push_bind(cursor);
+    }
     if let Some(lifecycle) = filter.lifecycle {
-        query.push(" AND lifecycle = ").push_bind(lifecycle);
+        if lifecycle == "active" {
+            query.push(" AND archived_at IS NULL");
+        } else {
+            query.push(" AND archived_at IS NOT NULL");
+        }
     }
     if let Some(search) = filter.query {
         query.push(" AND ");
@@ -754,24 +791,30 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
             .push_bind(search)
             .push(")");
     }
-    query
-        .push(" ORDER BY updated_at DESC, id LIMIT ")
-        .push_bind(filter.limit);
+    if kind_scoped {
+        query.push(" ORDER BY id");
+    } else {
+        query.push(" ORDER BY updated_at DESC, id");
+    }
+    query.push(" LIMIT ").push_bind(filter.limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
 pub async fn get_object(pool: &PgPool, id: Uuid) -> Result<Object, DbError> {
-    sqlx::query_as("SELECT * FROM objects WHERE id = $1")
+    sqlx::query_as(
+        "SELECT id,kind,title,description,protected,CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,revision,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at,archived_at FROM objects WHERE id = $1",
+    )
         .bind(id)
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::NotFound)
 }
 
-const SOURCE_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+const SOURCE_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
        o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
-       s.published_at,s.accessed_at,s.language,s.media_type,s.artifact_reference,
-       s.content_hash,s.current_content_id,o.created_at,o.updated_at
+       s.published_at,s.published_at_precision,s.last_accessed_at,s.original_language,
+       s.original_media_type,s.original_artifact_reference,s.current_content_id,
+       o.created_at,o.updated_at
 FROM sources s JOIN objects o ON o.id=s.object_id"#;
 
 pub async fn get_source(pool: &PgPool, id: Uuid) -> Result<Source, DbError> {
@@ -784,7 +827,7 @@ pub async fn get_source(pool: &PgPool, id: Uuid) -> Result<Source, DbError> {
 
 pub async fn get_note(pool: &PgPool, id: Uuid) -> Result<Note, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
         o.provenance,o.protected,n.content,n.content_format,o.created_at,o.updated_at
         FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.id=$1"#,
     )
@@ -795,12 +838,12 @@ pub async fn get_note(pool: &PgPool, id: Uuid) -> Result<Note, DbError> {
 }
 
 const THEME_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,t.slug,
-       o.lifecycle,o.revision,o.provenance,o.protected,o.created_at,o.updated_at
+       CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,o.created_at,o.updated_at
 FROM themes t JOIN objects o ON o.id=t.object_id"#;
 
 pub async fn list_themes(pool: &PgPool) -> Result<Vec<Theme>, DbError> {
     Ok(sqlx::query_as(&format!(
-        "{THEME_SELECT} WHERE o.lifecycle='active' ORDER BY o.title,o.id"
+        "{THEME_SELECT} WHERE o.archived_at IS NULL ORDER BY o.title,o.id"
     ))
     .fetch_all(pool)
     .await?)
@@ -887,7 +930,7 @@ pub async fn list_theme_objects(
         WHERE c.kind='themed' AND c.archived_at IS NULL
           AND c.target_object_id="#,
     );
-    query.push_bind(theme_id).push(" AND o.lifecycle='active'");
+    query.push_bind(theme_id).push(" AND o.archived_at IS NULL");
     if let Some(kind) = kind {
         query.push(" AND o.kind=").push_bind(kind);
     }
@@ -975,7 +1018,7 @@ pub async fn create_theme_proposal(
     let duplicate: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
             SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
-            WHERE o.lifecycle='active' AND (t.slug=$1 OR lower(o.title)=lower($2))
+            WHERE o.archived_at IS NULL AND (t.slug=$1 OR lower(o.title)=lower($2))
         ) OR EXISTS(
             SELECT 1 FROM theme_proposals
             WHERE status='pending' AND (slug=$1 OR lower(title)=lower($2))
@@ -1050,7 +1093,7 @@ pub async fn approve_theme_proposal(
     let duplicate: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
             SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
-            WHERE o.lifecycle='active' AND (t.slug=$1 OR lower(o.title)=lower($2))
+            WHERE o.archived_at IS NULL AND (t.slug=$1 OR lower(o.title)=lower($2))
         )"#,
     )
     .bind(&proposal.slug)
@@ -1147,8 +1190,8 @@ pub async fn list_notes(
 ) -> Result<Vec<NoteSearchResult>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
         r#"SELECT o.id AS object_id,o.title,o.description,
-        o.lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.updated_at
-        FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.lifecycle='active'"#,
+        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.updated_at
+        FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(cursor) = filter.cursor {
         query.push(" AND o.id>").push_bind(cursor);
@@ -1218,7 +1261,7 @@ pub async fn update_note(
     let updated_revision: Option<i64> = sqlx::query_scalar(
         r#"UPDATE objects SET title=$3,description=$4,protected=$5,revision=revision+1,
            updated_by_type=$6,updated_by_id=$7,updated_at=now()
-           WHERE id=$1 AND kind='note' AND revision=$2 AND lifecycle='active'
+           WHERE id=$1 AND kind='note' AND revision=$2 AND archived_at IS NULL
            RETURNING revision"#,
     )
     .bind(id)
@@ -1231,14 +1274,12 @@ pub async fn update_note(
     .fetch_optional(&mut *tx)
     .await?;
     let updated_revision = updated_revision.ok_or(DbError::Conflict)?;
-    sqlx::query(
-        "UPDATE notes SET content=$2,content_format=$3,updated_at=now() WHERE object_id=$1",
-    )
-    .bind(id)
-    .bind(&content)
-    .bind(&content_format)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE notes SET content=$2,content_format=$3 WHERE object_id=$1")
+        .bind(id)
+        .bind(&content)
+        .bind(&content_format)
+        .execute(&mut *tx)
+        .await?;
     insert_event(
         &mut tx,
         actor,
@@ -1268,14 +1309,15 @@ pub async fn list_sources(
     filter: SourceListFilter,
 ) -> Result<Vec<SourceSearchResult>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
            o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
-           s.published_at,s.accessed_at,s.language,s.media_type,s.artifact_reference,
-           s.content_hash,s.current_content_id,o.created_at,o.updated_at,
+           s.published_at,s.published_at_precision,s.last_accessed_at,s.original_language,
+           s.original_media_type,s.original_artifact_reference,s.current_content_id,
+           o.created_at,o.updated_at,
            CASE WHEN sc.id IS NULL THEN NULL ELSE substring(sc.normalized_text FROM 1 FOR 400) END AS excerpt
            FROM sources s JOIN objects o ON o.id=s.object_id
            LEFT JOIN source_contents sc ON sc.id=s.current_content_id
-           WHERE o.lifecycle='active'"#,
+           WHERE o.archived_at IS NULL"#,
     );
     if let Some(kind) = filter.source_kind {
         query.push(" AND s.source_kind=").push_bind(kind);
@@ -1321,8 +1363,9 @@ pub async fn create_source(
     .await?;
     sqlx::query(
         r#"INSERT INTO sources
-           (object_id,source_kind,canonical_uri,byline,publisher,published_at,accessed_at,
-            language,media_type,artifact_reference,content_hash)
+           (object_id,source_kind,canonical_uri,byline,publisher,published_at,
+            published_at_precision,last_accessed_at,original_language,
+            original_media_type,original_artifact_reference)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
     )
     .bind(id)
@@ -1331,11 +1374,11 @@ pub async fn create_source(
     .bind(&input.byline)
     .bind(&input.publisher)
     .bind(input.published_at)
-    .bind(input.accessed_at)
-    .bind(&input.language)
-    .bind(&input.media_type)
-    .bind(&input.artifact_reference)
-    .bind(&input.content_hash)
+    .bind(&input.published_at_precision)
+    .bind(input.last_accessed_at)
+    .bind(&input.original_language)
+    .bind(&input.original_media_type)
+    .bind(&input.original_artifact_reference)
     .execute(&mut *tx)
     .await?;
     insert_event(
@@ -1382,13 +1425,19 @@ pub async fn update_source(
     let byline = changes.byline.unwrap_or(current.byline);
     let publisher = changes.publisher.unwrap_or(current.publisher);
     let published_at = changes.published_at.unwrap_or(current.published_at);
-    let accessed_at = changes.accessed_at.unwrap_or(current.accessed_at);
-    let language = changes.language.unwrap_or(current.language);
-    let media_type = changes.media_type.unwrap_or(current.media_type);
-    let artifact_reference = changes
-        .artifact_reference
-        .unwrap_or(current.artifact_reference);
-    let content_hash = changes.content_hash.unwrap_or(current.content_hash);
+    let published_at_precision = changes
+        .published_at_precision
+        .unwrap_or(current.published_at_precision);
+    let last_accessed_at = changes.last_accessed_at.unwrap_or(current.last_accessed_at);
+    let original_language = changes
+        .original_language
+        .unwrap_or(current.original_language);
+    let original_media_type = changes
+        .original_media_type
+        .unwrap_or(current.original_media_type);
+    let original_artifact_reference = changes
+        .original_artifact_reference
+        .unwrap_or(current.original_artifact_reference);
     let lifecycle = if changes.archive {
         "archived"
     } else {
@@ -1397,8 +1446,8 @@ pub async fn update_source(
     let archived_at = changes.archive.then(OffsetDateTime::now_utc);
     let mut tx = pool.begin().await?;
     let updated_revision: Option<i64> = sqlx::query_scalar(
-        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,lifecycle=$7,
-           archived_at=CASE WHEN $7='archived' THEN COALESCE(archived_at,$8) ELSE archived_at END,
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,
+           archived_at=CASE WHEN $7 THEN COALESCE(archived_at,$8) ELSE archived_at END,
            revision=revision+1,updated_by_type=$9,updated_by_id=$10,updated_at=now()
            WHERE id=$1 AND kind='source' AND revision=$2 RETURNING revision"#,
     )
@@ -1408,7 +1457,7 @@ pub async fn update_source(
     .bind(&description)
     .bind(&provenance)
     .bind(protected)
-    .bind(lifecycle)
+    .bind(changes.archive)
     .bind(archived_at)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
@@ -1417,9 +1466,9 @@ pub async fn update_source(
     let updated_revision = updated_revision.ok_or(DbError::Conflict)?;
     sqlx::query(
         r#"UPDATE sources SET source_kind=COALESCE($2,source_kind),canonical_uri=$3,
-           byline=$4,publisher=$5,published_at=$6,
-           accessed_at=$7,language=$8,media_type=$9,
-           artifact_reference=$10,content_hash=$11,updated_at=now()
+           byline=$4,publisher=$5,published_at=$6,published_at_precision=$7,
+           last_accessed_at=$8,original_language=$9,original_media_type=$10,
+           original_artifact_reference=$11
            WHERE object_id=$1"#,
     )
     .bind(id)
@@ -1428,11 +1477,11 @@ pub async fn update_source(
     .bind(&byline)
     .bind(&publisher)
     .bind(published_at)
-    .bind(accessed_at)
-    .bind(&language)
-    .bind(&media_type)
-    .bind(&artifact_reference)
-    .bind(&content_hash)
+    .bind(&published_at_precision)
+    .bind(last_accessed_at)
+    .bind(&original_language)
+    .bind(&original_media_type)
+    .bind(&original_artifact_reference)
     .execute(&mut *tx)
     .await?;
     insert_event(
@@ -1525,12 +1574,23 @@ pub async fn append_source_content(
         )));
     }
     let id = Uuid::new_v4();
-    let content_hash = format!("{:x}", Sha256::digest(input.normalized_text.as_bytes()));
+    let content_sha256 = format!("{:x}", Sha256::digest(input.normalized_text.as_bytes()));
     let size_bytes = input.normalized_text.len() as i64;
     let mut tx = pool.begin().await?;
     let current_revision: Option<i64> = sqlx::query_scalar(
-        "SELECT revision FROM objects WHERE id=$1 AND kind='source' AND lifecycle='active' FOR UPDATE",
+        "SELECT revision FROM objects WHERE id=$1 AND kind='source' AND archived_at IS NULL FOR UPDATE",
     ).bind(source_id).fetch_optional(&mut *tx).await?;
+    if let Some(existing) = sqlx::query_as(
+        "SELECT * FROM source_contents WHERE source_object_id=$1 AND content_sha256=$2",
+    )
+    .bind(source_id)
+    .bind(&content_sha256)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        tx.commit().await?;
+        return Ok(existing);
+    }
     if current_revision != Some(input.expected_revision) {
         return Err(DbError::Conflict);
     }
@@ -1543,8 +1603,9 @@ pub async fn append_source_content(
     let content: SourceContent = sqlx::query_as(
         r#"INSERT INTO source_contents
            (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,
-            extraction_version,content_hash,size_bytes,artifact_reference,locators)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *"#,
+            extraction_version,content_sha256,size_bytes,capture_artifact_reference,
+            coverage,captured_at,locators)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *"#,
     )
     .bind(id)
     .bind(source_id)
@@ -1554,13 +1615,15 @@ pub async fn append_source_content(
     .bind(&input.language)
     .bind(&input.extraction_method)
     .bind(&input.extraction_version)
-    .bind(&content_hash)
+    .bind(&content_sha256)
     .bind(size_bytes)
-    .bind(&input.artifact_reference)
+    .bind(&input.capture_artifact_reference)
+    .bind(&input.coverage)
+    .bind(input.captured_at)
     .bind(&input.locators)
     .fetch_one(&mut *tx)
     .await?;
-    sqlx::query("UPDATE sources SET current_content_id=$2,updated_at=now() WHERE object_id=$1")
+    sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
         .bind(source_id)
         .bind(id)
         .execute(&mut *tx)
@@ -1570,7 +1633,7 @@ pub async fn append_source_content(
     ).bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;
     insert_event(&mut tx,actor,"source_content",id,source_id,"content_version_created",
         Some(idempotency_key),Some(input.expected_revision),revision,
-        json!({"version":version,"content_kind":input.content_kind,"content_hash":content_hash,"size_bytes":size_bytes})
+        json!({"version":version,"content_kind":input.content_kind,"content_sha256":content_sha256,"size_bytes":size_bytes})
     ).await?;
     tx.commit().await?;
     Ok(content)
@@ -1586,6 +1649,21 @@ pub async fn create_object(
         return get_object(pool, id).await;
     }
     validate_object_description(&input.title, &input.description)?;
+    match input.kind.as_str() {
+        "chat" if input.entity_kind.is_none() && input.happened_at.is_none() => {}
+        "entity" if input.entity_kind.is_some() && input.happened_at.is_none() => {}
+        "memory" if input.entity_kind.is_none() && input.happened_at.is_some() => {}
+        "chat" | "entity" | "memory" => {
+            return Err(DbError::Invalid(
+                "typed Object creation fields do not match its kind".into(),
+            ));
+        }
+        _ => {
+            return Err(DbError::Invalid(
+                "use the typed creation contract for this Object kind".into(),
+            ));
+        }
+    }
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     let object: Object = sqlx::query_as(
@@ -1602,7 +1680,7 @@ pub async fn create_object(
     .bind(&input.provenance)
     .fetch_one(&mut *tx)
     .await?;
-    insert_object_subtype(&mut tx, id, &input.kind).await?;
+    insert_object_subtype(&mut tx, id, &input).await?;
     insert_event(
         &mut tx,
         actor,
@@ -1623,19 +1701,30 @@ pub async fn create_object(
 async fn insert_object_subtype(
     tx: &mut Transaction<'_, Postgres>,
     object_id: Uuid,
-    kind: &str,
+    input: &NewObject,
 ) -> Result<(), DbError> {
-    let statement = match kind {
-        "chat" => Some("INSERT INTO chats (object_id) VALUES ($1)"),
-        "entity" => Some("INSERT INTO entities (object_id) VALUES ($1)"),
-        "memory" => Some("INSERT INTO memories (object_id) VALUES ($1)"),
-        _ => None,
-    };
-    if let Some(statement) = statement {
-        sqlx::query(statement)
-            .bind(object_id)
-            .execute(&mut **tx)
-            .await?;
+    match input.kind.as_str() {
+        "chat" => {
+            sqlx::query("INSERT INTO chats (object_id) VALUES ($1)")
+                .bind(object_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "entity" => {
+            sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
+                .bind(object_id)
+                .bind(input.entity_kind.as_deref().expect("validated entity kind"))
+                .execute(&mut **tx)
+                .await?;
+        }
+        "memory" => {
+            sqlx::query("INSERT INTO memories (object_id,happened_at) VALUES ($1,$2)")
+                .bind(object_id)
+                .bind(input.happened_at.expect("validated Memory time"))
+                .execute(&mut **tx)
+                .await?;
+        }
+        _ => unreachable!("Object kind validated before subtype insertion"),
     }
     Ok(())
 }
@@ -1675,9 +1764,13 @@ pub async fn update_object(
     };
     let mut tx = pool.begin().await?;
     let updated: Option<Object> = sqlx::query_as(
-        r#"UPDATE objects SET title=$3, description=$4, provenance=$5, protected=$6, lifecycle=$7,
-           archived_at=$8, revision=revision+1, updated_by_type=$9, updated_by_id=$10,
-           updated_at=now() WHERE id=$1 AND revision=$2 RETURNING *"#,
+        r#"UPDATE objects SET title=$3, description=$4, provenance=$5, protected=$6,
+           archived_at=$7, revision=revision+1, updated_by_type=$8, updated_by_id=$9,
+           updated_at=now() WHERE id=$1 AND revision=$2
+           RETURNING id,kind,title,description,protected,
+             CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
+             revision,created_by_type,created_by_id,updated_by_type,updated_by_id,
+             provenance,created_at,updated_at,archived_at"#,
     )
     .bind(id)
     .bind(expected_revision)
@@ -1685,7 +1778,6 @@ pub async fn update_object(
     .bind(&description)
     .bind(&provenance)
     .bind(protected)
-    .bind(lifecycle)
     .bind(archived_at)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
@@ -1868,15 +1960,15 @@ async fn validate_connection_endpoints(
     if kind != "themed" {
         return Ok(());
     }
-    let rows: Vec<(Uuid, String, String)> =
-        sqlx::query_as("SELECT id,kind,lifecycle FROM objects WHERE id=$1 OR id=$2")
+    let rows: Vec<(Uuid, String, Option<OffsetDateTime>)> =
+        sqlx::query_as("SELECT id,kind,archived_at FROM objects WHERE id=$1 OR id=$2")
             .bind(source_object_id)
             .bind(target_object_id)
             .fetch_all(pool)
             .await?;
     let source = rows.iter().find(|row| row.0 == source_object_id);
     let target = rows.iter().find(|row| row.0 == target_object_id);
-    if source.is_none_or(|row| row.2 != "active") || target.is_none_or(|row| row.2 != "active") {
+    if source.is_none_or(|row| row.2.is_some()) || target.is_none_or(|row| row.2.is_some()) {
         return Err(DbError::Invalid(
             "themed connections require active source and target Objects".into(),
         ));
@@ -1937,17 +2029,18 @@ pub async fn archive_connection(
 
 pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Task>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
-           t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
+           t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
+           t.completed_at,t.github_issue_url,t.brief_markdown,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE true"#,
     );
     if let Some(status) = filter.status {
         query.push(" AND t.status=").push_bind(status);
     }
-    if let Some(agent_eligible) = filter.agent_eligible {
+    if let Some(agent_suitable) = filter.agent_suitable {
         query
-            .push(" AND t.agent_eligible=")
-            .push_bind(agent_eligible);
+            .push(" AND t.agent_suitable=")
+            .push_bind(agent_suitable);
     }
     query
         .push(" ORDER BY o.updated_at DESC,o.id LIMIT ")
@@ -1957,8 +2050,9 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
 
 pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,o.protected,
-           t.status,t.priority,t.owner_object_id,t.agent_eligible,t.due_at,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
+           t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
+           t.completed_at,t.github_issue_url,t.brief_markdown,
            o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
     .bind(id)
@@ -1977,6 +2071,16 @@ pub async fn create_task(
         return get_task(pool, id).await;
     }
     validate_object_description(&input.title, &input.description)?;
+    if (input.status == "blocked") != input.blocked_reason.is_some() {
+        return Err(DbError::Invalid(
+            "blocked_reason is required exactly when status is blocked".into(),
+        ));
+    }
+    if (input.status == "done") != input.completed_at.is_some() {
+        return Err(DbError::Invalid(
+            "completed_at is required exactly when status is done".into(),
+        ));
+    }
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
     sqlx::query(
@@ -1993,14 +2097,21 @@ pub async fn create_task(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO tasks (object_id,status,priority,owner_object_id,agent_eligible,due_at) VALUES ($1,$2,$3,$4,$5,$6)",
+        r#"INSERT INTO tasks
+           (object_id,status,priority,owner_object_id,agent_suitable,blocked_reason,
+            due_at,completed_at,github_issue_url,brief_markdown)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
     )
     .bind(id)
     .bind(&input.status)
     .bind(&input.priority)
     .bind(input.owner_object_id)
-    .bind(input.agent_eligible)
+    .bind(input.agent_suitable)
+    .bind(&input.blocked_reason)
     .bind(input.due_at)
+    .bind(input.completed_at)
+    .bind(&input.github_issue_url)
+    .bind(&input.brief_markdown)
     .execute(&mut *tx)
     .await?;
     insert_event(
@@ -2046,13 +2157,38 @@ pub async fn update_task(
     let status = changes.status.unwrap_or_else(|| current.status.clone());
     let priority = changes.priority.unwrap_or_else(|| current.priority.clone());
     let owner_object_id = changes.owner_object_id.unwrap_or(current.owner_object_id);
-    let agent_eligible = changes.agent_eligible.unwrap_or(current.agent_eligible);
+    let agent_suitable = changes.agent_suitable.unwrap_or(current.agent_suitable);
+    let blocked_reason = if status == "blocked" {
+        changes.blocked_reason.unwrap_or(current.blocked_reason)
+    } else {
+        None
+    };
+    if status == "blocked" && blocked_reason.is_none() {
+        return Err(DbError::Invalid(
+            "blocked_reason is required when status is blocked".into(),
+        ));
+    }
     let due_at = changes.due_at.unwrap_or(current.due_at);
+    let completed_at = if status == "done" {
+        changes
+            .completed_at
+            .unwrap_or(current.completed_at)
+            .or_else(|| Some(OffsetDateTime::now_utc()))
+    } else {
+        None
+    };
+    let github_issue_url = changes.github_issue_url.unwrap_or(current.github_issue_url);
+    let brief_changed = changes.brief_markdown.is_some();
+    let brief_markdown = changes.brief_markdown.unwrap_or(current.brief_markdown);
     let mut tx = pool.begin().await?;
     let updated: Option<Object> = sqlx::query_as(
         r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,revision=revision+1,
            updated_by_type=$7,updated_by_id=$8,updated_at=now()
-           WHERE id=$1 AND revision=$2 AND kind='task' RETURNING *"#,
+           WHERE id=$1 AND revision=$2 AND kind='task'
+           RETURNING id,kind,title,description,protected,
+             CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
+             revision,created_by_type,created_by_id,updated_by_type,updated_by_id,
+             provenance,created_at,updated_at,archived_at"#,
     )
     .bind(id)
     .bind(expected_revision)
@@ -2066,14 +2202,20 @@ pub async fn update_task(
     .await?;
     let updated = updated.ok_or(DbError::Conflict)?;
     sqlx::query(
-        "UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,agent_eligible=$5,due_at=$6,updated_at=now() WHERE object_id=$1",
+        r#"UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,
+           agent_suitable=$5,blocked_reason=$6,due_at=$7,completed_at=$8,
+           github_issue_url=$9,brief_markdown=$10 WHERE object_id=$1"#,
     )
     .bind(id)
     .bind(&status)
     .bind(&priority)
     .bind(owner_object_id)
-    .bind(agent_eligible)
+    .bind(agent_suitable)
+    .bind(&blocked_reason)
     .bind(due_at)
+    .bind(completed_at)
+    .bind(&github_issue_url)
+    .bind(&brief_markdown)
     .execute(&mut *tx)
     .await?;
     insert_event(
@@ -2090,7 +2232,7 @@ pub async fn update_task(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_eligible": agent_eligible, "protected": protected}),
+        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_suitable": agent_suitable, "blocked_reason": blocked_reason, "completed_at": completed_at, "github_issue_url": github_issue_url, "brief_changed": brief_changed, "protected": protected}),
     )
     .await?;
     tx.commit().await?;
@@ -2120,7 +2262,7 @@ pub async fn list_chat_messages(
     Ok(sqlx::query_as(
         r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
                   o.title AS sender_title,u.user_kind AS sender_kind,m.content,
-                  m.source_created_at,m.ingested_sequence,m.ingested_at
+                  m.source_created_at,m.ingestion_sequence,m.ingested_at
            FROM chat_messages m
            JOIN users u ON u.object_id=m.sender_user_object_id
            JOIN objects o ON o.id=u.object_id
@@ -2134,10 +2276,10 @@ pub async fn list_chat_messages(
 
 pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError> {
     Ok(sqlx::query_as(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,
                   u.user_kind,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id
-           WHERE o.lifecycle='active' ORDER BY o.updated_at DESC,o.id LIMIT $1"#,
+           WHERE o.archived_at IS NULL ORDER BY o.updated_at DESC,o.id LIMIT $1"#,
     )
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
@@ -2146,7 +2288,7 @@ pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError>
 
 pub async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id AS object_id,o.title,o.description,o.lifecycle,o.revision,o.provenance,
+        r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,
                   u.user_kind,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id WHERE o.id=$1"#,
     )
@@ -2205,7 +2347,7 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
                     )
                   THEN 'slack'::text ELSE NULL::text END AS source_provider
            FROM objects o
-           WHERE o.lifecycle='active'
+           WHERE o.archived_at IS NULL
            ORDER BY o.updated_at DESC,o.id"#,
     )
     .fetch_all(pool)
@@ -2280,7 +2422,7 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
 
 pub async fn get_context_chat(pool: &PgPool, id: Uuid) -> Result<ContextChat, DbError> {
     sqlx::query_as(
-        r#"SELECT o.id AS object_id,o.lifecycle,ch.provider,ch.workspace_id,
+        r#"SELECT o.id AS object_id,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,ch.provider,ch.workspace_id,
                   ch.channel_id,ch.thread_id
            FROM chats ch JOIN objects o ON o.id=ch.object_id
            WHERE o.id=$1"#,
@@ -2314,18 +2456,18 @@ pub async fn context_anchor_candidates(
                    ELSE c.source_object_id END
                WHERE c.archived_at IS NULL
                  AND (c.source_object_id=$1 OR c.target_object_id=$1)
-                 AND other.lifecycle='active'
+                 AND other.archived_at IS NULL
            ), chosen AS (
                SELECT DISTINCT ON (object_id) object_id,priority,rationale
                FROM candidates
                ORDER BY object_id,priority,rationale
            )
-           SELECT o.id,o.kind,o.title,o.description,o.protected,o.lifecycle,o.revision,
+           SELECT o.id,o.kind,o.title,o.description,o.protected,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
                   o.created_by_type,o.created_by_id,o.updated_by_type,o.updated_by_id,
                   o.provenance,o.created_at,o.updated_at,o.archived_at,
                   chosen.priority,chosen.rationale
            FROM chosen JOIN objects o ON o.id=chosen.object_id
-           WHERE o.lifecycle='active'
+           WHERE o.archived_at IS NULL
            ORDER BY chosen.priority,o.id
            LIMIT 100"#,
     )
@@ -2354,7 +2496,9 @@ pub async fn context_subtypes(
                     WHEN 'task' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','task','status',t.status,'priority',t.priority,
                         'owner_object_id',t.owner_object_id,'owner_title',owner.title,
-                        'agent_eligible',t.agent_eligible,'due_at',t.due_at))
+                        'agent_suitable',t.agent_suitable,'blocked_reason',t.blocked_reason,
+                        'due_at',t.due_at,'completed_at',t.completed_at,
+                        'github_issue_url',t.github_issue_url))
                     WHEN 'chat' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','chat','provider',ch.provider,'surface_kind',ch.surface_kind,
                         'channel_name',ch.channel_name,'current_thread',o.id=$2))
@@ -2362,13 +2506,15 @@ pub async fn context_subtypes(
                         'kind','user','user_kind',u.user_kind,
                         'display_name',identity.display_name))
                     WHEN 'entity' THEN jsonb_build_object(
-                        'kind','entity','entity_kind','general')
+                        'kind','entity','entity_kind',e.entity_kind)
                     WHEN 'memory' THEN jsonb_build_object(
                         'kind','memory','happened_at',m.happened_at)
                     WHEN 'source' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','source','source_kind',s.source_kind,'canonical_uri',s.canonical_uri,
                         'publisher',s.publisher,'published_at',s.published_at,
-                        'language',s.language,'media_type',s.media_type,
+                        'published_at_precision',s.published_at_precision,
+                        'original_language',s.original_language,
+                        'original_media_type',s.original_media_type,
                         'current_content_id',s.current_content_id))
                     WHEN 'note' THEN jsonb_build_object(
                         'kind','note','content_format',n.content_format,
@@ -2379,6 +2525,7 @@ pub async fn context_subtypes(
            LEFT JOIN objects owner ON owner.id=t.owner_object_id
            LEFT JOIN chats ch ON ch.object_id=o.id
            LEFT JOIN users u ON u.object_id=o.id
+           LEFT JOIN entities e ON e.object_id=o.id
            LEFT JOIN memories m ON m.object_id=o.id
            LEFT JOIN sources s ON s.object_id=o.id
            LEFT JOIN notes n ON n.object_id=o.id
@@ -2413,7 +2560,7 @@ pub async fn full_text_candidates(
         .push_bind(text_search_config.as_str())
         .push("::regconfig, regexp_replace(")
         .push_bind(query_text)
-        .push(", '\\s+', ' OR ', 'g')) AS value) SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle, o.revision, o.created_by_type, o.created_by_id, o.updated_by_type, o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at, ts_rank_cd(");
+        .push(", '\\s+', ' OR ', 'g')) AS value) SELECT o.id, o.kind, o.title, o.description, o.protected, CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle, o.revision, o.created_by_type, o.created_by_id, o.updated_by_type, o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at, ts_rank_cd(");
     if text_search_config == crate::config::TextSearchConfig::SIMPLE {
         query.push("o.search_document");
     } else {
@@ -2435,7 +2582,7 @@ pub async fn full_text_candidates(
     } else {
         query.push("0::bigint AS connection_count");
     }
-    query.push(" FROM objects o CROSS JOIN search_query WHERE o.lifecycle='active' AND ");
+    query.push(" FROM objects o CROSS JOIN search_query WHERE o.archived_at IS NULL AND ");
     if text_search_config == crate::config::TextSearchConfig::SIMPLE {
         query.push("o.search_document");
     } else {
@@ -2476,7 +2623,7 @@ pub async fn semantic_candidates(
 ) -> Result<Vec<SearchCandidate>, DbError> {
     let vector = vector_literal(vector);
     let mut query = QueryBuilder::<Postgres>::new(
-        r#"SELECT o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
+        r#"SELECT o.id, o.kind, o.title, o.description, o.protected, CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
                   o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
                   o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at,
                   (1 - (e.embedding::vector("#,
@@ -2503,7 +2650,7 @@ pub async fn semantic_candidates(
             r#"
            FROM object_embeddings e
            JOIN objects o ON o.id=e.object_id
-           WHERE o.lifecycle='active'
+           WHERE o.archived_at IS NULL
              AND e.source_hash=object_embedding_source_hash(e.format_version,o.kind,o.title,o.description)
              AND e.model="#,
         )
@@ -2560,11 +2707,11 @@ pub async fn one_hop_neighbors(
                    WHERE degree.archived_at IS NULL
                      AND (degree.source_object_id=o.id OR degree.target_object_id=o.id))::bigint
                      AS connection_count,
-                  o.id, o.kind, o.title, o.description, o.protected, o.lifecycle,
+                  o.id, o.kind, o.title, o.description, o.protected, CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
                   o.revision, o.created_by_type, o.created_by_id, o.updated_by_type,
                   o.updated_by_id, o.provenance, o.created_at, o.updated_at, o.archived_at
            FROM neighbor_edges n
-           JOIN objects o ON o.id=n.neighbor_id AND o.lifecycle='active'
+           JOIN objects o ON o.id=n.neighbor_id AND o.archived_at IS NULL
            WHERE NOT (o.id = ANY($1::uuid[]))
              AND ($3::text IS NULL OR o.kind=$3)
            ORDER BY o.updated_at DESC, o.id
@@ -2611,7 +2758,7 @@ pub async fn context_connections(
            JOIN objects other
              ON other.id=CASE WHEN c.source_object_id=owner.id
                               THEN c.target_object_id ELSE c.source_object_id END
-            AND other.lifecycle='active'
+            AND other.archived_at IS NULL
            ORDER BY owner.id, c.updated_at DESC, c.id"#,
     )
     .bind(object_ids)

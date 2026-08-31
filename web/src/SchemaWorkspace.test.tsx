@@ -9,6 +9,7 @@ vi.mock("./api", () => ({
   api: {
     schema: vi.fn(),
     schemaRows: vi.fn(),
+    schemaProfile: vi.fn(),
   },
 }));
 
@@ -18,6 +19,7 @@ const objects = {
   estimated_row_count: 1,
   columns: [{ name: "id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false }],
   constraints: [{ name: "objects_pkey", kind: "primary_key", columns: ["id"], definition: "PRIMARY KEY (id)" }],
+  indexes: [], triggers: [],
 };
 const tasks = {
   name: "tasks",
@@ -25,6 +27,8 @@ const tasks = {
   estimated_row_count: 1,
   columns: [{ name: "object_id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false }],
   constraints: [{ name: "tasks_pkey", kind: "primary_key", columns: ["object_id"], definition: "PRIMARY KEY (object_id)" }],
+  indexes: [{ name: "tasks_pkey", unique: true, primary: true, constraint_backed: true, definition: "CREATE UNIQUE INDEX tasks_pkey ON tasks (object_id)" }],
+  triggers: [{ name: "tasks_prevent_removal", enabled: "enabled", definition: "CREATE TRIGGER tasks_prevent_removal" }],
 };
 const initial: SchemaSnapshot = {
   fingerprint: "first",
@@ -69,5 +73,22 @@ describe("dynamic schema refresh", () => {
     expect(screen.getByText("Focused row")).toBeVisible();
     await userEvent.click(screen.getByRole("button", { name: "Show all rows" }));
     expect(`${window.location.pathname}${window.location.search}`).toBe("/schema/tasks/rows");
+  });
+
+  it("shows indexes and triggers and runs an explicitly exact profile on demand", async () => {
+    window.history.replaceState({}, "", "/schema/tasks/structure");
+    vi.mocked(api.schema).mockResolvedValue(initial);
+    vi.mocked(api.schemaProfile).mockResolvedValue({
+      schema_fingerprint: "first", table: "tasks", exact: true, row_count: 1,
+      columns: [{ name: "object_id", null_count: 0, empty_count: null, distinct_count: 1, default_count: null }],
+      unavailable_reason: null,
+    });
+    render(<SchemaWorkspace selectedTable="tasks" />);
+    expect(await screen.findAllByText("tasks_pkey")).toHaveLength(2);
+    expect(screen.getByText("tasks_prevent_removal")).toBeVisible();
+    expect(api.schemaProfile).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Run exact profile" }));
+    expect(await screen.findByRole("table", { name: "Exact profile for tasks" })).toBeVisible();
+    expect(screen.getByText("Exact row count: 1")).toBeVisible();
   });
 });

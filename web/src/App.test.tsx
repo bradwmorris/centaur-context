@@ -36,19 +36,22 @@ const objects: SharedObject[] = ([
 const task: Task = {
   object_id: ids.task, title: "Canonical task", description: "Canonical task description", lifecycle: "active", revision: 1,
   provenance: { source_type: "human" }, protected: false, status: "todo", priority: "medium", owner_object_id: ids.user,
-  agent_eligible: true, due_at: null, created_at: now, updated_at: now,
+  agent_suitable: true, blocked_reason: null, due_at: null, completed_at: null, github_issue_url: null,
+  brief_markdown: null, created_at: now, updated_at: now,
 };
 
 const source: Source = {
   object_id: ids.source, title: "Canonical source", description: "Canonical source description", lifecycle: "active", revision: 1,
-  provenance: { source_type: "human" }, protected: false, source_kind: "podcast", canonical_uri: "https://example.com/podcast",
-  byline: "Example Host", publisher: "Example Publisher", published_at: now, accessed_at: now, language: "en", media_type: "text/plain",
-  artifact_reference: "artifact:episode-1", content_hash: "a".repeat(64), current_content_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", created_at: now, updated_at: now,
+  provenance: { source_type: "human" }, protected: false, source_kind: "podcast_episode", canonical_uri: "https://example.com/podcast",
+  byline: "Example Host", publisher: "Example Publisher", published_at: now, published_at_precision: "instant", last_accessed_at: now,
+  original_language: "en", original_media_type: "text/plain", original_artifact_reference: "artifact:episode-1",
+  current_content_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", created_at: now, updated_at: now,
 };
 
 const sourceContent: SourceContentVersion = {
   id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", source_object_id: ids.source, version: 1, content_kind: "transcript", language: "en",
-  extraction_method: "human_paste", extraction_version: null, content_hash: "b".repeat(64), size_bytes: 16000, artifact_reference: null, locators: {}, created_at: now,
+  extraction_method: "human_paste", extraction_version: null, content_sha256: "b".repeat(64), size_bytes: 16000,
+  capture_artifact_reference: null, coverage: "complete", captured_at: now, locators: {}, recorded_at: now,
 };
 
 const note: Note = {
@@ -60,7 +63,7 @@ const run: CuratorRun = {
   id: ids.run, chat_object_id: ids.chat, first_message_id: ids.message, last_message_id: ids.message,
   trigger: "explicit_finish", status: "completed", message_count: 1, idempotency_key: "run", attempts: 1,
   worker_id: null, model: "test", prompt_version: "v1", proposed_plan: null, committed_plan: {}, result: {},
-  created_at: now, started_at: now, completed_at: now, reversed_at: null, error_message: null,
+  queued_at: now, started_at: now, completed_at: now, reversed_at: null, error_message: null,
 };
 
 const evalSummary = {
@@ -100,6 +103,7 @@ const schemaSnapshot: SchemaSnapshot = {
         { name: "provenance", ordinal: 3, data_type: "jsonb", nullable: false, default: "'{}'::jsonb", identity: false, generated: false },
       ],
       constraints: [{ name: "objects_pkey", kind: "primary_key", columns: ["id"], definition: "PRIMARY KEY (id)" }],
+      indexes: [], triggers: [],
     },
     {
       name: "tasks", classification: "subtype", estimated_row_count: 1,
@@ -111,11 +115,13 @@ const schemaSnapshot: SchemaSnapshot = {
         { name: "tasks_pkey", kind: "primary_key", columns: ["object_id"], definition: "PRIMARY KEY (object_id)" },
         { name: "tasks_object_fk", kind: "foreign_key", columns: ["object_id"], definition: "FOREIGN KEY (object_id) REFERENCES objects(id)" },
       ],
+      indexes: [], triggers: [],
     },
     {
       name: "object_events", classification: "supporting", estimated_row_count: 8,
       columns: [{ name: "id", ordinal: 1, data_type: "uuid", nullable: false, default: null, identity: false, generated: false }],
       constraints: [{ name: "object_events_pkey", kind: "primary_key", columns: ["id"], definition: "PRIMARY KEY (id)" }],
+      indexes: [], triggers: [],
     },
   ],
   foreign_keys: [{ name: "tasks_object_fk", source_table: "tasks", source_columns: ["object_id"], target_table: "objects", target_columns: ["id"], one_to_one_subtype: true, nullable: false }],
@@ -149,7 +155,7 @@ function installApiMock() {
     if (path === "/api/v1/curator-runs") return json([run]);
     if (path === `/api/v1/curator-runs/${ids.run}`) return json({
       run,
-      messages: [{ id: ids.message, chat_object_id: ids.chat, provider_message_id: "1", sender_user_object_id: ids.user, sender_title: "Canonical user", sender_kind: "human", content: "Hello", source_created_at: now, ingested_sequence: 1, ingested_at: now }],
+      messages: [{ id: ids.message, chat_object_id: ids.chat, provider_message_id: "1", sender_user_object_id: ids.user, sender_title: "Canonical user", sender_kind: "human", content: "Hello", source_created_at: now, ingestion_sequence: 1, ingested_at: now }],
       changes: [
         { id: "change-object", sequence: 1, entity_type: "object", entity_id: ids.memory, action: "created", before_state: null, after_state: { title: "Canonical memory" }, after_revision: 1, created_at: now, undone_at: null },
         { id: "change-connection", sequence: 2, entity_type: "connection", entity_id: ids.connection, action: "created", before_state: null, after_state: {}, after_revision: 1, created_at: now, undone_at: null },
@@ -353,7 +359,7 @@ describe("canonical Object identity across the application", () => {
     render(<App />);
     expect(await screen.findByDisplayValue("Canonical source")).toBeVisible();
     const properties = screen.getByLabelText("Source properties");
-    expect(properties).toHaveTextContent("podcast");
+    expect(properties).toHaveTextContent("podcast episode");
     expect(within(properties).getByRole("link", { name: "https://example.com/podcast" })).toBeVisible();
     expect(within(properties).queryByRole("combobox")).not.toBeInTheDocument();
     expect(within(properties).queryByRole("textbox")).not.toBeInTheDocument();
@@ -409,6 +415,7 @@ describe("canonical Object identity across the application", () => {
       "new-object-description-help",
     );
     expect(screen.getByText(/Describe this specific entity directly/)).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Entity kind" })).toHaveValue("person");
   });
 
   it("renders an explicit missing-target state for an unknown deep link", async () => {
