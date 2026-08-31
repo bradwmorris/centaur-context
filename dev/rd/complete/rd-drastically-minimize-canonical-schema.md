@@ -131,7 +131,7 @@ existing rows pending, clear stale vectors, and reset retry state. The configure
 worker creates missing model rows, claims them with `FOR UPDATE SKIP LOCKED`, and
 fills the same row on success. Retrieval reads only completed, current-hash rows.
 The first release keeps the current embedding input contract—Object kind, title,
-and description—while active RD 3 decides any later Artifact-aware expansion.
+and description—while active RD 1 decides any later Artifact-aware expansion.
 
 **`object_events`** is the only mutation and reversal history:
 
@@ -264,7 +264,7 @@ when any guard fails.
   embedding, Curator, intake, and External Action configuration.
 - **Downstream and planning:** Update the pinned standard client, manifests,
   prompts, URLs, and workflow payloads in the Centaur Enyu overlay
-  in the coordinated release. Reconcile active embedding RD 3 and Eval/golden-
+  in the coordinated release. Reconcile active embedding RD 1 and Eval/golden-
   scenario RD 4 so they target `embeddings` and `runs`, not deleted tables.
 
 ### Route and payload cutover
