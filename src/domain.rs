@@ -236,6 +236,15 @@ pub const SOURCE_KINDS: &[&str] = &[
     "other",
 ];
 pub const NOTE_CONTENT_FORMATS: &[&str] = &["plain_text", "markdown"];
+pub const ARTIFACT_CAPTURE_OUTCOMES: &[&str] = &[
+    "complete",
+    "incomplete",
+    "unavailable",
+    "paywalled",
+    "disallowed",
+    "too_large",
+    "unsupported",
+];
 
 pub fn theme_slug(value: String) -> Result<String, ValidationError> {
     let value = required_text(value, "slug", 100)?.to_ascii_lowercase();

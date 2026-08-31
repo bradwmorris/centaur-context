@@ -126,6 +126,25 @@ versioned rate-card snapshot and are stored in integer micro-USD. ChatGPT
 subscription or credit usage must display that basis without claiming a `$0`
 per-trace bill. Missing usage, price, or credit data remains visibly incomplete.
 
+## Artifact capture and embedding backfill
+
+Only an Artifact with `capture_outcome=complete` and verbatim text may be a
+Source's current Artifact. Other outcomes remain immutable evidence of a failed
+or partial capture and require an exact reason. Check `/api/v2/embeddings/status`
+before and after rollout; it reports configuration identity, queue counts, oldest
+work, and lexical fallback state, never credentials, vectors, or full text.
+
+Embedding backfill is the normal worker reconciliation loop. On startup and every
+poll it idempotently queues missing Object vectors and deterministic chunks for
+complete current textual Artifacts. A safe rollout is: record status; take and
+verify a backup; enable all provider settings; deploy one replica; wait for one
+canary Source to reach Object and Artifact-chunk completion; test an exact lexical
+query and a paraphrase with attributed Artifact offsets; inspect provider usage
+and failures; then allow the resumable queue to drain. Disabling all embedding
+settings immediately returns the service to lexical-only mode without changing
+canonical Artifacts. Restore a backup only for canonical migration-integrity
+failure, not for ordinary derived-vector failure.
+
 ## Rollback
 
 For a name-handoff rollback, first scale `deployment/centaur-context` to zero,

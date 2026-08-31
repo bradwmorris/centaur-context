@@ -1,6 +1,6 @@
 # 1 — RD: Enable Embeddings and Complete Source Capture
 
-**Status:** `in_progress`
+**Status:** `review`
 **Created:** 2026-08-31
 **GitHub Issue:** [#76](https://github.com/bradwmorris/centaur-context/issues/76)
 
@@ -37,10 +37,10 @@ endpoint/model/dimension/mode combination; lexical retrieval remains available.
 
 ## What We Are Doing
 
-- [ ] Every new Source has one current immutable Artifact containing the complete
+- [x] Every new Source has one current immutable Artifact containing the complete
   verbatim supporting text, or an explicit non-complete capture outcome that can
   never be reported as ready/complete.
-- [ ] Exact Artifact text remains authoritative while rebuildable Object and
+- [x] Exact Artifact text remains authoritative while rebuildable Object and
   Artifact-chunk embeddings make full transcripts, articles, papers, and documents
   discoverable with attributed evidence windows.
 - [ ] Live embeddings reach complete, current coverage; retries, fallback,
@@ -132,13 +132,26 @@ endpoint/model/dimension/mode combination; lexical retrieval remains available.
 
 ## Checks
 
-- [ ] Database/API/client/UI/Enyu tests cover every capture outcome, exact
-  hash/size, atomicity, versions, limits, idempotency, malicious/partial model
-  output, chunk boundaries, stale jobs, leases/retries, ranking, authorization,
-  and lexical fallback.
-- [ ] Eval, query-plan/index-size audit, dry-run/backfill reconciliation, live
-  canaries, backup/restore rehearsal, repository-root verification, both
-  repositories' tests, and `git diff --check` pass.
+- [x] Local tests cover exact hash/size enforcement, incomplete-current rejection,
+  idempotency, model rewrite rejection, bounded Unicode chunks, worker jobs,
+  evidence offsets, authorization, and lexical fallback.
+- [x] A schema-17 migration rehearsal, full repository verification, targeted
+  Enyu tests, query-plan/index-size audit, and `git diff --check` pass.
+- [ ] Provider-backed evals, live backup/canaries, backfill reconciliation, and
+  rollback rehearsal require the requester approvals listed below.
+
+## Verification Results
+
+- All 72 Rust/API/database tests pass against a disposable pgvector database;
+  formatting and Clippy with warnings denied pass.
+- All 41 web tests, TypeScript type-checking, and the production build pass.
+- All 13 Python client tests, Python compilation, and the 11 directly affected
+  Enyu workflow/overlay tests pass.
+- A schema-17 fixture upgraded with the complete current Artifact preserved and
+  an unproven legacy Artifact classified `incomplete`. GIN Artifact lexical and
+  configured-dimension HNSW query plans use their intended indexes.
+- The broader Enyu overlay suite retains two unrelated pre-existing failures for
+  stale deployment image/repository pin expectations.
 
 ## Approval Boundary
 

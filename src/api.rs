@@ -133,6 +133,7 @@ pub fn agent_router(state: AppState, token: String) -> Router {
                 .route("/objects/{id}", get(read_context_object))
                 .route("/objects/{id}/artifacts", get(list_artifacts))
                 .route("/artifacts/{id}/content", get(read_artifact_by_id))
+                .route("/embeddings/status", get(read_embedding_status))
                 .route("/search/sources", get(search_sources))
                 .route("/sources/{id}", get(read_source))
                 .route("/sources/{id}/content", get(read_artifact))
@@ -180,6 +181,7 @@ fn service_router(state: AppState) -> Router {
             "/api/v2",
             Router::new()
                 .route("/meta", get(api_meta))
+                .route("/embeddings/status", get(read_embedding_status))
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/object-visuals", get(list_object_visuals))
                 .route("/objects/{id}", get(read_object).patch(update_object))
@@ -299,6 +301,30 @@ async fn api_meta() -> Json<Value> {
             "compatibility": "Only documented /api/v2 routes are supported; unknown versions fail closed."
         }
     }))
+}
+
+async fn read_embedding_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let configured = state.embeddings.as_ref().map(|client| {
+        json!({
+            "model":client.model(),
+            "dimensions":client.dimensions(),
+            "input_mode":client.document_mode(),
+        })
+    });
+    let status = db::embedding_status(
+        &state.pool,
+        state
+            .embeddings
+            .as_ref()
+            .map(|client| (client.model(), client.dimensions(), client.document_mode())),
+    )
+    .await?;
+    Ok(Json(json!({"data":{
+        "configured":configured.is_some(),
+        "configuration":configured,
+        "queue":status,
+        "fallback":"full_text",
+    }})))
 }
 
 async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -1053,6 +1079,9 @@ struct CreateArtifactRequest {
     media_type: Option<String>,
     language: Option<String>,
     captured_at: Option<String>,
+    capture_outcome: String,
+    capture_reason: Option<String>,
+    expected_size_bytes: Option<i64>,
     metadata: Option<Value>,
     supersedes_artifact_id: Option<Uuid>,
 }
@@ -1087,6 +1116,13 @@ async fn create_artifact(
             media_type: optional_text(input.media_type, "media_type", 255)?,
             language: optional_text(input.language, "language", 35)?,
             captured_at: parse_optional_timestamp(input.captured_at, "captured_at")?,
+            capture_outcome: allowed(
+                input.capture_outcome,
+                "capture_outcome",
+                crate::domain::ARTIFACT_CAPTURE_OUTCOMES,
+            )?,
+            capture_reason: optional_text(input.capture_reason, "capture_reason", 1000)?,
+            expected_size_bytes: input.expected_size_bytes,
             metadata,
             supersedes_artifact_id: input.supersedes_artifact_id,
         },

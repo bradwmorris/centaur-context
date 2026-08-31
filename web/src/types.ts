@@ -249,6 +249,9 @@ export interface Artifact {
   language: string | null;
   sha256: string;
   size_bytes: number;
+  capture_outcome: "complete" | "incomplete" | "unavailable" | "paywalled" | "disallowed" | "too_large" | "unsupported";
+  capture_reason: string | null;
+  expected_size_bytes: number | null;
   metadata: Record<string, unknown>;
   supersedes_artifact_id: string | null;
   captured_at: string | null;
@@ -259,6 +262,25 @@ export interface ArtifactWindow extends Artifact {
   text: string;
   offset: number;
   next_offset: number | null;
+}
+
+export interface EmbeddingStatus {
+  configured: boolean;
+  configuration: { model: string; dimensions: number; input_mode: string } | null;
+  queue: {
+    counts: Array<{ target: "object" | "artifact_chunk"; status: "pending" | "running" | "failed" | "terminal" | "completed"; count: number }>;
+    oldest_available_at: string | null;
+    oldest_age_seconds: number | null;
+    coverage: {
+      active_objects: number;
+      current_complete_artifacts: number;
+      completed_object_vectors: number;
+      completed_artifact_chunks: number;
+      indexed_current_artifacts: number;
+      stale_rows: number;
+    } | null;
+  };
+  fallback: "full_text";
 }
 
 export interface ObjectEvent {

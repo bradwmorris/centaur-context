@@ -23,8 +23,9 @@ use uuid::Uuid;
 use crate::{
     api::AppState,
     domain::{
-        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, SOURCE_KINDS, USER_KINDS, allowed,
-        object_description, optional_text, provenance, required_text,
+        ARTIFACT_CAPTURE_OUTCOMES, ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS,
+        SOURCE_KINDS, USER_KINDS, allowed, object_description, optional_text, provenance,
+        required_text,
     },
 };
 
@@ -212,8 +213,12 @@ pub struct IntakeArtifact {
     pub uri: Option<String>,
     pub media_type: Option<String>,
     pub sha256: String,
+    pub size_bytes: i64,
     pub language: Option<String>,
     pub captured_at: Option<String>,
+    pub capture_outcome: String,
+    pub capture_reason: Option<String>,
+    pub expected_size_bytes: Option<i64>,
     #[serde(default)]
     pub metadata: Option<Value>,
     pub supersedes_artifact_id: Option<Uuid>,
@@ -601,6 +606,48 @@ pub(crate) async fn prepare_batch_for_app(
                 "Artifact {} hash mismatch",
                 content.client_key
             )));
+        }
+        let actual_size = content
+            .content
+            .as_deref()
+            .unwrap_or_else(|| content.uri.as_deref().unwrap())
+            .len() as i64;
+        if content.size_bytes != actual_size {
+            return Err(IntakeError::BadRequest(format!(
+                "Artifact {} byte-size mismatch",
+                content.client_key
+            )));
+        }
+        content.capture_outcome = allowed(
+            content.capture_outcome.clone(),
+            "artifact.capture_outcome",
+            ARTIFACT_CAPTURE_OUTCOMES,
+        )?;
+        content.capture_reason = optional_text(
+            content.capture_reason.take(),
+            "artifact.capture_reason",
+            1000,
+        )?;
+        if content.capture_outcome == "complete" {
+            if content.content.is_none() {
+                return Err(IntakeError::BadRequest(
+                    "a complete Artifact requires verbatim content".into(),
+                ));
+            }
+            if content.capture_reason.is_some() {
+                return Err(IntakeError::BadRequest(
+                    "a complete Artifact must not include capture_reason".into(),
+                ));
+            }
+        } else if content.capture_reason.is_none() {
+            return Err(IntakeError::BadRequest(
+                "a non-complete Artifact requires capture_reason".into(),
+            ));
+        }
+        if content.expected_size_bytes.is_some_and(|value| value <= 0) {
+            return Err(IntakeError::BadRequest(
+                "expected_size_bytes must be positive".into(),
+            ));
         }
         content.language = optional_text(content.language.take(), "language", 35)?;
         parse_time(content.captured_at.as_deref(), "captured_at")?;
@@ -1049,8 +1096,9 @@ pub(crate) async fn write_batch(
         sqlx::query(
             r#"INSERT INTO artifacts
             (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
-             metadata,supersedes_artifact_id,captured_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+             capture_outcome,capture_reason,expected_size_bytes,metadata,
+             supersedes_artifact_id,captured_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)"#,
         )
         .bind(content_id)
         .bind(source_id)
@@ -1061,23 +1109,22 @@ pub(crate) async fn write_batch(
         .bind(&content.media_type)
         .bind(&content.language)
         .bind(&content.sha256)
-        .bind(
-            content
-                .content
-                .as_deref()
-                .unwrap_or_else(|| content.uri.as_deref().unwrap())
-                .len() as i64,
-        )
+        .bind(content.size_bytes)
+        .bind(&content.capture_outcome)
+        .bind(&content.capture_reason)
+        .bind(content.expected_size_bytes)
         .bind(content.metadata.as_ref().expect("validated metadata"))
         .bind(content.supersedes_artifact_id)
         .bind(parse_time(content.captured_at.as_deref(), "captured_at")?)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
-            .bind(source_id)
-            .bind(content_id)
-            .execute(&mut *tx)
-            .await?;
+        if content.capture_outcome == "complete" {
+            sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+                .bind(source_id)
+                .bind(content_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
             .bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut *tx).await?;
         insert_intake_event(
@@ -1091,7 +1138,8 @@ pub(crate) async fn write_batch(
             batch,
             "artifact",
             &content.client_key,
-            json!({"artifact_id":content_id,"kind":content.kind,"sha256":content.sha256}),
+            json!({"artifact_id":content_id,"kind":content.kind,"sha256":content.sha256,
+                "size_bytes":content.size_bytes,"capture_outcome":content.capture_outcome}),
         )
         .await?;
     }

@@ -1429,8 +1429,10 @@ async fn insert_object(
                 sqlx::query(
                     r#"INSERT INTO artifacts
                     (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
-                     metadata,captured_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#,
+                     capture_outcome,capture_reason,metadata,captured_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'incomplete',
+                            'conversation evidence does not establish a complete source capture',
+                            $11,$12)"#,
                 )
                 .bind(content_id)
                 .bind(id)
@@ -1446,11 +1448,6 @@ async fn insert_object(
                 .bind(content.captured_at)
                 .execute(&mut **tx)
                 .await?;
-                sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
-                    .bind(id)
-                    .bind(content_id)
-                    .execute(&mut **tx)
-                    .await?;
             }
         }
         _ => unreachable!("validated curator Object kind"),

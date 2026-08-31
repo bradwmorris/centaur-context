@@ -5,6 +5,7 @@ use axum::{
 use centaur_context::{api::AppState, config::TextSearchConfig, db, source_intake::router};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 
@@ -42,8 +43,10 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     db::migrate(&pool).await.unwrap();
     let token = "s".repeat(32);
     let key = format!("enyu-source-contract-{}", uuid::Uuid::new_v4());
+    let content =
+        format!("The permanent Enyu workflow stores this distinctive retrievable evidence: {key}.");
     let payload = json!({
-        "version":"centaur-context-source-intake-v2",
+        "version":"centaur-context-source-intake-v3",
         "idempotency_key":key,
         "source":{
             "title":"A durable Enyu research source",
@@ -60,10 +63,14 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
             "original_artifact_reference":null,
             "capture_artifact_reference":null,
             "content_kind":"article_text",
-            "content":format!("The permanent Enyu workflow stores this distinctive retrievable evidence: {key}."),
+            "content":content,
+            "content_sha256":format!("{:x}",Sha256::digest(content.as_bytes())),
+            "content_size_bytes":content.len(),
             "extraction_method":"enyu-researcher",
             "extraction_version":"1",
-            "coverage":"complete",
+            "capture_outcome":"complete",
+            "capture_reason":null,
+            "expected_size_bytes":content.len(),
             "captured_at":"2026-08-30T00:00:00Z",
             "provenance":{"source_type":"enyu_workflow","source_ref":"contract-test"}
         },
@@ -172,6 +179,7 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
     let key = format!("enyu-source-adoption-{}", uuid::Uuid::new_v4());
     let canonical_uri = format!("https://example.test/enyu-source/{key}");
     let placeholder_id = uuid::Uuid::new_v4();
+    let content = format!("The adopted Source contains complete workflow evidence: {key}.");
     let mut tx = pool.begin().await.unwrap();
     sqlx::query(
         r#"INSERT INTO objects
@@ -196,7 +204,7 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
     tx.commit().await.unwrap();
 
     let payload = json!({
-        "version":"centaur-context-source-intake-v2",
+        "version":"centaur-context-source-intake-v3",
         "idempotency_key":key,
         "source":{
             "title":"A captured Enyu research source",
@@ -213,10 +221,14 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
             "original_artifact_reference":null,
             "capture_artifact_reference":null,
             "content_kind":"article_text",
-            "content":format!("The adopted Source contains complete workflow evidence: {key}."),
+            "content":content,
+            "content_sha256":format!("{:x}",Sha256::digest(content.as_bytes())),
+            "content_size_bytes":content.len(),
             "extraction_method":"enyu-researcher",
             "extraction_version":"1",
-            "coverage":"complete",
+            "capture_outcome":"complete",
+            "capture_reason":null,
+            "expected_size_bytes":content.len(),
             "captured_at":"2026-08-30T00:00:00Z",
             "provenance":{"source_type":"enyu_workflow","source_ref":"adoption-test"}
         },

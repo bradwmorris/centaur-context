@@ -89,6 +89,16 @@ Installers may select `dutch`, `english`, `french`, `german`, `italian`,
 default; set `EMBEDDING_INPUT_MODE=typed` only when the provider supports the
 `search_document` and `search_query` input types.
 
+Embeddings are optional. The smallest recommended hosted setup is
+`EMBEDDING_API_URL=https://api.openai.com/v1/embeddings`,
+`EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_DIMENSIONS=1536`, and
+`EMBEDDING_INPUT_MODE=shared`, with a purpose-bound provider key in
+`EMBEDDING_API_TOKEN`. Add the URL, token, model, and dimensions together;
+partial configuration fails startup. Enabling these values sends Object summaries
+and complete current Artifact chunks to that provider and may incur cost, so it
+requires an explicit privacy and spend decision. Without them, Artifact and Object
+full-text search remains available.
+
 ## 4. Install
 
 ```bash

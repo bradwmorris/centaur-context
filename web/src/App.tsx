@@ -7,7 +7,7 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
@@ -401,6 +401,8 @@ function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { obje
   const [pasteOpen, setPasteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null);
+  useEffect(() => { void api.embeddingStatus().then(setEmbeddingStatus).catch(() => setEmbeddingStatus(null)); }, [artifacts]);
   useEffect(() => { setSelectedId(selectedDefault); setPreview([]); }, [selectedDefault]);
   const read = async (offset: number) => {
     if (selectedId === null) return; setBusy(true); setError(null);
@@ -411,15 +413,17 @@ function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { obje
   const append = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try {
-      await api.createArtifact(objectId, { kind: String(data.get("kind")), title: optional(data, "title"), content: String(data.get("text")), media_type: "text/plain", language: optional(data, "language"), metadata: { source_type: "human_paste" }, supersedes_artifact_id: selectedId, captured_at: optionalDate(data, "captured_at") });
+      const captureOutcome = String(data.get("capture_outcome"));
+      await api.createArtifact(objectId, { kind: String(data.get("kind")), title: optional(data, "title"), content: String(data.get("text")), media_type: "text/plain", language: optional(data, "language"), capture_outcome: captureOutcome, capture_reason: captureOutcome === "complete" ? null : optional(data, "capture_reason"), expected_size_bytes: null, metadata: { source_type: "human_paste" }, supersedes_artifact_id: selectedId, captured_at: optionalDate(data, "captured_at") });
       setPasteOpen(false); setPreview([]); await onCreated();
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   };
   const nextOffset = preview.at(-1)?.next_offset ?? null;
   return <Section title="Artifacts" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Add artifact</button>}>
+    <p className="muted">{embeddingStatus?.configured ? `Semantic indexing: ${embeddingStatus.configuration?.model} (${embeddingStatus.configuration?.dimensions} dimensions)` : "Semantic indexing disabled; full-text search remains available."}</p>
     {pasteOpen && <form className="form source-content-form" onSubmit={append}>
-      <div className="source-fields"><Field label="Kind"><input name="kind" required maxLength={100} defaultValue="transcript" /></Field><Field label="Title"><input name="title" maxLength={300} /></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field></div>
+      <div className="source-fields"><Field label="Kind"><input name="kind" required maxLength={100} defaultValue="transcript" /></Field><Field label="Title"><input name="title" maxLength={300} /></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Capture outcome"><select name="capture_outcome" defaultValue="complete"><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="unavailable">Unavailable</option><option value="paywalled">Paywalled</option><option value="disallowed">Disallowed</option><option value="too_large">Too large</option><option value="unsupported">Unsupported</option></select></Field><Field label="Reason when not complete"><input name="capture_reason" maxLength={1000} /></Field></div>
       <Field label="Text"><textarea name="text" aria-label="Artifact text" rows={12} required placeholder="Paste a transcript or other supporting text…" /></Field>
       <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save artifact"}</button></div>
     </form>}
@@ -435,7 +439,7 @@ function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { obje
 
 function ArtifactSummary({ artifact }: { artifact: Artifact | undefined }) {
   if (!artifact) return null;
-  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}</p>;
+  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.capture_outcome} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}{artifact.capture_reason ? ` · ${artifact.capture_reason}` : ""}</p>;
 }
 
 function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
