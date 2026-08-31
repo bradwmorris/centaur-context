@@ -142,7 +142,10 @@ async fn reserve(
     let summary = bounded_text(&request.summary, "summary", 500)?;
     let metadata = safe_metadata(request.metadata)?;
 
-    if let Some(run_id) = idempotent_run(&state.app, &actor, &idempotency_key).await? {
+    let mut tx = state.app.pool.begin().await?;
+    lock_reservation_key(&mut tx, &idempotency_key).await?;
+    if let Some(run_id) = idempotent_run(&mut tx, &actor, &idempotency_key).await? {
+        tx.commit().await?;
         let action = get_action(&state.app, run_id).await?;
         if action.provider != provider
             || action.action_kind != action_kind
@@ -153,6 +156,17 @@ async fn reserve(
             ));
         }
         return Ok(Json(json!({"data":action,"idempotent":true})));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE kind='external_action' AND idempotency_key=$1)",
+    )
+    .bind(&idempotency_key)
+    .fetch_one(&mut *tx)
+    .await?
+    {
+        return Err(IntakeError::Conflict(
+            "idempotency key belongs to a different principal".into(),
+        ));
     }
 
     let run_id = Uuid::new_v4();
@@ -169,7 +183,8 @@ async fn reserve(
       "title":title,"summary":summary,"metadata":metadata,"centaur_thread_key":actor.centaur_thread_key,
       "centaur_execution_id":actor.centaur_execution_id}))
     .bind(json!({"state":"reserved"}))
-    .execute(&state.app.pool).await?;
+    .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(
         json!({"data":get_action(&state.app, run_id).await?,"idempotent":false}),
     ))
@@ -185,7 +200,10 @@ async fn append_event(
     let idempotency_key = bounded_token(&request.idempotency_key, "idempotency_key", 128)?;
     let event_type = bounded_token(&request.event_type, "event_type", 80)?;
     let metadata = safe_metadata(request.metadata)?;
-    if let Some(existing_id) = idempotent_run(&state.app, &actor, &idempotency_key).await? {
+    let mut tx = state.app.pool.begin().await?;
+    lock_idempotency_key(&mut tx, &actor, &idempotency_key).await?;
+    if let Some(existing_id) = idempotent_run(&mut tx, &actor, &idempotency_key).await? {
+        tx.commit().await?;
         if existing_id != run_id {
             return Err(IntakeError::Conflict(
                 "idempotency key belongs to a different External action".into(),
@@ -196,7 +214,16 @@ async fn append_event(
         ));
     }
 
-    let current = get_action(&state.app, run_id).await?;
+    let current: ExternalAction = sqlx::query_as(
+        r#"SELECT id,input->>'provider' provider,input->>'action_kind' action_kind,
+          input->>'external_key' external_key,status state,input->'metadata' metadata,
+          trace,created_at,updated_at FROM runs
+          WHERE id=$1 AND kind='external_action' FOR UPDATE"#,
+    )
+    .bind(run_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| IntakeError::BadRequest("External action not found".into()))?;
     if request
         .expected_state
         .as_deref()
@@ -214,7 +241,8 @@ async fn append_event(
       result=result||jsonb_build_object('state',$2::text),
       completed_at=CASE WHEN $2 IN ('delivered','suppressed','failed') THEN now() ELSE completed_at END,
       updated_at=now() WHERE id=$1 AND kind='external_action'"#)
-      .bind(run_id).bind(next_state).bind(entry).execute(&state.app.pool).await?;
+      .bind(run_id).bind(next_state).bind(entry).execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(
         json!({"data":get_action(&state.app, run_id).await?,"idempotent":false}),
     ))
@@ -239,8 +267,35 @@ async fn get_action(app: &AppState, run_id: Uuid) -> Result<ExternalAction, Inta
     .ok_or_else(|| IntakeError::BadRequest("External action not found".into()))
 }
 
+async fn lock_idempotency_key(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &ActorContext,
+    key: &str,
+) -> Result<(), IntakeError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('external_action:' || $1 || ':' || $2 || ':' || $3,0))")
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(key)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn lock_reservation_key(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    key: &str,
+) -> Result<(), IntakeError> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('external_action_reservation:' || $1,0))",
+    )
+    .bind(key)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 async fn idempotent_run(
-    app: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     actor: &ActorContext,
     key: &str,
 ) -> Result<Option<Uuid>, IntakeError> {
@@ -252,7 +307,7 @@ async fn idempotent_run(
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(key)
-    .fetch_optional(&app.pool)
+    .fetch_optional(&mut **tx)
     .await?)
 }
 
