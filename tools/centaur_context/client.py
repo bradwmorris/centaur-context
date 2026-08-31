@@ -677,6 +677,25 @@ class CentaurContextClient:
             "validate", manifest, principal_id=principal_id, thread_key=thread_key
         )
 
+    def source_intake_resolve_connections(
+        self,
+        queries: list[str],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve unique exact Entity and Theme titles through trusted Source intake."""
+        if not isinstance(queries, list) or not queries:
+            raise ValueError("queries must be a non-empty array")
+        return self._request(
+            "POST",
+            "/api/v2/source-intake/resolve-connections",
+            json={"queries": queries},
+            token=self._source_intake_token(),
+            base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
     def source_intake_commit(
         self,
         manifest: dict[str, Any],

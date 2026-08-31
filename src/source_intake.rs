@@ -25,6 +25,7 @@ use crate::{
         IntakeArtifact, IntakeBatchRequest, IntakeConnection, IntakeError, IntakeObject,
         IntakeObjectRef, IntakeSource, PreparedBatch,
     },
+    search,
 };
 
 const MAX_SOURCE_INTAKE_BODY_BYTES: usize = 1024 * 1024;
@@ -47,6 +48,10 @@ pub fn router(app: AppState, token: String) -> Router {
         .route("/api/v2/source-intake/validate", post(validate_source))
         .route("/api/v2/source-intake/commit", post(commit_source))
         .route("/api/v2/source-intake/status", post(source_status))
+        .route(
+            "/api/v2/source-intake/resolve-connections",
+            post(resolve_connections),
+        )
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_SOURCE_INTAKE_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, source_intake_auth))
@@ -175,6 +180,61 @@ pub struct SourceConnection {
     pub description: String,
     #[serde(default)]
     pub provenance: Option<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveConnectionsRequest {
+    queries: Vec<String>,
+}
+
+async fn resolve_connections(
+    State(state): State<SourceIntakeState>,
+    Json(input): Json<ResolveConnectionsRequest>,
+) -> Result<Json<Value>, IntakeError> {
+    if input.queries.len() > 16 {
+        return Err(IntakeError::BadRequest(
+            "connection resolution accepts at most 16 queries".into(),
+        ));
+    }
+    let mut resolved = Vec::new();
+    let mut target_ids = HashSet::new();
+    for raw_query in input.queries {
+        let query = raw_query.trim();
+        if query.is_empty() || query.len() > 1_000 {
+            return Err(IntakeError::BadRequest(
+                "connection queries must be non-empty and at most 1000 bytes".into(),
+            ));
+        }
+        let packet = search::search(
+            &state.app.pool,
+            None,
+            state.app.text_search_config,
+            query,
+            None,
+            10,
+        )
+        .await?;
+        let exact = packet
+            .objects
+            .into_iter()
+            .filter(|candidate| {
+                matches!(candidate.kind.as_str(), "entity" | "theme")
+                    && candidate.title.eq_ignore_ascii_case(query)
+            })
+            .collect::<Vec<_>>();
+        if let [candidate] = exact.as_slice()
+            && target_ids.insert(candidate.id)
+        {
+            resolved.push(json!({
+                "query": query,
+                "target_object_id": candidate.id,
+                "target_kind": candidate.kind,
+                "title": candidate.title,
+            }));
+        }
+    }
+    Ok(Json(json!({"data":{"connections":resolved}})))
 }
 
 async fn prepared(

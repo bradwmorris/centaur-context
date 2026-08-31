@@ -133,17 +133,20 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     )
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
     scoped.source_intake_validate({"version": "centaur-context-source-intake-v2"})
+    scoped.source_intake_resolve_connections(["Ryan Greenblatt", "Agents"])
     scoped.reserve_external_action({"version": "centaur-context-external-action-v2"})
 
     assert [(request.url.host, request.url.path) for request in requests] == [
         ("notes.test", "/api/v2/notes"),
         ("intake.test", "/api/v2/intake/batches/validate"),
         ("source-intake.test", "/api/v2/source-intake/validate"),
+        ("source-intake.test", "/api/v2/source-intake/resolve-connections"),
         ("actions.test", "/api/v2/external-actions/reserve"),
     ]
     assert [request.headers["authorization"] for request in requests] == [
         "Bearer " + "n" * 32,
         "Bearer " + "i" * 32,
+        "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "e" * 32,
     ]
