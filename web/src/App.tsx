@@ -24,6 +24,7 @@ const descriptionExamples: Record<ObjectKind, string> = {
   source: "A concise summary of the evidence and why it matters.",
   note: "A short summary that helps people recognize what this note contains.",
   theme: "A research vertical used to group related work for retrieval and audience interests.",
+  external_action: "A recorded outbound action performed through an external system.",
 };
 const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video", "book", "report", "document", "dataset", "web_page", "social_post", "other"];
 

@@ -15,10 +15,10 @@ const user = {
 describe("record visual language", () => {
   it("gives every Object type and Task state text plus a non-colour icon", () => {
     render(<>
-      {(["task", "chat", "user", "entity", "memory"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
+      {(["task", "chat", "user", "entity", "memory", "external_action"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
       {(["todo", "doing", "blocked", "review", "done"] as const).map((status) => <TaskStatusBadge status={status} key={status} />)}
     </>);
-    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "To do", "Doing", "Blocked", "Review", "Done"]) {
+    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "External action", "To do", "Doing", "Blocked", "Review", "Done"]) {
       expect(screen.getByText(label)).toBeVisible();
     }
     expect(screen.getByText("Memory")).toHaveTextContent("✦Memory");

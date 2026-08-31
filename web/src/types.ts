@@ -1,4 +1,4 @@
-export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme";
+export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme" | "external_action";
 export type TaskStatus = "backlog" | "todo" | "doing" | "review" | "done" | "blocked";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
 export type SchemaViewMode = "map" | "rows";
