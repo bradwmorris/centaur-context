@@ -38,14 +38,9 @@ ALTER TABLE artifacts
         capture_outcome<>'complete' OR content IS NOT NULL
     );
 
-DO $$ BEGIN
-    IF EXISTS (
-        SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
-        WHERE a.capture_outcome<>'complete' OR a.content IS NULL
-    ) THEN
-        RAISE EXCEPTION 'existing Source current Artifact is not a complete textual capture';
-    END IF;
-END $$;
+-- Preserve legacy current pointers without overstating their completeness. The
+-- trigger below governs every future current-Artifact assignment, while the
+-- migration marks unproven historical captures incomplete and lexical-only.
 
 CREATE OR REPLACE FUNCTION validate_current_artifact() RETURNS trigger
 LANGUAGE plpgsql AS $$

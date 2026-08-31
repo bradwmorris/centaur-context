@@ -1,7 +1,8 @@
 # 4 — RD: Run Slack Bot Golden Scenarios and Evals
 
-**Status:** `scoped`
+**Status:** `in_progress`
 **Created:** 2026-08-30
+**GitHub Issue:** [#78](https://github.com/bradwmorris/centaur-context/issues/78)
 **Dependencies:** Active priority 3 and the completed canonical-data,
 Editor-publishing, and Paradigm-corpus RDs; user-facing bots are `Rez` (the
 stable Enyu researcher identity) and `Ed` (the stable editor identity).

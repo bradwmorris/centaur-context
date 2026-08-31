@@ -353,7 +353,14 @@ class CentaurContextClient:
             params["kind"] = _clean(kind)
         return self._request("GET", "/api/v2/context", params=params)
 
-    def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> dict[str, Any]:
+    def search_objects(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 20,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
         """Search canonical Objects without Context Builder importance boosting."""
         query = _clean(query)
         if not query:
@@ -361,7 +368,13 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(kind):
             params["kind"] = _clean(kind)
-        return self._request("GET", "/api/v2/search/objects", params=params)
+        return self._request(
+            "GET",
+            "/api/v2/search/objects",
+            params=params,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
 
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""

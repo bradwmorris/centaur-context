@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     Extension, Json, Router,
@@ -184,25 +187,37 @@ async fn prepared(
         .source
         .as_ref()
         .expect("Source adapter");
+    let canonical_uri = source.canonical_uri.clone();
     #[derive(sqlx::FromRow)]
     struct Conflict {
         object_id: Uuid,
         protected: bool,
         current_artifact_id: Option<Uuid>,
-        sha256: Option<String>,
+        current_artifact_sha256: Option<String>,
+        current_artifact_supersedes_id: Option<Uuid>,
+        matching_artifact_id: Option<Uuid>,
         provenance: Value,
         canonical_uri: Option<String>,
         same_batch: bool,
     }
     let conflicts: Vec<Conflict> = sqlx::query_as(
-        r#"SELECT s.object_id,o.protected,s.current_artifact_id,sc.sha256,o.provenance,
+        r#"SELECT s.object_id,o.protected,s.current_artifact_id,
+                  current_artifact.sha256 AS current_artifact_sha256,
+                  current_artifact.supersedes_artifact_id AS current_artifact_supersedes_id,
+                  matching_artifact.id AS matching_artifact_id,o.provenance,
                   s.canonical_uri,EXISTS(
                     SELECT 1 FROM runs r WHERE r.kind='intake' AND r.input->>'batch_id'=$3
                   ) AS same_batch
            FROM sources s JOIN objects o ON o.id=s.object_id
-           LEFT JOIN artifacts sc ON sc.id=s.current_artifact_id
+           LEFT JOIN artifacts current_artifact ON current_artifact.id=s.current_artifact_id
+           LEFT JOIN LATERAL (
+             SELECT a.id FROM artifacts a
+             WHERE a.object_id=s.object_id AND a.sha256=$2
+             ORDER BY a.created_at DESC,a.id DESC LIMIT 1
+           ) matching_artifact ON true
            WHERE o.archived_at IS NULL
-             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR sc.sha256=$2)"#,
+             AND (($1::text IS NOT NULL AND s.canonical_uri=$1)
+                  OR matching_artifact.id IS NOT NULL)"#,
     )
     .bind(&source.canonical_uri)
     .bind(&prepared.request.artifacts[0].sha256)
@@ -219,21 +234,70 @@ async fn prepared(
                 "canonical URI or exact content belongs to multiple Sources".into(),
             ));
         }
+        let same_canonical_source =
+            canonical_uri.is_some() && conflict.canonical_uri == canonical_uri;
+        let exact_existing_source =
+            same_canonical_source && conflict.matching_artifact_id.is_some();
         let curator_placeholder = !conflict.protected
             && conflict.current_artifact_id.is_none()
-            && conflict.sha256.is_none()
+            && conflict.current_artifact_sha256.is_none()
             && conflict.canonical_uri == source.canonical_uri
             && conflict
                 .provenance
                 .get("source_type")
                 .and_then(Value::as_str)
                 == Some("context_curator");
-        if !conflict.same_batch && !curator_placeholder {
+        if exact_existing_source {
+            if conflict.matching_artifact_id == prepared.artifact_id("source-content") {
+                prepared.reuse_object_with_artifacts(
+                    "source",
+                    conflict.object_id,
+                    conflict.current_artifact_supersedes_id,
+                )?;
+            } else {
+                prepared.reuse_object("source", conflict.object_id)?;
+            }
+            let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
+                sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
+                    r#"SELECT source_object_id,kind,target_object_id,id FROM connections
+                   WHERE source_object_id=$1 AND archived_at IS NULL"#,
+                )
+                .bind(conflict.object_id)
+                .fetch_all(&state.app.pool)
+                .await?
+                .into_iter()
+                .map(|(source_id, kind, target_id, connection_id)| {
+                    ((source_id, kind, target_id), connection_id)
+                })
+                .collect();
+            prepared.discard_connections(&existing_connections)?;
+        } else if same_canonical_source && conflict.current_artifact_id.is_some() {
+            prepared.reuse_object_with_artifacts(
+                "source",
+                conflict.object_id,
+                conflict.current_artifact_id,
+            )?;
+            let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
+                sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
+                    r#"SELECT source_object_id,kind,target_object_id,id FROM connections
+                   WHERE source_object_id=$1 AND archived_at IS NULL"#,
+                )
+                .bind(conflict.object_id)
+                .fetch_all(&state.app.pool)
+                .await?
+                .into_iter()
+                .map(|(source_id, kind, target_id, connection_id)| {
+                    ((source_id, kind, target_id), connection_id)
+                })
+                .collect();
+            prepared.discard_connections(&existing_connections)?;
+        } else if !conflict.same_batch && !curator_placeholder {
             return Err(IntakeError::Conflict(
                 "canonical URI or exact content already belongs to a different Source".into(),
             ));
+        } else {
+            prepared.adopt_object("source", conflict.object_id)?;
         }
-        prepared.adopt_object("source", conflict.object_id)?;
     }
     Ok(prepared)
 }
