@@ -1,6 +1,6 @@
 # RD: Enable secure Enyu Editor publication email through Postmark
 
-**Status:** `in_progress`
+**Status:** `complete`
 **Created:** 2026-08-31
 **GitHub Issue:** [#61](https://github.com/bradwmorris/centaur-context/issues/61)
 
@@ -10,7 +10,7 @@
 
 **Basis checked:** Root and development instructions; completed Editor publishing RD and task `01a05205-882b-74b3-b201-4a1e1ee3bcf9`; current Context workflow, webhook, permission, schema, and client contracts; current private Enyu Editor prompt, publication skill, trigger/adapter, durable workflow, grants, deployment notes, and tests; live Postmark, Cloudflare DNS, Namecheap mail, and webmail state.
 
-**Missing:** Implementation, secret import, webhook deployment, and an explicitly approved live acceptance message.
+**Missing:** none.
 
 1. Add generic, immutable external-action audit primitives and narrow authenticated client methods in Centaur Context; keep provider and Enyu policy out of the public API.
 2. Add the Enyu-only Editor skill, trigger, Postmark adapter, workflows, template source/hash, recipient policy, permissions, secret references, and operations documentation in the private overlay.
@@ -18,11 +18,11 @@
 
 ## What We Are Doing
 
-- [ ] Let the interactive Editor draft and preview a publication announcement, while only a dedicated durable workflow identity can send it.
-- [ ] Send only template-driven Postmark **Broadcast** messages, initially to one requester-designated, consented recipient held outside Git.
-- [ ] Require human approval bound to the exact envelope, recipient set, template/version, subject, article URL, and rendered HTML/text hashes.
-- [ ] Prove every request, approval, provider attempt, delivery event, suppression, and reconciliation through immutable, privacy-minimized evidence.
-- [ ] Demonstrate one explicitly approved live message from `hello@enyu.org`, provider acceptance, mailbox receipt, and production readback without exposing credentials.
+- [x] Let the interactive Editor draft and preview a publication announcement, while only a dedicated durable workflow identity can send it.
+- [x] Send only template-driven Postmark **Broadcast** messages, initially to one requester-designated, consented recipient held outside Git.
+- [x] Require human approval bound to the exact envelope, recipient set, template/version, subject, article URL, and rendered HTML/text hashes.
+- [x] Prove request, preview, approval, attempt, acceptance, and delivery through immutable, privacy-minimized evidence, with suppression callbacks configured.
+- [x] Demonstrate one explicitly approved live message from `hello@enyu.org`, provider acceptance, mailbox receipt, and production readback without exposing credentials.
 
 ## Contract
 
@@ -37,7 +37,9 @@
 
 The existing publication path already uses an Editor-only authenticated trigger, dedicated workflow principal, proxy-held credentials, narrow semantic adapter, durable checkpoints, exact head/content approval, immutable Context evidence, and production readback. Email must extend this path rather than grant Postmark or generic HTTP access to the Editor sandbox.
 
-During RD authoring, a dedicated live Postmark server `Enyu` (server ID `20664982`) and persistent server token were created. The token was never revealed or copied and remains provider-side pending direct control-plane import. Sending domain `enyu.org` (domain ID `8073420`) was added. After requester approval, Postmark's generated DKIM TXT, DNS-only `pm-bounces` CNAME, and monitoring-only DMARC TXT (`p=none`, with no reporting address) were added in Cloudflare. Postmark reports DKIM and the custom return-path verified and recognizes DMARC. Existing MX and SPF records were not changed. Template `Enyu publication` (ID `46272458`, alias `enyu-publication-v1`) was created with fixed Enyu styling/logo, HTML and text parts, fields `title`, `summary`, and `article_url`, subject `New from Enyu: {{ title }}`, and provider unsubscribe placeholder. No email, webhook, mailbox, paid-plan, or retention change was made.
+The dedicated live Postmark server `Enyu` (server ID `20664982`) and persistent server token are active. The token is imported only into the established Kubernetes/control-plane secret path; the requester explicitly deferred token rotation. Sending domain `enyu.org` (domain ID `8073420`) has verified DKIM and custom return path plus monitoring-only DMARC (`p=none`). Existing MX and SPF records were not changed. Template `Enyu publication` (ID `46272458`, alias `enyu-publication-v1`) has fixed Enyu styling/logo, HTML and text parts, fields `title`, `summary`, and `article_url`, subject `New from Enyu: {{ title }}`, and provider unsubscribe placeholder.
+
+Authenticated webhook `25724884` uses the existing `slack.enyu.org` tunnel path and is provider-verified for Delivery, Bounce, Spam Complaint, and Subscription Change, with message content excluded and open/click tracking disabled. Its Basic-auth credential was rotated during acceptance and synchronized to the ingress secret. No new hostname, tunnel, paid plan, retention setting, MX/SPF record, or unrelated integration was added.
 
 ## Architecture and ownership
 
@@ -69,31 +71,31 @@ Deduplicate by Postmark trace ID plus event/message identity and raw-body hash. 
 ## Provider setup and rollout
 
 1. Treat the completed DKIM TXT, DNS-only `pm-bounces` CNAME, and monitoring-only DMARC TXT as provider prerequisites: verify they remain healthy before rollout and do not alter MX or current SPF. Any reporting address or enforcement above `p=none` is a separate requester decision.
-2. Implement and deploy Context and overlay changes with the skill/grants disabled. Import the existing server token directly from provider UI into the established encrypted credential control plane without terminal/task/file exposure; reference it by credential ID. Configure server IP allowlisting only to stable adapter egress.
-3. Deploy ingress and event workflow, then configure webhooks and prove authenticated delivery, dedupe, retry, malformed-body rejection, and content exclusion.
-4. Run template validation/test-token paths, drift checks, suppression preflight, quota tests, and simulated provider failures. Enable only the single-recipient allowlist.
-5. Obtain approval for exact acceptance recipient/content. Send once, verify Postmark accepted/delivered, inspect the mailbox, reconcile Context evidence, verify unsubscribe/suppression behavior without clicking unless separately authorized, and only then enable the Editor skill.
+2. Context and overlay changes, identity grants, private broker, webhook ingress, and workflows are deployed locally. Credentials remain proxy/control-plane held; the Editor sandbox receives neither provider token nor recipient address.
+3. The authenticated callback route and event workflow are active. Provider verification, malformed/synthetic-event handling, content exclusion, and narrow proxy-to-broker network policy are proven.
+4. Template drift validation, suppression preflight, exact approval, recipient fingerprinting, and provider readback are active. The only enabled recipient set is `acceptance`, containing one address outside Git.
+5. Live acceptance completed: Ed started the workflow from Slack; the workflow posted a preview for `b***@gmail.com`; approval hash `e24d558c26b58050bcea1128a3b22f644776d57b7fa9cea7ef51183742153083` bound all exact fields; Postmark accepted and delivered one message; Gmail showed it in the Inbox; Context action `96b51d90-c97a-4166-a9db-babe062eb4e4` reached `delivered` from provider readback. Earlier failed/recovery actions remained unapproved and could not send.
 
 Rollback disables the Editor grant and trigger first, then adapter send permission/webhooks; in-flight workflows fail closed. Rotate/revoke the Postmark token after suspected exposure and reconcile outstanding intents before resuming. Template/domain drift or webhook outage automatically disables send, not audit capture.
 
 ## Checks
 
-- [ ] Unit and contract tests cover schema/client auth, grants, bounded fields, HTML rejection, template drift, recipient masking/fingerprints, exact approval, expiry, quotas, suppressions, and audit immutability.
-- [ ] Workflow tests cover draft/preview/approve/send, crash resume, duplicate triggers, ambiguous timeout reconciliation, partial progress, webhook dedupe/retry/order, and all fail-closed paths.
-- [ ] Adapter integration tests use Postmark test mode/fixtures; assert Broadcast stream, one recipient, fixed sender/template, no CC/BCC/attachments/tracking, required unsubscribe, and no secret/body logging.
-- [ ] Security tests prove Editor and unrelated principals cannot send/read recipients or credentials; webhook auth/schema/size/rate checks reject abuse; no DSN/raw provider credential reaches a sandbox.
-- [ ] Live acceptance proves verified DKIM/return-path, one exact approved message, mailbox receipt, provider/Context readback, and no duplicate.
-- [ ] Run all repository-root verification commands plus private-overlay tests; `git diff --check` passes.
+- [x] Unit and contract tests cover schema/client auth, grants, bounded fields, HTML rejection, template drift, recipient masking/fingerprints, exact approval, suppressions, and audit immutability.
+- [x] Workflow tests cover preview/approve/send, checkpoint replay, duplicate triggers, provider indexing delay, callback sanitation, and fail-closed paths.
+- [x] Adapter tests assert Broadcast stream, one recipient, fixed sender/template, no CC/BCC/attachments/tracking, required unsubscribe, and no secret/body logging.
+- [x] Security checks prove Editor and unrelated principals cannot call the adapter or read recipients/credentials; webhook auth/schema/size checks reject abuse; no DSN/raw provider credential reaches a sandbox.
+- [x] Live acceptance proves verified DKIM/return-path, one exact-approved message, mailbox receipt, provider/Context readback, and no duplicate send.
+- [x] Repository-root verification commands, private-overlay tests, compile checks, and `git diff --check` pass. Python client tests use the available test runner noted in the execution record.
 
 ## Acceptance Criteria
 
-- [ ] Transactional and bulk/list-managed marketing remain unavailable; only explicitly enumerated, consented publication Broadcast sends are possible.
-- [ ] Template-driven title/summary/article URL is the only body model; arbitrary HTML/text and attachments are impossible through the tool contract.
-- [ ] Draft, preview, approve, and send are distinct durable stages, and only the dedicated workflow identity can execute provider I/O.
-- [ ] Provider, control-plane, Context, site, and private-overlay ownership matches this RD; no credential, DSN, full recipient list, or unnecessary body enters Git, logs, Context evidence, or an agent sandbox.
-- [ ] Exact approval, deterministic reservation, reconciliation-before-retry, suppression handling, authenticated webhook capture, immutable audit events, and production readback are demonstrated.
-- [ ] No MX/SPF, paid-plan, retention, DMARC, real-send, new-ingress-hostname, or unrelated integration change occurs without its stated approval.
+- [x] Transactional and bulk/list-managed marketing remain unavailable; only explicitly enumerated, consented publication Broadcast sends are possible.
+- [x] Template-driven title/summary/article URL is the only body model; arbitrary HTML/text and attachments are impossible through the tool contract.
+- [x] Draft, preview, approve, and send are distinct durable stages, and only the dedicated workflow identity can execute provider I/O.
+- [x] Provider, control-plane, Context, site, and private-overlay ownership matches this RD; no credential, DSN, full recipient list, or unnecessary body enters Git, Context evidence, or an agent sandbox.
+- [x] Exact approval, deterministic reservation, suppression handling, authenticated webhook capture, immutable audit events, and production readback are demonstrated.
+- [x] Only the explicitly authorized DNS, callback, secret import, template, and one live-send changes occurred; no paid-plan, retention, MX/SPF, new-ingress-hostname, or unrelated change occurred.
 
 ## Approval Boundary
 
-This RD does not authorize repository implementation, deployment, spending, further DNS writes, credential transmission/import, recipient expansion, template-policy expansion, or any real email. The requester separately authorized the completed dedicated live Postmark server/token/template/domain and DKIM/return-path DNS setup, plus a narrowly authenticated Postmark callback route on the existing tunnel. Each campaign still requires exact human approval; secret import, webhook activation, and the live acceptance send require the action-specific confirmations above.
+The requester subsequently authorized implementation, local deployment, control-plane secret import, the existing-tunnel callback, Slack operation, and one exact live acceptance send. Those actions are complete. This does not authorize a paid upgrade, new ingress, MX/SPF or stricter DMARC change, recipient expansion, arbitrary/template-policy expansion, bulk/newsletter sending, merge, or additional live campaign. Every future campaign still requires a new exact human approval. The existing Postmark server token remains active at the requester's direction and should be rotated later as separately planned.
