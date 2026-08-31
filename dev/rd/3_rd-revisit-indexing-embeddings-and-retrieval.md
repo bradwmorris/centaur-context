@@ -1,4 +1,4 @@
-# RD: Revisit Indexing, Embeddings, and Retrieval
+# 3 — RD: Revisit Indexing, Embeddings, and Retrieval
 
 **Status:** `backlog`
 **Created:** 2026-08-30
@@ -7,9 +7,10 @@
 
 **Status:** `still needs work`
 
-**Basis checked:** Migrations `0005`, `0008`, `0009`, and `0011`; current search,
+**Basis checked:** Migrations through `0016`; current search,
 embedding, Context Builder, eval, configuration, database, and API code; completed
-Context Builder/embedding and eval-dashboard RDs; and the recent POC-import RD.
+Context Builder/embedding and eval-dashboard RDs; the recent POC-import RD; and
+the completed canonical-data cleanup and its reconciled live row profiles.
 Today, Object title/description use configurable PostgreSQL full-text search;
 optional versioned pgvector embeddings cover Object kind/title/description;
 reciprocal-rank fusion combines lexical and semantic candidates; Context Builder
@@ -17,18 +18,25 @@ adds canonical Chat, participant, direct-Connection, recency, and bounded subtyp
 signals. Note bodies and Source content have separate `simple` full-text indexes
 but are not part of Object embeddings or unified Context retrieval. Existing
 eval traces provide operational observability, not a judged retrieval benchmark.
+The live review found 407 unattempted `centaur-object-v1`/`shared` embedding jobs
+and no stored embeddings, so current retrieval is effectively lexical plus graph
+context. Source content remains one immutable whole capture per version, not
+chunks: 44 captures currently belong to 42 Sources. The repository and live
+database are reconciled at schema version 16 and include ten canonical Themes.
 
-**Missing:** Completion and frozen reconciliation output from
-`rd-audit-clean-and-refine-canonical-data.md`; live embedding-provider status and
-index/job health; representative Brad-authored questions and relevance judgments;
+**Missing:** An explicit provider/worker decision for the currently idle
+embedding queue; representative Brad-authored questions and relevance judgments;
 and approval before enabling a paid provider or writing hosted derived indexes.
 
-1. After the data-cleanup RD, capture a reproducible baseline of schema/index
-   usage, query plans, embedding coverage/staleness, failure fallback, latency,
-   context packets, and real retrieval misses.
+1. Capture a reproducible post-cleanup baseline of schema/index usage, query
+   plans, the currently idle embedding queue, whether that state is deliberate,
+   embedding
+   coverage/staleness, failure fallback, latency, context packets, and real
+   retrieval misses.
 2. Build a versioned, private-but-reproducible retrieval eval set spanning exact
-   lookup, paraphrase, Note-body facts, Source evidence, graph/context questions,
-   ambiguity, freshness, and negative/no-answer cases, with graded judgments.
+   lookup, paraphrase, Note-body facts, whole-capture Source evidence, Theme
+   lookup, graph/context questions, ambiguity, freshness, and negative/no-answer
+   cases, with graded judgments.
 3. Compare the smallest credible variants offline and on a disposable database;
    change one component at a time and retain only improvements that clear quality,
    latency, complexity, privacy, and cost gates.
@@ -40,8 +48,9 @@ and approval before enabling a paid provider or writing hosted derived indexes.
 - [ ] Prove which indexes and retrieval stages are present, healthy, used, and
   useful after the canonical data is clean.
 - [ ] Determine whether Object-only embeddings and separate body search are
-  sufficient or whether bounded Note/Source representations or chunk retrieval
-  materially improve context.
+  sufficient or whether fusing the existing whole-capture Note/Source search,
+  bounded body representations, or only then chunk retrieval materially improves
+  context.
 - [ ] Make search and Context Builder quality measurable with judged evals,
   deterministic reports, and regression thresholds.
 - [ ] Ship the simplest efficient design that improves relevant evidence found
@@ -66,7 +75,8 @@ and approval before enabling a paid provider or writing hosted derived indexes.
   deployment, and production cutover approval.
 - **Out of scope:** Further canonical-data cleanup, replacing PostgreSQL as source
   of truth, generic web search/RAG, multi-hop agent planning, a vector database
-  added by default, public ingress, or unrelated ontology changes.
+  added by default, changing whole-capture Source versioning or Theme governance,
+  public ingress, or unrelated ontology changes.
 
 ## Evaluation and Design Rules
 
@@ -81,8 +91,10 @@ and approval before enabling a paid provider or writing hosted derived indexes.
 - Establish lexical-only and current-production baselines first. Then test only
   justified candidates: weights/candidate depth, text-search configuration,
   embedding input/model, inclusion of concise subtype text, body search fusion,
-  and bounded Source/Note chunks. Do not add chunking or another datastore unless
-  simpler variants fail and measured gains justify lifecycle complexity.
+  match-centred excerpts from existing whole captures, and bounded Source/Note
+  chunks. Test whole-capture lexical fusion before chunking. Do not add chunking
+  or another datastore unless simpler variants fail and measured gains justify
+  lifecycle complexity.
 - Separate retrieval from context assembly in the report: candidate recall,
   ranking, graph expansion, subtype projection, and budget truncation each need
   attributable outcomes. Log enough rationale to reproduce a rank without
@@ -102,8 +114,8 @@ and approval before enabling a paid provider or writing hosted derived indexes.
 - [ ] Chosen variant meets recorded per-slice gates and has no unexplained
   regression; deliberate misses are manually inspected.
 - [ ] Tests cover stale/missing/failed embeddings, lexical fallback, rank ties,
-  body evidence, Chat authorization, graph pollution, budget truncation, rebuild
-  idempotency, and provider/model changes.
+  whole-capture body evidence, Theme retrieval, Chat authorization, graph
+  pollution, budget truncation, rebuild idempotency, and provider/model changes.
 - [ ] Query-plan/index audit and all repository-root verification commands pass.
 - [ ] `git diff --check` passes.
 

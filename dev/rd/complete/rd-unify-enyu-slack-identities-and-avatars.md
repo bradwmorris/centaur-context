@@ -1,4 +1,4 @@
-# 2 — RD: Unify Enyu Slack Identities and Avatars
+# RD: Unify Enyu Slack Identities and Avatars
 
 **Status:** `complete`
 **Created:** 2026-08-30
