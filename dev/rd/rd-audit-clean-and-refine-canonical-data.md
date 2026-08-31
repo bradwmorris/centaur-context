@@ -6,7 +6,35 @@
 
 ## Execution Plan
 
-**Status:** `still needs work`
+**Status:** `complete and executing`
+
+### Owner execution directive — 2026-08-31
+
+Brad explicitly authorized this job to be finished end to end as three direct
+pieces of work:
+
+1. Apply the agreed table, column, constraint, index, API, Curator, ingestion,
+   agent-client, and database-writer changes. Every first-party reader and
+   writer must move with the schema so Slack bots and agents continue working.
+2. Apply the retroactive cleanup recommended by the completed row-audit agents:
+   high-confidence Object descriptions and metadata corrections, plus bounded
+   archival of clearly synthetic acceptance/test Objects. Preserve Note bodies,
+   immutable evidence, avatars, stable Object IDs, and rows that still require
+   Brad's input.
+3. Integrate and ship both separately completed UI jobs: the simplified Schema
+   map-to-rows workflow and PR #66's visibility/contrast improvements. Resolve
+   their small overlaps without weakening truncation, single-row layouts,
+   avatars, responsive behavior, or the post-cleanup schema contract.
+
+Execute these as one compatible release rather than leaving code, database, and
+UI at different versions. The populated target is only the Enyu context database
+`centaur_context_test_enyu`. Do not query or modify the sparse legacy
+`centaur_os` installation, Centaur `ai_v2`, or Console databases. Before the
+live cutover, create and verify a fresh backup, rehearse migration 16 and the
+bounded row manifest against a restored disposable clone, then deploy all
+first-party consumers, apply revision-guarded data writes through authenticated
+HTTP APIs, reconcile every intended row, and run the full repository and live
+UI/tooling checks.
 
 **Basis checked:** Repository boundaries; migrations `0001`–`0016`; ontology,
 schema/API/database/UI code; completed description, Schema visualizer,
@@ -49,10 +77,11 @@ one wrong Valar Atomics link and misspelled title, and an Engram title typo;
 these metadata corrections are separate from description edits and require
 fresh live-row validation.
 
-No hosted row has been written, archived, deleted, merged, or migrated. The
-editorial snapshots predate several newer Chat/Task rows, so a fresh
-authenticated API inventory and exact revision check are required before the
-final hosted manifest can be presented for approval.
+No hosted row had been written, archived, deleted, merged, or migrated at this
+checkpoint. Brad subsequently authorized the complete job above. Refresh the
+authenticated API inventory and require exact current revisions while applying
+the already bounded recommendations; skip and report any stale or
+insufficient-evidence row rather than guessing.
 
 The temporary one-pass working ledger has been reconciled into this RD and
 removed. This file is now the single checked-in requirements and execution
@@ -236,13 +265,16 @@ no Entity restoration is required.
 
 ## Approval Boundary
 
-Read-only audits and private proposals are authorized. Dropping schema, deleting
-or merging data, unprotecting imported records, changing immutable evidence,
-writing to a hosted database, or deploying requires Brad's explicit approval of
-the exact manifest. External research is read-only; no publishing, sending,
-spending, public ingress, or new integration is authorized.
+Brad authorized the schema migration, coordinated deployment, high-confidence
+description and metadata writes, and archival of the explicitly identified
+synthetic acceptance/test Objects on 2026-08-31. Prefer reversible archival to
+hard deletion and retain immutable events. This does not authorize rewriting
+Note bodies, fabricating classifications or blocker reasons, changing immutable
+Source evidence, merging ambiguous identities or Sources, unprotecting retained
+imports, modifying any database other than `centaur_context_test_enyu`, or any
+publishing, sending, spending, public ingress, or new external integration.
 
-### Preliminary destructive manifest — not yet approved or executed
+### Bounded archival manifest — approved for fresh reconciliation and execution
 
 The snapshot audit identifies the following eight clearly synthetic acceptance
 Objects. The eventual action should archive each canonical Object and preserve
