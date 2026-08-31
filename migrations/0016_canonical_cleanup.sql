@@ -89,6 +89,9 @@ SET entity_kind = CASE
     WHEN o.title IN ('Dan Robinson','Georgios Konstantopoulos','Alpin Yukseloglu','Justin Wang','Matt Huang') THEN 'person'
     WHEN o.title IN ('Nous Research','Vana','Paradigm','Harmonic') THEN 'organization'
     WHEN o.title = 'Andromeda' THEN 'product'
+    -- Synthetic Enyu Ops acceptance fixture; it is archived by the approved
+    -- cleanup manifest after migration but still needs a valid subtype value.
+    WHEN o.id = '3426a296-5230-473a-a2cc-7ede7384ad2e' THEN 'other'
     WHEN o.provenance->>'note' ~* '^Accepted (active )?other Entity' THEN 'other'
     ELSE NULL
 END
