@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, Run, RunDetail, RunVerdict, SchemaProfile, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourcePage, Task, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, EmbeddingStatus, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, Run, RunDetail, RunVerdict, SchemaProfile, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourcePage, Task, Theme, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -173,6 +173,9 @@ export const api = {
   artifactContent(artifactId: string, offset = 0, limit = 8_000) {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
     return request<ArtifactWindow>(`/api/v2/artifacts/${artifactId}/content?${params}`);
+  },
+  embeddingStatus() {
+    return request<EmbeddingStatus>("/api/v2/embeddings/status");
   },
   notes(query = "") {
     const params = new URLSearchParams({ limit: "100" });

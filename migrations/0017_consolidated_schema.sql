@@ -428,7 +428,7 @@ FROM object_embedding_jobs j FULL JOIN object_embeddings e ON e.object_id=j.obje
 WHERE COALESCE(e.object_id,j.object_id) NOT IN (SELECT object_id FROM external_actions);
 CREATE INDEX embeddings_claim_idx ON embeddings (available_at,updated_at,object_id)
     WHERE status IN ('pending','failed');
--- The configured dimension is deployment-specific. RD 3 owns the eventual
+-- The configured dimension is deployment-specific. Active RD 1 owns the eventual
 -- dimension-specific ANN index; the initial consolidated store remains exact.
 
 -- Reconciliation guards: abort this transaction rather than drop a fact that

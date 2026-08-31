@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::{
     config::TextSearchConfig,
     db::{self, ContextConnection, DbError, Object, SearchCandidate},
-    embeddings::{EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
+    embeddings::{ARTIFACT_EMBEDDING_FORMAT, EmbeddingClient, OBJECT_EMBEDDING_FORMAT},
 };
 
 const RRF_K: f64 = 60.0;
@@ -24,6 +24,8 @@ pub struct RetrievedObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<Value>,
     pub relevance: Relevance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<db::SearchEvidence>,
     pub connections: Vec<ContextConnection>,
 }
 
@@ -57,6 +59,7 @@ struct Fused {
     connection_count: i64,
     matched_fts: bool,
     matched_semantic: bool,
+    evidence: Option<db::SearchEvidence>,
     graph_reason: Option<String>,
     anchor_reason: Option<String>,
 }
@@ -128,6 +131,7 @@ pub async fn context(
                 connection_count: 0,
                 matched_fts: false,
                 matched_semantic: false,
+                evidence: None,
                 graph_reason: None,
                 anchor_reason: Some(anchored.rationale),
             });
@@ -179,6 +183,7 @@ pub async fn read_object(pool: &PgPool, id: Uuid) -> Result<RetrievedObject, DbE
             score: 1.0,
             rationale: "Read directly by canonical Object ID.".to_owned(),
         },
+        evidence: None,
         connections: connections.remove(&id).unwrap_or_default(),
     })
 }
@@ -202,38 +207,66 @@ async fn retrieve(
         context_builder,
     )
     .await?;
-    let semantic = if let Some(client) = embeddings {
+    let artifact_fts =
+        db::artifact_full_text_candidates(pool, query, kind, candidate_limit, context_builder)
+            .await?;
+    let (semantic, artifact_semantic) = if let Some(client) = embeddings {
         match client.embed_query(query).await {
-            Ok(vector) => db::semantic_candidates(
-                pool,
-                &vector,
-                client.model(),
-                client.dimensions(),
-                OBJECT_EMBEDDING_FORMAT,
-                client.document_mode(),
-                kind,
-                candidate_limit,
-                context_builder,
-            )
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "semantic Object search failed; using full text");
-                Vec::new()
-            }),
+            Ok(vector) => {
+                let objects = db::semantic_candidates(
+                    pool,
+                    &vector,
+                    client.model(),
+                    client.dimensions(),
+                    OBJECT_EMBEDDING_FORMAT,
+                    client.document_mode(),
+                    kind,
+                    candidate_limit,
+                    context_builder,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "semantic Object search failed; using full text");
+                    Vec::new()
+                });
+                let artifacts = db::artifact_semantic_candidates(
+                    pool,
+                    &vector,
+                    client.model(),
+                    client.dimensions(),
+                    ARTIFACT_EMBEDDING_FORMAT,
+                    client.document_mode(),
+                    kind,
+                    candidate_limit,
+                    context_builder,
+                )
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "semantic Artifact search failed; using lexical evidence");
+                    Vec::new()
+                });
+                (objects, artifacts)
+            }
             Err(error) => {
                 tracing::warn!(%error, "query embedding failed; using full text");
-                Vec::new()
+                (Vec::new(), Vec::new())
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
-    let retrieval = if semantic.is_empty() {
+    let retrieval = if semantic.is_empty() && artifact_semantic.is_empty() {
         "full_text"
     } else {
         "hybrid"
     };
-    let mut fused = fuse(fts, semantic, context_builder);
+    let mut fused = fuse(
+        fts,
+        artifact_fts,
+        semantic,
+        artifact_semantic,
+        context_builder,
+    );
 
     if context_builder && !fused.is_empty() {
         let seed_scores: HashMap<Uuid, f64> = fused
@@ -260,6 +293,7 @@ async fn retrieve(
                 connection_count: neighbor.connection_count,
                 matched_fts: false,
                 matched_semantic: false,
+                evidence: None,
                 graph_reason: Some(format!(
                     "Connected by {}: {}",
                     neighbor.connection_kind, neighbor.connection_description
@@ -295,6 +329,7 @@ fn retrieved(
         revision: item.object.revision,
         subtype,
         relevance,
+        evidence: item.evidence,
         connections,
     }
 }
@@ -401,7 +436,9 @@ fn serialized_characters(packet: &SearchPacket) -> usize {
 
 fn fuse(
     full_text: Vec<SearchCandidate>,
+    artifact_full_text: Vec<SearchCandidate>,
     semantic: Vec<SearchCandidate>,
+    artifact_semantic: Vec<SearchCandidate>,
     boost_connections: bool,
 ) -> Vec<Fused> {
     let mut fused: HashMap<Uuid, Fused> = HashMap::new();
@@ -415,11 +452,13 @@ fn fuse(
                 connection_count: candidate.connection_count,
                 matched_fts: true,
                 matched_semantic: false,
+                evidence: candidate.evidence,
                 graph_reason: None,
                 anchor_reason: None,
             },
         );
     }
+    add_ranked_candidates(&mut fused, artifact_full_text, true, false);
     for (rank, candidate) in semantic.into_iter().enumerate() {
         let score = 1.0 / (RRF_K + rank as f64 + 1.0);
         fused
@@ -427,6 +466,9 @@ fn fuse(
             .and_modify(|item| {
                 item.score += score;
                 item.matched_semantic = true;
+                if item.evidence.is_none() {
+                    item.evidence = candidate.evidence.clone();
+                }
             })
             .or_insert(Fused {
                 object: candidate.object,
@@ -434,10 +476,12 @@ fn fuse(
                 connection_count: candidate.connection_count,
                 matched_fts: false,
                 matched_semantic: true,
+                evidence: candidate.evidence,
                 graph_reason: None,
                 anchor_reason: None,
             });
     }
+    add_ranked_candidates(&mut fused, artifact_semantic, false, true);
     let mut fused = fused.into_values().collect::<Vec<_>>();
     if boost_connections {
         for item in &mut fused {
@@ -451,6 +495,37 @@ fn fuse(
             .then_with(|| left.object.id.cmp(&right.object.id))
     });
     fused
+}
+
+fn add_ranked_candidates(
+    fused: &mut HashMap<Uuid, Fused>,
+    candidates: Vec<SearchCandidate>,
+    lexical: bool,
+    semantic: bool,
+) {
+    for (rank, candidate) in candidates.into_iter().enumerate() {
+        let score = 1.0 / (RRF_K + rank as f64 + 1.0);
+        fused
+            .entry(candidate.object.id)
+            .and_modify(|item| {
+                item.score += score;
+                item.matched_fts |= lexical;
+                item.matched_semantic |= semantic;
+                if item.evidence.is_none() || semantic {
+                    item.evidence = candidate.evidence.clone();
+                }
+            })
+            .or_insert(Fused {
+                object: candidate.object,
+                score,
+                connection_count: candidate.connection_count,
+                matched_fts: lexical,
+                matched_semantic: semantic,
+                evidence: candidate.evidence,
+                graph_reason: None,
+                anchor_reason: None,
+            });
+    }
 }
 
 fn connection_boost(connection_count: i64) -> f64 {
@@ -469,6 +544,9 @@ fn rationale(item: &Fused, context_builder: bool) -> String {
         (false, true) => "Matched by meaning.",
         _ => "Matched words in its title or description.",
     };
+    if item.evidence.is_some() {
+        return format!("{match_reason} Exact supporting Artifact evidence is attached.");
+    }
     if context_builder && item.connection_count > 0 {
         format!(
             "{match_reason} Context ranking also considered its {} active connection(s).",
@@ -501,6 +579,7 @@ mod tests {
                 score: 1.0,
                 rationale: "Test candidate.".to_owned(),
             },
+            evidence: None,
             connections: (0..connections)
                 .map(|_| ContextConnection {
                     id: Uuid::new_v4(),

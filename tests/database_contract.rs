@@ -118,7 +118,7 @@ async fn artifacts_attach_to_any_object_and_are_immutable() {
     sqlx::query("INSERT INTO tasks(object_id,status,priority,agent_suitable) VALUES($1,'todo','medium',true)").bind(object_id).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
     let artifact_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO artifacts(id,object_id,kind,title,content,media_type,sha256,size_bytes,metadata) VALUES($1,$2,'transcript','Interview','hello','text/plain',$3,5,'{}')")
+    sqlx::query("INSERT INTO artifacts(id,object_id,kind,title,content,media_type,sha256,size_bytes,capture_outcome,expected_size_bytes,metadata) VALUES($1,$2,'transcript','Interview','hello','text/plain',$3,5,'complete',5,'{}')")
         .bind(artifact_id).bind(object_id).bind("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824").execute(&pool).await.unwrap();
     assert!(
         sqlx::query("UPDATE artifacts SET title='changed' WHERE id=$1")
@@ -206,7 +206,7 @@ async fn embeddings_are_jobs_and_results_in_one_table() {
         .unwrap();
     tx.commit().await.unwrap();
     sqlx::query("INSERT INTO embeddings(object_id,model,dimensions,source_hash,format_version,input_mode,status) VALUES($1,'text-embedding-3-small',3,$2,'centaur-object-v1','shared','pending')")
-        .bind(object_id).bind("a".repeat(32)).execute(&pool).await.unwrap();
+        .bind(object_id).bind("a".repeat(64)).execute(&pool).await.unwrap();
     sqlx::query("UPDATE embeddings SET status='completed', embedding='[0.1,0.2,0.3]'::vector, completed_at=now() WHERE object_id=$1 AND model='text-embedding-3-small'")
         .bind(object_id).execute(&pool).await.unwrap();
     let status: String = sqlx::query_scalar("SELECT status FROM embeddings WHERE object_id=$1")

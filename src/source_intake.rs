@@ -25,11 +25,7 @@ use crate::{
 };
 
 const MAX_SOURCE_INTAKE_BODY_BYTES: usize = 1024 * 1024;
-const CONTRACT_VERSION: &str = "centaur-context-source-intake-v2";
-
-fn default_coverage() -> String {
-    "unknown".to_owned()
-}
+const CONTRACT_VERSION: &str = "centaur-context-source-intake-v3";
 
 #[derive(Clone)]
 struct SourceIntakeState {
@@ -155,10 +151,14 @@ pub struct SourceManifest {
     pub capture_artifact_reference: Option<String>,
     pub content_kind: String,
     pub content: String,
+    pub content_sha256: String,
+    pub content_size_bytes: i64,
     pub extraction_method: Option<String>,
     pub extraction_version: Option<String>,
-    #[serde(default = "default_coverage")]
-    pub coverage: String,
+    pub capture_outcome: String,
+    pub capture_reason: Option<String>,
+    pub expected_size_bytes: Option<i64>,
+    pub capture_evidence: Option<Value>,
     pub captured_at: Option<String>,
     #[serde(default)]
     pub provenance: Option<Value>,
@@ -269,6 +269,27 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
         )
     );
     let content_sha256 = format!("{:x}", Sha256::digest(request.source.content.as_bytes()));
+    if request.source.content_sha256 != content_sha256 {
+        return Err(IntakeError::BadRequest(
+            "content_sha256 does not match the verbatim Artifact content".into(),
+        ));
+    }
+    if request.source.content_size_bytes != request.source.content.len() as i64 {
+        return Err(IntakeError::BadRequest(
+            "content_size_bytes does not match the verbatim Artifact content".into(),
+        ));
+    }
+    if request.source.capture_outcome != "complete" {
+        return Err(IntakeError::BadRequest(
+            "Source intake commits only complete captures; record failed capture state in the workflow Run"
+                .into(),
+        ));
+    }
+    if request.source.capture_reason.is_some() {
+        return Err(IntakeError::BadRequest(
+            "a complete Source capture must not include capture_reason".into(),
+        ));
+    }
     let mut connection_keys = HashSet::new();
     let mut connections = Vec::new();
     for (index, connection) in request.connections.into_iter().enumerate() {
@@ -366,11 +387,16 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
             uri: source.capture_artifact_reference,
             media_type: source.original_media_type.clone(),
             sha256: content_sha256,
+            size_bytes: source.content_size_bytes,
             language: source.original_language,
             captured_at: source.captured_at,
+            capture_outcome: source.capture_outcome,
+            capture_reason: source.capture_reason,
+            expected_size_bytes: source.expected_size_bytes,
             metadata: Some(
                 json!({"canonical_uri":canonical_uri,"extraction_method":source.extraction_method,
-              "extraction_version":source.extraction_version,"coverage":source.coverage}),
+              "extraction_version":source.extraction_version,"coverage":"complete",
+              "capture_evidence":source.capture_evidence}),
             ),
             supersedes_artifact_id: None,
         }],
@@ -486,20 +512,42 @@ async fn source_status(
     .bind(object_id)
     .fetch_one(&state.app.pool)
     .await?;
-    let semantic_ready = if state.app.embeddings.is_none() {
-        true
-    } else {
+    let semantic_ready = if let Some(client) = &state.app.embeddings {
         sqlx::query_scalar(
             r#"SELECT EXISTS(
                 SELECT 1 FROM embeddings e JOIN objects o ON o.id=e.object_id
-                WHERE o.id=$1 AND e.status='completed' AND e.source_hash=object_embedding_source_hash(
+                WHERE o.id=$1 AND e.artifact_id IS NULL AND e.status='completed'
+                  AND e.model=$2 AND e.dimensions=$3 AND e.input_mode=$4
+                  AND e.source_hash=object_embedding_source_hash(
                     e.format_version,o.kind,o.title,o.description
-                )
+                  )
+            ) AND (
+              NOT EXISTS(
+                SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
+                WHERE s.object_id=$1 AND a.semantic_indexing_enabled
+              ) OR (EXISTS(
+                SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
+                JOIN embeddings e ON e.artifact_id=a.id
+                WHERE s.object_id=$1 AND a.capture_outcome='complete'
+                  AND e.status='completed'
+                  AND e.model=$2 AND e.dimensions=$3 AND e.input_mode=$4
+                  AND e.format_version='centaur-artifact-chunk-v1'
+              ) AND NOT EXISTS(
+                SELECT 1 FROM sources s JOIN embeddings e ON e.artifact_id=s.current_artifact_id
+                WHERE s.object_id=$1 AND e.model=$2 AND e.dimensions=$3 AND e.input_mode=$4
+                  AND e.format_version='centaur-artifact-chunk-v1'
+                  AND e.status<>'completed'
+              ))
             )"#,
         )
         .bind(object_id)
+        .bind(client.model())
+        .bind(client.dimensions())
+        .bind(client.document_mode())
         .fetch_one(&state.app.pool)
         .await?
+    } else {
+        true
     };
     Ok(Json(json!({"data":{
         "status":if lexical_ready && semantic_ready {"ready"} else {"indexing"},
@@ -537,7 +585,12 @@ mod tests {
                 content: "Captured source text".into(),
                 extraction_method: Some("enyu-researcher".into()),
                 extraction_version: Some("1".into()),
-                coverage: "complete".into(),
+                content_sha256: format!("{:x}", Sha256::digest("Captured source text".as_bytes())),
+                content_size_bytes: "Captured source text".len() as i64,
+                capture_outcome: "complete".into(),
+                capture_reason: None,
+                expected_size_bytes: None,
+                capture_evidence: Some(json!({"method":"test"})),
                 captured_at: None,
                 provenance: Some(json!({"source_type":"enyu_workflow"})),
             },
@@ -569,6 +622,22 @@ mod tests {
     }
 
     #[test]
+    fn adapter_rejects_partial_or_mismatched_verbatim_capture() {
+        let mut partial = request();
+        partial.source.capture_outcome = "incomplete".into();
+        partial.source.capture_reason = Some("only an excerpt was available".into());
+        assert!(source_batch(partial).is_err());
+
+        let mut mismatched = request();
+        mismatched.source.content_sha256 = "0".repeat(64);
+        assert!(source_batch(mismatched).is_err());
+
+        let mut wrong_size = request();
+        wrong_size.source.content_size_bytes += 1;
+        assert!(source_batch(wrong_size).is_err());
+    }
+
+    #[test]
     fn adapter_normalizes_the_canonical_uri_before_hashing() {
         let mut input = request();
         input.source.canonical_uri = Some(" HTTPS://EXAMPLE.TEST:443/source#fragment ".into());
@@ -585,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_manifest_accepts_explicit_legacy_field_aliases() {
+    fn v3_manifest_accepts_explicit_metadata_field_aliases() {
         let parsed: SourceIntakeRequest = serde_json::from_value(json!({
             "version": CONTRACT_VERSION,
             "idempotency_key": "legacy-run",
@@ -604,8 +673,14 @@ mod tests {
                 "capture_artifact_reference": null,
                 "content_kind": "article_text",
                 "content": "Legacy content",
+                "content_sha256": format!("{:x}", Sha256::digest("Legacy content".as_bytes())),
+                "content_size_bytes": "Legacy content".len(),
                 "extraction_method": "legacy-client",
                 "extraction_version": "1",
+                "capture_outcome": "complete",
+                "capture_reason": null,
+                "expected_size_bytes": null,
+                "capture_evidence": {"method":"legacy-client"},
                 "captured_at": null,
                 "provenance": {}
             },
@@ -626,6 +701,6 @@ mod tests {
             parsed.source.original_artifact_reference.as_deref(),
             Some("artifact:legacy")
         );
-        assert_eq!(parsed.source.coverage, "unknown");
+        assert_eq!(parsed.source.capture_outcome, "complete");
     }
 }

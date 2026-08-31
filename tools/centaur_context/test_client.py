@@ -57,6 +57,15 @@ def test_lists_generic_artifacts():
     assert requests[0].url.raw_path == b"/api/v2/objects/object%2F1/artifacts"
 
 
+def test_reads_provider_safe_embedding_status():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return response({"configured": False, "fallback": "full_text"})
+    assert client(handler).embedding_status()["fallback"] == "full_text"
+    assert requests[0].url.path == "/api/v2/embeddings/status"
+
+
 def test_reads_artifact_by_id_with_bounded_window():
     requests = []
     def handler(request):

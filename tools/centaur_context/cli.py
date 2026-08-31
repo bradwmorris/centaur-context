@@ -74,6 +74,11 @@ def read_artifact(
     )
 
 
+def embedding_status() -> None:
+    """Read embedding coverage and degraded-mode status."""
+    _print(_client().embedding_status())
+
+
 def search_notes(
     query: str,
     limit: int = 20,
@@ -237,6 +242,8 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("artifact_id")
     command.add_argument("--offset", type=_bounded_int(0, 2**31 - 1), default=0)
     command.add_argument("--limit", type=_bounded_int(1, 20_000), default=8_000)
+
+    commands.add_parser("embedding-status")
 
     command = commands.add_parser("read-note")
     command.add_argument("note_id")

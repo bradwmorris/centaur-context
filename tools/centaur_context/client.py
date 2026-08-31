@@ -489,6 +489,10 @@ class CentaurContextClient:
             "GET", f"/api/v2/objects/{quote(object_id, safe='')}/artifacts"
         )
 
+    def embedding_status(self) -> dict[str, Any]:
+        """Read provider-safe embedding queue and lexical-fallback status."""
+        return self._request("GET", "/api/v2/embeddings/status")
+
     def read_artifact(
         self,
         artifact_id: str,

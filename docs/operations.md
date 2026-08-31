@@ -126,6 +126,32 @@ versioned rate-card snapshot and are stored in integer micro-USD. ChatGPT
 subscription or credit usage must display that basis without claiming a `$0`
 per-trace bill. Missing usage, price, or credit data remains visibly incomplete.
 
+## Object backfill and forward Artifact indexing
+
+Only an Artifact with `capture_outcome=complete` and verbatim text may be a
+Source's current Artifact. Other outcomes remain immutable evidence of a failed
+or partial capture and require an exact reason. Check `/api/v2/embeddings/status`
+before and after rollout; it reports configuration identity, queue counts,
+coverage, historical/future Artifact eligibility, oldest work, and lexical
+fallback state, never credentials, vectors, or full text.
+
+The migration marks every pre-existing Artifact `semantic_indexing_enabled=false`.
+Those historical transcripts remain fully available to exact full-text search but
+are never queued for chunk embeddings. New Artifacts default to semantic indexing
+enabled; the normal worker reconciliation loop queues their deterministic chunks
+only when they are complete and current. The same loop queues one concise
+kind/title/description vector for every Object, including the approved historical
+Object backfill.
+
+A safe rollout is: record status; take and verify a backup; enable all provider
+settings; deploy one replica; wait for one existing Object summary and one newly
+captured canary Source to complete; confirm an old transcript remains lexical-only;
+test exact and paraphrase queries; inspect usage and failures; then allow only the
+Object-summary queue to drain. Disabling all embedding settings immediately
+returns the service to lexical-only mode without changing canonical Artifacts.
+Restore a backup only for canonical migration-integrity failure, not for ordinary
+derived-vector failure.
+
 ## Rollback
 
 For a name-handoff rollback, first scale `deployment/centaur-context` to zero,
