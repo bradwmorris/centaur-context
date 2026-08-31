@@ -379,6 +379,24 @@ class CentaurContextClient:
             thread_key=thread_key,
         )
 
+    def search_objects_lexical(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 20,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Search canonical Objects using full-text retrieval only."""
+        return self.search_objects(
+            query,
+            kind=kind,
+            limit=limit,
+            lexical_only=True,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""
         return self._request("GET", f"/api/v2/objects/{quote(id, safe='')}")
