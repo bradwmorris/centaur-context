@@ -189,6 +189,11 @@ describe("canonical Object identity across the application", () => {
     render(<App />);
     const firstPill = await screen.findByRole("button", { name: `Copy Object ID ${ids.task}` });
     expect(firstPill).toHaveTextContent(`ID: ${ids.task.slice(0, 5)}`);
+    const firstRow = firstPill.closest(".record");
+    expect(firstRow).toBeInTheDocument();
+    expect(firstRow?.querySelector(".record-title")).toContainElement(firstRow?.querySelector(".description-snippet") ?? null);
+    expect(firstRow?.querySelector(".record-title")).toContainElement(firstRow?.querySelector(".record-badges") ?? null);
+    expect(firstRow?.querySelector("time")).toBeInTheDocument();
     const firstTitle = firstPill.parentElement?.nextElementSibling;
     expect(firstTitle).toHaveTextContent("Canonical task");
     expect(firstTitle).toHaveTextContent("Task");
