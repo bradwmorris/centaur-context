@@ -13,6 +13,7 @@ DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.
 DEFAULT_INTAKE_URL = "http://centaur-context-intake.centaur.svc.cluster.local:8085"
 DEFAULT_SOURCE_INTAKE_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8086"
 DEFAULT_THEME_PROPOSAL_URL = "http://centaur-context-theme-proposals.centaur.svc.cluster.local:8087"
+DEFAULT_EXTERNAL_ACTION_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8088"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 TOKEN_NAME = "CENTAUR_CONTEXT_API_TOKEN"
@@ -21,6 +22,7 @@ NOTE_WRITE_TOKEN_NAME = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN"
 INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
 SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
 THEME_PROPOSAL_TOKEN_NAME = "CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN"
+EXTERNAL_ACTION_TOKEN_NAME = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
 
@@ -137,6 +139,8 @@ class CentaurContextClient:
         source_intake_token: str | None = None,
         theme_proposal_url: str | None = None,
         theme_proposal_token: str | None = None,
+        external_action_url: str | None = None,
+        external_action_token: str | None = None,
         principal_id: str | None = None,
         thread_key: str | None = None,
         console_url: str | None = None,
@@ -165,6 +169,10 @@ class CentaurContextClient:
             _clean(theme_proposal_url or os.getenv("CENTAUR_CONTEXT_THEME_PROPOSAL_URL"))
             or DEFAULT_THEME_PROPOSAL_URL
         ).rstrip("/")
+        self.external_action_url = (
+            _clean(external_action_url or os.getenv("CENTAUR_CONTEXT_EXTERNAL_ACTION_URL"))
+            or DEFAULT_EXTERNAL_ACTION_URL
+        ).rstrip("/")
         self.console_url = (
             _clean(console_url or os.getenv("CENTAUR_CONSOLE_URL")) or DEFAULT_CONSOLE_URL
         ).rstrip("/")
@@ -173,6 +181,7 @@ class CentaurContextClient:
         self._explicit_intake_token = _clean(intake_token)
         self._explicit_source_intake_token = _clean(source_intake_token)
         self._explicit_theme_proposal_token = _clean(theme_proposal_token)
+        self._explicit_external_action_token = _clean(external_action_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
         if transport is None:
@@ -238,6 +247,18 @@ class CentaurContextClient:
         if not value:
             raise RuntimeError(
                 f"{THEME_PROPOSAL_TOKEN_NAME} is required to propose Themes"
+            )
+        return value
+
+    def _external_action_token(self) -> str:
+        value = self._explicit_external_action_token or _clean(
+            os.getenv(EXTERNAL_ACTION_TOKEN_NAME)
+        )
+        if not value:
+            value = _tool_secret(EXTERNAL_ACTION_TOKEN_NAME)
+        if not value:
+            raise RuntimeError(
+                f"{EXTERNAL_ACTION_TOKEN_NAME} is required for External actions"
             )
         return value
 
@@ -723,6 +744,67 @@ class CentaurContextClient:
             json=manifest,
             token=self._source_intake_token(),
             base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def reserve_external_action(
+        self,
+        manifest: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Reserve one immutable, privacy-minimized external action."""
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be a JSON object")
+        return self._request(
+            "POST",
+            "/api/v1/external-actions/reserve",
+            json=manifest,
+            token=self._external_action_token(),
+            base_url=self.external_action_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def append_external_action_event(
+        self,
+        action_id: str,
+        event: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one idempotent event to an existing external action."""
+        action_id = _clean(action_id)
+        if not action_id:
+            raise ValueError("action_id is required")
+        if not isinstance(event, dict):
+            raise ValueError("event must be a JSON object")
+        return self._request(
+            "POST",
+            f"/api/v1/external-actions/{quote(action_id, safe='')}/events",
+            json=event,
+            token=self._external_action_token(),
+            base_url=self.external_action_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def read_external_action(
+        self,
+        action_id: str,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Read current state for one external action."""
+        action_id = _clean(action_id)
+        if not action_id:
+            raise ValueError("action_id is required")
+        return self._request(
+            "GET",
+            f"/api/v1/external-actions/{quote(action_id, safe='')}",
+            token=self._external_action_token(),
+            base_url=self.external_action_url,
             principal_id=principal_id,
             thread_key=thread_key,
         )

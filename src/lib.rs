@@ -5,6 +5,7 @@ pub mod db;
 pub mod domain;
 pub mod embeddings;
 pub mod evals;
+pub mod external_actions;
 pub mod ingest;
 pub mod intake;
 pub mod schema;

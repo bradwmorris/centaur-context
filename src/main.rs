@@ -83,6 +83,17 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let external_action_listener = if let Some(external_actions) = config.external_actions.as_ref()
+    {
+        Some((
+            TcpListener::bind(external_actions.addr)
+                .await
+                .context("bind External-action listener")?,
+            external_actions.clone(),
+        ))
+    } else {
+        None
+    };
     let state = AppState {
         pool,
         embeddings: embedding_client.clone(),
@@ -110,6 +121,13 @@ async fn main() -> Result<()> {
     let theme_proposals = theme_proposal_listener
         .as_ref()
         .map(|(_, config)| api::theme_proposal_router(state.clone(), config.api_token.clone()));
+    let external_actions = external_action_listener.as_ref().map(|(_, config)| {
+        centaur_context::external_actions::router(
+            state.clone(),
+            config.api_token.clone(),
+            config.allowed_principals.clone(),
+        )
+    });
     let inactivity_pool = state.pool.clone();
     let inactivity_duration = config.interaction_inactivity;
     let poll_interval = config.inactivity_poll_interval;
@@ -182,6 +200,11 @@ async fn main() -> Result<()> {
     } else {
         info!("Theme proposal listener disabled");
     }
+    if let Some((_, config)) = external_action_listener.as_ref() {
+        info!(address = %config.addr, "External-action listener ready");
+    } else {
+        info!("External-action listener disabled");
+    }
 
     let intake_server = async move {
         if let (Some((listener, _)), Some(router)) = (intake_listener, intake) {
@@ -213,6 +236,16 @@ async fn main() -> Result<()> {
         }
     };
 
+    let external_action_server = async move {
+        if let (Some((listener, _)), Some(router)) = (external_action_listener, external_actions) {
+            axum::serve(listener, router)
+                .await
+                .context("External-action server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
+
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
@@ -222,6 +255,7 @@ async fn main() -> Result<()> {
         result = intake_server => result?,
         result = source_intake_server => result?,
         result = theme_proposal_server => result?,
+        result = external_action_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
         _ = curator_worker => unreachable!("curator worker runs until shutdown"),
