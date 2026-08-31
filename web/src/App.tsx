@@ -256,7 +256,7 @@ function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (i
       onCreated(await api.createTheme({ title: String(data.get("title")), slug: String(data.get("slug")), description: String(data.get("description")), protected: true, provenance: { source_type: "human", note: "Approved and created in Centaur Context" } }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
-  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
+  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
@@ -279,7 +279,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
     <DescriptionHelp id="new-object-description-help" kind={kind} />
     {kind === "entity" && <Field label="Entity kind"><select name="entity_kind" defaultValue="person"><option value="person">Person</option><option value="organization">Organization</option><option value="product">Product</option><option value="project">Project</option><option value="publication">Publication</option><option value="place">Place</option><option value="concept">Concept</option><option value="other">Other</option></select></Field>}
     {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
@@ -298,7 +298,7 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="description" rows={5} required maxLength={1000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
     <DescriptionHelp id="new-task-description-help" kind="task" />
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
@@ -322,7 +322,7 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
-    <textarea className="create-description" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
+    <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
     <DescriptionHelp id="new-note-description-help" kind="note" />
     <Field label="Content"><textarea className="create-body" name="content" rows={14} required placeholder="Write plain text or Markdown…" aria-label="Note content" /></Field>
     {error && <p className="form-error">{error}</p>}
@@ -349,7 +349,7 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   };
   return <CreateModal title="New source" onClose={onCancel}><form className="create-form source-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Source title" aria-label="Source title" />
-    <textarea className="create-body" name="description" rows={3} required maxLength={1000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
+    <textarea className="create-body" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
     <DescriptionHelp id="new-source-description-help" kind="source" />
     <div className="source-fields">
       <Field label="Kind"><select name="source_kind" aria-label="Source kind">{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
@@ -406,7 +406,7 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
         <Property label="Original media type">{source.original_media_type ?? "Not set"}</Property>
         <Property label="Original artifact reference"><span className="property-value-wrap">{source.original_artifact_reference ?? "Not set"}</span></Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
+      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
       <DescriptionHelp id="source-description-help" kind="source" />
       <button className="secondary save-button">Save changes</button>
     </form>
@@ -499,7 +499,7 @@ function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
         <Property label="Format"><select name="content_format" aria-label="Note content format" defaultValue={note.content_format} key={`${note.object_id}-${note.revision}-format`}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
         <Property label="Updated">{relative(note.updated_at)}</Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={1000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
+      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
       <Section title="Content"><textarea className="note-content note-content-editor" name="content" aria-label="Note content" required maxLength={100000} defaultValue={note.content} key={`${note.object_id}-${note.revision}-content`} rows={16} /></Section>
       <button className="secondary save-button">Save note</button>
     </form>
@@ -540,7 +540,7 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
+        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
         <DescriptionHelp id="object-description-help" kind={item.kind} />
         <button className="secondary save-button">Save changes</button>
       </form>
@@ -665,7 +665,7 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={1000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
+        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
         <Field label="Requirement brief"><textarea name="brief_markdown" maxLength={100000} defaultValue={task.brief_markdown ?? ""} key={`${task.object_id}-${task.revision}-brief`} rows={10} placeholder="Scope, constraints, acceptance criteria, and verification…" /></Field>
         <DescriptionHelp id="task-description-help" kind="task" />
         <button className="secondary save-button">Save changes</button>

@@ -89,7 +89,7 @@ pub fn optional_text(
 }
 
 pub fn object_description(title: &str, value: String) -> Result<String, ValidationError> {
-    let value = required_text(value, "description", 1000)?;
+    let value = required_text(value, "description", 2000)?;
     validate_object_description(title, &value)?;
     Ok(value)
 }
@@ -378,7 +378,17 @@ mod tests {
                 "weak description was accepted: {description}"
             );
         }
-        assert!(object_description("Long", "x".repeat(1001)).is_err());
+        assert!(object_description("Long", "x".repeat(2001)).is_err());
+        assert!(
+            object_description(
+                "Long",
+                format!(
+                    "A concrete description with enough room for the agreed ontology context: {}",
+                    "x".repeat(1100)
+                )
+            )
+            .is_ok()
+        );
     }
 
     #[test]

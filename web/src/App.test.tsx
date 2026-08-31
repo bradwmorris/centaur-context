@@ -378,7 +378,7 @@ describe("canonical Object identity across the application", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "New source" }));
     expect(screen.getByRole("textbox", { name: "Source title" })).toHaveAttribute("maxlength", "300");
-    expect(screen.getByRole("textbox", { name: "Source description" })).toHaveAttribute("maxlength", "1000");
+    expect(screen.getByRole("textbox", { name: "Source description" })).toHaveAttribute("maxlength", "2000");
     expect(screen.getByRole("combobox", { name: "Source kind" })).toHaveValue("article");
     expect(screen.getByPlaceholderText("https://…")).toHaveAttribute("type", "url");
   });

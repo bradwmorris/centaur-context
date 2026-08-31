@@ -1061,7 +1061,7 @@ async fn update_source(
                 .transpose()?,
             description: input
                 .description
-                .map(|v| required_text(v, "description", 1000))
+                .map(|v| required_text(v, "description", 2000))
                 .transpose()?,
             provenance: input.provenance.map(|v| provenance(Some(v))).transpose()?,
             protected: input.protected,
@@ -1338,7 +1338,7 @@ async fn update_note(
         .transpose()?;
     let description = match (title.as_deref(), input.description) {
         (Some(title), Some(value)) => Some(crate::domain::object_description(title, value)?),
-        (None, Some(value)) => Some(required_text(value, "description", 1000)?),
+        (None, Some(value)) => Some(required_text(value, "description", 2000)?),
         (_, None) => None,
     };
     let note = db::update_note(
@@ -1508,7 +1508,7 @@ async fn update_object(
                 .transpose()?,
             description: input
                 .description
-                .map(|value| required_text(value, "description", 1000))
+                .map(|value| required_text(value, "description", 2000))
                 .transpose()?,
             provenance: input
                 .provenance
@@ -1835,7 +1835,7 @@ async fn update_task(
                 .transpose()?,
             description: input
                 .description
-                .map(|value| required_text(value, "description", 1000))
+                .map(|value| required_text(value, "description", 2000))
                 .transpose()?,
             provenance: input
                 .provenance

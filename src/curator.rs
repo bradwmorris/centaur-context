@@ -913,7 +913,7 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         }
         item.title = optional_text(item.title.take(), "title", 300).map_err(invalid)?;
         item.description =
-            optional_text(item.description.take(), "description", 1000).map_err(invalid)?;
+            optional_text(item.description.take(), "description", 2000).map_err(invalid)?;
         if let (Some(title), Some(description)) = (&item.title, &item.description) {
             crate::domain::validate_object_description(title, description).map_err(invalid)?;
         }
