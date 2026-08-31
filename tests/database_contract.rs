@@ -29,7 +29,7 @@ async fn canonical_schema_has_exactly_fifteen_application_tables() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;
     };
-    let tables: Vec<String> = sqlx::query_scalar("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> '_sqlx_migrations' ORDER BY table_name")
+    let tables: Vec<String> = sqlx::query_scalar("SELECT t.table_name FROM information_schema.tables t WHERE t.table_schema='public' AND t.table_type='BASE TABLE' AND t.table_name <> '_sqlx_migrations' AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_depend d ON d.objid=c.oid AND d.deptype='e' JOIN pg_extension e ON e.oid=d.refobjid WHERE n.nspname=t.table_schema AND c.relname=t.table_name) ORDER BY t.table_name")
         .fetch_all(&pool).await.unwrap();
     assert_eq!(
         tables,

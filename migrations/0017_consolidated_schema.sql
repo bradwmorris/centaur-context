@@ -226,6 +226,9 @@ END $$;
 CREATE TRIGGER runs_preserve_identity_input
 BEFORE UPDATE ON runs FOR EACH ROW EXECUTE FUNCTION preserve_run_identity_input();
 
+-- Keep legacy Evals as distinct Runs unless the schema records an explicit
+-- one-to-one Curator ownership. Eval-object links are many-to-one in live data,
+-- so an External Action reference is supporting input, not Run identity.
 WITH eval_rows AS (
     SELECT e.*,
            cr.id AS linked_curator_id,
@@ -235,20 +238,11 @@ WITH eval_rows AS (
            cr.completed_at AS curator_completed_at,cr.reversed_at,
            cr.error_message,cr.attempts,cr.available_at,cr.model,cr.prompt_version,
            cr.proposed_plan,cr.committed_plan,cr.result AS curator_result,
-           action.object_id AS external_action_id,
-           action.provider AS external_action_provider,
-           action.action_kind AS external_action_kind,
-           action.external_key AS external_action_key,
-           action.metadata AS external_action_metadata,
-           action.state AS external_action_state
+           action.object_id AS related_external_action_id
     FROM evals e
     LEFT JOIN curator_runs cr ON cr.id=e.curator_run_id
     LEFT JOIN LATERAL (
-        SELECT (array_agg(DISTINCT eo.object_id))[1] AS object_id,
-               min(xa.provider) AS provider,min(xa.action_kind) AS action_kind,
-               min(xa.external_key) AS external_key,
-               min(xa.state) AS state,
-               jsonb_agg(DISTINCT xa.metadata)->0 AS metadata
+        SELECT (array_agg(DISTINCT eo.object_id))[1] AS object_id
         FROM eval_objects eo JOIN external_actions xa ON xa.object_id=eo.object_id
         WHERE eo.eval_id=e.id
         HAVING count(DISTINCT eo.object_id)=1
@@ -259,15 +253,13 @@ INSERT INTO runs (
     consulted_object_ids,error,verdict,review_notes,reviewed_by,reviewed_at,
     available_at,started_at,completed_at,created_at,updated_at
 )
-SELECT COALESCE(linked_curator_id,external_action_id,id),
+SELECT COALESCE(linked_curator_id,id),
        CASE WHEN linked_curator_id IS NOT NULL THEN 'curator'
-            WHEN external_action_id IS NOT NULL THEN 'external_action' ELSE kind END,
+            ELSE kind END,
        CASE WHEN linked_curator_id IS NOT NULL THEN curator_status
-            WHEN external_action_id IS NOT NULL THEN external_action_state
             ELSE status END,
        actor_type,actor_id,chat_object_id,
        CASE WHEN linked_curator_id IS NOT NULL THEN 'curator:'||linked_curator_id::text
-            WHEN external_action_id IS NOT NULL THEN 'external-action:'||external_action_id::text
             ELSE idempotency_key END,
        jsonb_strip_nulls(jsonb_build_object(
            'legacy_eval_id',id,'summary',summary,'trigger',curator_trigger,
@@ -275,8 +267,7 @@ SELECT COALESCE(linked_curator_id,external_action_id,id),
            'message_count',message_count,'model',model,'prompt_version',prompt_version,
            'proposed_plan',proposed_plan,'committed_plan',committed_plan,
            'annotation_revision',annotation_revision,
-           'provider',external_action_provider,'action_kind',external_action_kind,
-           'external_key',external_action_key,'metadata',external_action_metadata
+           'related_external_action_id',related_external_action_id
        )),
        COALESCE((SELECT jsonb_agg(to_jsonb(t)-'eval_id' ORDER BY t.sequence)
                  FROM eval_trace_entries t WHERE t.eval_id=eval_rows.id),'[]'::jsonb),
