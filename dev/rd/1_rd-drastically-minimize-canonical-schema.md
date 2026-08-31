@@ -59,7 +59,7 @@ schema below, `?` marks a nullable column; all other columns are `NOT NULL`.
 **Basis checked:** Schema 16, current code paths, and exact live table profiles on
 2026-08-31.
 
-**Missing:** The exact target columns for consolidated `users`, `artifacts`,
+**Missing:** Final types and constraints for consolidated `users`, `artifacts`,
 `runs`, `embeddings`, and simplified `object_events`, plus the remaining-table
 review.
 
@@ -78,13 +78,50 @@ worse in one row.
 | --- | --- | --- |
 | `principal_permissions` | One row grants one permission to the local human. It duplicates an authorization rule that can live in service configuration. | **Delete.** |
 | `theme_proposals` | Zero rows. It exists for a future agent-proposal/human-approval workflow rather than a workflow currently producing data. | **Delete.** Use a normal Task or Note until a dedicated workflow is genuinely needed. |
-| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge into `runs`.** Record immutable transitions in `object_events`. |
+| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge into `runs`.** The Run owns the external-action lifecycle; any resulting Object or Connection mutation belongs in `object_events`. |
 | `external_identities` | A User must support multiple provider identities, but these are small provider-specific records that are normally read and maintained with the User. | **Merge into `users` as an `identities` JSON array.** Each entry keeps provider, workspace, provider user ID, display name, avatar data, and refresh time. Enforce provider/workspace/user-ID uniqueness in application validation. |
 | `chat_messages` | Eight Chats contain 31 Messages. Ingestion appends individual Messages; each has its own sender, provider ID, source time, and sequence. Runs refer to exact first/last Messages. | **Keep separate.** This is a real one-Chat-to-many-Messages relationship. |
 | `source_contents` | It currently stores article text, transcripts, paper text, and similar Source captures. There are 44 rows belonging to 42 Sources. Tasks, Chats, and any other Object can also need supporting files or captured content. | **Rename and generalize to `artifacts`.** An Artifact may belong to any Object, not only a Source. Transcript is one Artifact kind. Keep separate because one Object may have many Artifacts and an Artifact may be large or versioned. |
-| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** One row owns run kind/status, actor, times, input/result/error, review verdict/notes, affected Object references, trace, and reversible changes. Use bounded JSON for the naturally repeated trace/Object/change lists. |
+| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** A Run owns immutable input, execution trace, terminal result, consulted Object IDs, hierarchy, errors, timing, and review. It summarizes affected IDs but does not duplicate mutation or reversal history. |
 | `object_embedding_jobs`, `object_embeddings` | All 407 Objects have pending jobs with zero attempts and no completed vectors yet, but embeddings are an intended feature. Queue state and vector output describe the same Object/model/hash embedding lifecycle. | **Replace both with one `embeddings` table.** A pending row has status/retry fields and a null vector; successful processing fills the vector and completion metadata on that same row. |
-| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate and simplify.** Retain identity, Object, Run, action, actor, revisions, change payload, idempotency key, and time. |
+| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate and authoritative.** Every durable Object or Connection mutation is recorded here with sufficient reversal information. Do not duplicate complete reversible changes in `runs`. |
+
+### Minimal `runs` target
+
+- `runs.input` is the immutable input and configuration.
+- `runs.trace` contains execution steps, retrieval facts, model attempts, usage,
+  and errors.
+- `runs.result` contains terminal output, case scores, affected IDs, and a concise
+  outcome summary.
+- `runs.consulted_object_ids` contains Objects read but not changed.
+- `runs.parent_run_id` links orchestration and workflow children to their parent.
+- `object_events`, not `runs`, is the canonical mutation and reversal history.
+
+```text
+runs
+- id
+- parent_run_id?
+- kind
+- status
+- actor_type
+- actor_id
+- chat_object_id?
+- idempotency_key
+- input jsonb
+- trace jsonb
+- result jsonb
+- consulted_object_ids uuid[]
+- error?
+- verdict
+- review_notes?
+- reviewed_by?
+- reviewed_at?
+- available_at?
+- started_at?
+- completed_at?
+- created_at
+- updated_at
+```
 
 ### Result of the agreed direction so far
 
