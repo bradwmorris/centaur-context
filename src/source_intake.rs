@@ -521,18 +521,23 @@ async fn source_status(
                   AND e.source_hash=object_embedding_source_hash(
                     e.format_version,o.kind,o.title,o.description
                   )
-            ) AND EXISTS(
+            ) AND (
+              NOT EXISTS(
+                SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
+                WHERE s.object_id=$1 AND a.semantic_indexing_enabled
+              ) OR (EXISTS(
                 SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
                 JOIN embeddings e ON e.artifact_id=a.id
                 WHERE s.object_id=$1 AND a.capture_outcome='complete'
                   AND e.status='completed'
                   AND e.model=$2 AND e.dimensions=$3 AND e.input_mode=$4
                   AND e.format_version='centaur-artifact-chunk-v1'
-            ) AND NOT EXISTS(
+              ) AND NOT EXISTS(
                 SELECT 1 FROM sources s JOIN embeddings e ON e.artifact_id=s.current_artifact_id
                 WHERE s.object_id=$1 AND e.model=$2 AND e.dimensions=$3 AND e.input_mode=$4
                   AND e.format_version='centaur-artifact-chunk-v1'
                   AND e.status<>'completed'
+              ))
             )"#,
         )
         .bind(object_id)

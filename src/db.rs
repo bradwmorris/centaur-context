@@ -213,6 +213,7 @@ pub struct Artifact {
     pub capture_outcome: String,
     pub capture_reason: Option<String>,
     pub expected_size_bytes: Option<i64>,
+    pub semantic_indexing_enabled: bool,
     pub metadata: Value,
     pub supersedes_artifact_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -2755,6 +2756,7 @@ pub async fn artifact_semantic_candidates(
            JOIN artifacts a ON a.id=e.artifact_id
            JOIN sources s ON s.object_id=o.id AND s.current_artifact_id=a.id
            WHERE o.archived_at IS NULL AND a.capture_outcome='complete'
+             AND a.semantic_indexing_enabled
              AND e.status='completed' AND e.source_hash ~ '^[0-9a-f]{64}$'
              AND e.source_hash=encode(sha256(convert_to(
                e.format_version || chr(10) || 'title: ' || o.title || chr(10) ||
@@ -2960,6 +2962,15 @@ pub async fn embedding_status(
         )
         .fetch_one(pool)
         .await?;
+        let artifact_embedding_eligible: i64 = sqlx::query_scalar(
+            r#"SELECT count(*)::bigint FROM sources s
+               JOIN objects o ON o.id=s.object_id AND o.archived_at IS NULL
+               JOIN artifacts a ON a.id=s.current_artifact_id
+               WHERE a.capture_outcome='complete' AND a.content IS NOT NULL
+                 AND a.semantic_indexing_enabled"#,
+        )
+        .fetch_one(pool)
+        .await?;
         let completed_object_vectors: i64 = sqlx::query_scalar(
             r#"SELECT count(*)::bigint FROM embeddings e JOIN objects o ON o.id=e.object_id
                WHERE o.archived_at IS NULL AND e.artifact_id IS NULL AND e.status='completed'
@@ -2978,6 +2989,7 @@ pub async fn embedding_status(
                JOIN objects o ON o.id=e.object_id AND o.archived_at IS NULL
                JOIN sources s ON s.object_id=o.id AND s.current_artifact_id=e.artifact_id
                JOIN artifacts a ON a.id=e.artifact_id AND a.capture_outcome='complete'
+                 AND a.semantic_indexing_enabled
                WHERE e.status='completed' AND e.model=$1 AND e.dimensions=$2
                  AND e.input_mode=$3 AND e.format_version='centaur-artifact-chunk-v1'
                  AND e.source_hash=encode(sha256(convert_to(
@@ -2996,6 +3008,7 @@ pub async fn embedding_status(
                JOIN objects o ON o.id=e.object_id AND o.archived_at IS NULL
                JOIN sources s ON s.object_id=o.id AND s.current_artifact_id=e.artifact_id
                JOIN artifacts a ON a.id=e.artifact_id AND a.capture_outcome='complete'
+                 AND a.semantic_indexing_enabled
                WHERE e.status='completed' AND e.model=$1 AND e.dimensions=$2
                  AND e.input_mode=$3 AND e.format_version='centaur-artifact-chunk-v1'"#,
         )
@@ -3018,6 +3031,7 @@ pub async fn embedding_status(
                    )) OR
                    (e.artifact_id IS NOT NULL AND (
                      o.archived_at IS NOT NULL OR a.capture_outcome<>'complete' OR
+                     NOT a.semantic_indexing_enabled OR
                      NOT EXISTS (
                        SELECT 1 FROM sources s
                        WHERE s.object_id=e.object_id AND s.current_artifact_id=e.artifact_id
@@ -3033,6 +3047,7 @@ pub async fn embedding_status(
         json!({
             "active_objects":active_objects,
             "current_complete_artifacts":current_complete_artifacts,
+            "artifact_embedding_eligible":artifact_embedding_eligible,
             "completed_object_vectors":completed_object_vectors,
             "completed_artifact_chunks":completed_artifact_chunks,
             "indexed_current_artifacts":indexed_current_artifacts,
@@ -3068,7 +3083,7 @@ pub async fn queue_missing_embeddings(
             AND e.dimensions=$4
             AND e.format_version=$2 AND e.input_mode=$3
             AND e.source_hash=object_embedding_source_hash($2,o.kind,o.title,o.description)
-           WHERE e.object_id IS NULL
+           WHERE o.archived_at IS NULL AND e.object_id IS NULL
            ON CONFLICT (object_id,model) WHERE artifact_id IS NULL DO UPDATE
            SET source_hash=EXCLUDED.source_hash,format_version=EXCLUDED.format_version,
                dimensions=EXCLUDED.dimensions,input_mode=EXCLUDED.input_mode,
@@ -3097,6 +3112,7 @@ pub async fn artifact_embedding_sources(
            JOIN objects o ON o.id=s.object_id AND o.archived_at IS NULL
            JOIN artifacts a ON a.id=s.current_artifact_id AND a.object_id=s.object_id
            WHERE a.capture_outcome='complete' AND a.content IS NOT NULL
+             AND a.semantic_indexing_enabled
            ORDER BY a.object_id,a.id"#,
     )
     .fetch_all(pool)
@@ -3188,6 +3204,7 @@ pub async fn claim_embedding_job(
                        SELECT 1 FROM sources s JOIN artifacts a ON a.id=s.current_artifact_id
                        WHERE s.object_id=e.object_id AND a.id=e.artifact_id
                          AND a.capture_outcome='complete' AND a.content IS NOT NULL
+                         AND a.semantic_indexing_enabled
                      ))
                    ORDER BY e.available_at, e.updated_at, e.id
                    LIMIT 1 FOR UPDATE SKIP LOCKED

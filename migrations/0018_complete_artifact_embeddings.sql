@@ -4,7 +4,8 @@
 ALTER TABLE artifacts
     ADD COLUMN capture_outcome text,
     ADD COLUMN capture_reason text,
-    ADD COLUMN expected_size_bytes bigint;
+    ADD COLUMN expected_size_bytes bigint,
+    ADD COLUMN semantic_indexing_enabled boolean;
 
 ALTER TABLE artifacts DISABLE TRIGGER artifacts_are_immutable;
 UPDATE artifacts
@@ -15,11 +16,14 @@ SET capture_outcome = CASE
     capture_reason = CASE
         WHEN content IS NOT NULL AND metadata->>'coverage' = 'complete' THEN NULL
         ELSE 'legacy Artifact completeness was not established'
-    END;
+    END,
+    semantic_indexing_enabled = false;
 ALTER TABLE artifacts ENABLE TRIGGER artifacts_are_immutable;
 
 ALTER TABLE artifacts
     ALTER COLUMN capture_outcome SET NOT NULL,
+    ALTER COLUMN semantic_indexing_enabled SET DEFAULT true,
+    ALTER COLUMN semantic_indexing_enabled SET NOT NULL,
     ADD CONSTRAINT artifacts_capture_outcome_check CHECK (capture_outcome IN (
         'complete','incomplete','unavailable','paywalled','disallowed','too_large','unsupported'
     )),

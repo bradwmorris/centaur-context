@@ -439,7 +439,7 @@ function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { obje
 
 function ArtifactSummary({ artifact }: { artifact: Artifact | undefined }) {
   if (!artifact) return null;
-  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.capture_outcome} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}{artifact.capture_reason ? ` · ${artifact.capture_reason}` : ""}</p>;
+  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.capture_outcome} · {artifact.semantic_indexing_enabled ? "semantic indexing enabled" : "lexical only"} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}{artifact.capture_reason ? ` · ${artifact.capture_reason}` : ""}</p>;
 }
 
 function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {

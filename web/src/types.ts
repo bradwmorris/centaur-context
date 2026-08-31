@@ -252,6 +252,7 @@ export interface Artifact {
   capture_outcome: "complete" | "incomplete" | "unavailable" | "paywalled" | "disallowed" | "too_large" | "unsupported";
   capture_reason: string | null;
   expected_size_bytes: number | null;
+  semantic_indexing_enabled: boolean;
   metadata: Record<string, unknown>;
   supersedes_artifact_id: string | null;
   captured_at: string | null;
@@ -274,6 +275,7 @@ export interface EmbeddingStatus {
     coverage: {
       active_objects: number;
       current_complete_artifacts: number;
+      artifact_embedding_eligible: number;
       completed_object_vectors: number;
       completed_artifact_chunks: number;
       indexed_current_artifacts: number;

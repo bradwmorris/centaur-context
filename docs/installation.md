@@ -94,10 +94,11 @@ Embeddings are optional. The smallest recommended hosted setup is
 `EMBEDDING_MODEL=text-embedding-3-small`, `EMBEDDING_DIMENSIONS=1536`, and
 `EMBEDDING_INPUT_MODE=shared`, with a purpose-bound provider key in
 `EMBEDDING_API_TOKEN`. Add the URL, token, model, and dimensions together;
-partial configuration fails startup. Enabling these values sends Object summaries
-and complete current Artifact chunks to that provider and may incur cost, so it
-requires an explicit privacy and spend decision. Without them, Artifact and Object
-full-text search remains available.
+partial configuration fails startup. Enabling these values sends all Object
+kind/title/description summaries and only forward-created, semantically enabled
+Artifact chunks to that provider. Historical Artifacts remain lexical-only. This
+may incur cost, so it requires an explicit privacy and spend decision. Without
+these values, Artifact and Object full-text search remains available.
 
 ## 4. Install
 

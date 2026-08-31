@@ -40,6 +40,23 @@ async fn complete_current_artifacts_queue_chunks_and_return_exact_evidence() {
         .await
         .unwrap();
     setup.commit().await.unwrap();
+    db::queue_missing_embeddings(
+        &pool,
+        "test-model",
+        3,
+        embeddings::OBJECT_EMBEDDING_FORMAT,
+        "shared",
+    )
+    .await
+    .unwrap();
+    let object_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM embeddings WHERE object_id=$1 AND artifact_id IS NULL",
+    )
+    .bind(object_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(object_jobs, 1);
 
     let incomplete_id = Uuid::new_v4();
     let incomplete = "partial material";
@@ -65,6 +82,44 @@ async fn complete_current_artifacts_queue_chunks_and_return_exact_evidence() {
             .is_err()
     );
 
+    let historical_id = Uuid::new_v4();
+    let historical = "Historical transcript fact: amber-oriole.";
+    sqlx::query(
+        r#"INSERT INTO artifacts
+           (id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,
+            semantic_indexing_enabled,metadata)
+           VALUES ($1,$2,'paper_text',$3,'text/plain',$4,$5,'complete',false,
+                   '{"coverage":"complete"}')"#,
+    )
+    .bind(historical_id)
+    .bind(object_id)
+    .bind(historical)
+    .bind(format!("{:x}", Sha256::digest(historical.as_bytes())))
+    .bind(historical.len() as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(object_id)
+        .bind(historical_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        db::artifact_embedding_sources(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .all(|source| source.artifact_id != historical_id)
+    );
+    assert!(
+        db::artifact_full_text_candidates(&pool, "amber-oriole", Some("source"), 10, false)
+            .await
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate.object.id == object_id)
+    );
+
     let artifact_id = Uuid::new_v4();
     let content = format!(
         "{}\n\nThe hidden retrieval fact is heliotrope-cassowary.",
@@ -86,6 +141,13 @@ async fn complete_current_artifacts_queue_chunks_and_return_exact_evidence() {
     .execute(&pool)
     .await
     .unwrap();
+    let future_semantic_enabled: bool =
+        sqlx::query_scalar("SELECT semantic_indexing_enabled FROM artifacts WHERE id=$1")
+            .bind(artifact_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(future_semantic_enabled);
     sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
         .bind(object_id)
         .bind(artifact_id)
@@ -145,7 +207,9 @@ async fn complete_current_artifacts_queue_chunks_and_return_exact_evidence() {
     .await
     .unwrap();
     assert_eq!(queued, chunks.len() as i64);
-    sqlx::query("UPDATE embeddings SET available_at=now()+interval '1 day' WHERE artifact_id<>$1")
+    sqlx::query(
+        "UPDATE embeddings SET available_at=now()+interval '1 day' WHERE artifact_id IS DISTINCT FROM $1",
+    )
         .bind(artifact_id)
         .execute(&pool)
         .await
