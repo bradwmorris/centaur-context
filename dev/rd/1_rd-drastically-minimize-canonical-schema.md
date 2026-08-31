@@ -1,175 +1,318 @@
-# 1 — RD: Drastically Minimize the Canonical Schema
+# 1 — RD: Consolidate the Canonical Schema
 
 **Status:** `scoped`
 **Created:** 2026-08-31
 
-## Current Schema Baseline
-
-Schema version 16 has 24 application tables in PostgreSQL's `public` schema,
-plus two framework/inspection tables. This inventory is the post-cleanup schema
-materialized from migrations `0001`–`0016`; it is the starting point, not a
-presumption that any non-mandated structure should survive. In the compact
-schema below, `?` marks a nullable column; all other columns are `NOT NULL`.
-
-### Canonical graph and one-to-one Object subtypes
-
-| Table | Current schema | Purpose today |
-| --- | --- | --- |
-| `objects` | `id uuid`, `kind text`, `title text`, `description text`, `revision bigint`, `created_by_type text`, `created_by_id text`, `updated_by_type text`, `updated_by_id text`, `provenance jsonb`, `created_at timestamptz`, `updated_at timestamptz`, `archived_at timestamptz?`, `protected boolean`, `search_document tsvector?` | Canonical identity and shared state for every first-class Object; also stores generated full-text search data. |
-| `tasks` | `object_id uuid`, `object_kind text`, `status text`, `agent_suitable boolean`, `due_at timestamptz?`, `priority text`, `owner_object_id uuid?`, `blocked_reason text?`, `completed_at timestamptz?`, `github_issue_url text?`, `brief_markdown text?` | Task-specific workflow, ownership, scheduling, suitability, completion, blocker, and work-brief fields. |
-| `chats` | `object_id uuid`, `object_kind text`, `processing_updated_at timestamptz`, `provider text?`, `workspace_id text?`, `channel_id text?`, `thread_id text?`, `surface_kind text?`, `channel_name text?`, `latest_source_message_at timestamptz?`, `curation_queued_through_message_id uuid?`, `curated_through_message_id uuid?` | Conversation identity plus ingestion and curation checkpoints. |
-| `users` | `object_id uuid`, `object_kind text`, `user_kind text` | Classifies an Object as a human or agent User. |
-| `entities` | `object_id uuid`, `object_kind text`, `image_url text?`, `entity_kind text` | Classifies a named subject and optionally supplies its image. |
-| `memories` | `object_id uuid`, `object_kind text`, `happened_at timestamptz` | Represents an event-shaped Memory and records when it happened. |
-| `sources` | `object_id uuid`, `object_kind text`, `source_kind text`, `canonical_uri text?`, `byline text?`, `publisher text?`, `published_at timestamptz?`, `last_accessed_at timestamptz?`, `original_language text?`, `original_media_type text?`, `original_artifact_reference text?`, `current_content_id uuid?`, `published_at_precision text?` | Bibliographic identity and pointer to the current captured version of evidentiary material. |
-| `notes` | `object_id uuid`, `object_kind text`, `content text`, `content_format text` | Stores the full body and format of a human- or agent-authored Note. |
-| `themes` | `object_id uuid`, `object_kind text`, `slug text` | Gives a human-approved taxonomy Object its stable slug. |
-| `external_actions` | `object_id uuid`, `object_kind text`, `provider text`, `action_kind text`, `external_key text`, `state text`, `metadata jsonb`, `created_at timestamptz`, `updated_at timestamptz` | Durable state and idempotency record for an external side effect. |
-| `connections` | `id uuid`, `source_object_id uuid`, `kind text`, `target_object_id uuid`, `description text`, `revision bigint`, `created_by_type text`, `created_by_id text`, `updated_by_type text`, `updated_by_id text`, `provenance jsonb`, `created_at timestamptz`, `updated_at timestamptz`, `archived_at timestamptz?`, `protected boolean` | Explained, revisioned, attributable graph edge between two Objects. |
-
-### Evidence, identity, processing, evaluation, and derived data
-
-| Table | Current schema | Purpose today |
-| --- | --- | --- |
-| `external_identities` | `id uuid`, `user_object_id uuid`, `provider text`, `workspace_id text`, `provider_user_id text`, `display_name text?`, `created_at timestamptz`, `updated_at timestamptz`, `avatar_url text?`, `avatar_asset_sha256 text?`, `avatar_asset_filename text?`, `avatar_provenance jsonb`, `profile_refreshed_at timestamptz?` | Maps a User to provider identities and cached profile/avatar metadata. |
-| `chat_messages` | `id uuid`, `chat_object_id uuid`, `provider_message_id text`, `sender_user_object_id uuid`, `content text`, `source_created_at timestamptz`, `ingestion_sequence bigint`, `ingested_at timestamptz` | Immutable source-message evidence ordered within a Chat. |
-| `source_contents` | `id uuid`, `source_object_id uuid`, `version bigint`, `content_kind text`, `normalized_text text`, `language text?`, `extraction_method text?`, `extraction_version text?`, `content_sha256 text`, `size_bytes bigint`, `capture_artifact_reference text?`, `locators jsonb`, `recorded_at timestamptz`, `coverage text`, `captured_at timestamptz?` | Immutable versions of normalized Source text with capture, integrity, and extraction metadata. |
-| `object_events` | `id uuid`, `entity_type text`, `entity_id uuid`, `object_id uuid`, `action text`, `actor_type text`, `actor_id text`, `centaur_thread_key text?`, `centaur_execution_id text?`, `idempotency_key text?`, `from_revision bigint?`, `to_revision bigint`, `changes jsonb`, `created_at timestamptz` | Immutable mutation and audit history tied back to a canonical Object. |
-| `object_embeddings` | `object_id uuid`, `model text`, `dimensions integer`, `source_hash text`, `embedding vector`, `embedded_at timestamptz`, `format_version text`, `input_mode text` | Rebuildable vector representation used by hybrid retrieval. |
-| `object_embedding_jobs` | `object_id uuid`, `source_hash text`, `status text`, `attempts integer`, `available_at timestamptz`, `started_at timestamptz?`, `last_error text?`, `created_at timestamptz`, `updated_at timestamptz`, `format_version text`, `input_mode text` | Retryable queue for generating or refreshing Object embeddings. |
-| `curator_runs` | `id uuid`, `chat_object_id uuid`, `first_message_id uuid`, `last_message_id uuid`, `trigger text`, `status text`, `message_count integer`, `queued_at timestamptz`, `started_at timestamptz?`, `completed_at timestamptz?`, `reversed_at timestamptz?`, `error_message text?`, `idempotency_key text`, `attempts integer`, `available_at timestamptz`, `lease_started_at timestamptz?`, `worker_id text?`, `model text?`, `prompt_version text?`, `proposed_plan jsonb?`, `committed_plan jsonb?`, `result jsonb?` | Queue, lease, execution, plan, result, failure, and reversal state for one curation attempt. |
-| `curator_run_changes` | `id uuid`, `curator_run_id uuid`, `sequence integer`, `entity_type text`, `entity_id uuid`, `action text`, `before_state jsonb?`, `after_state jsonb`, `after_revision bigint`, `created_at timestamptz`, `undone_at timestamptz?` | Ordered before/after journal used to inspect and undo a Curator Run. |
-| `evals` | `id uuid`, `kind text`, `status text`, `actor_type text`, `actor_id text`, `chat_object_id uuid?`, `curator_run_id uuid?`, `summary text`, `error_summary text?`, `idempotency_key text`, `verdict text`, `notes text?`, `annotated_by text?`, `annotated_at timestamptz?`, `annotation_revision bigint`, `next_sequence bigint`, `started_at timestamptz`, `completed_at timestamptz?`, `created_at timestamptz`, `updated_at timestamptz` | Evaluation lifecycle, human verdict, annotation, and links to the activity being assessed. |
-| `eval_objects` | `eval_id uuid`, `object_id uuid`, `role text`, `created_at timestamptz` | Many-to-many link recording which Objects an Eval consulted, created, updated, or otherwise affected. |
-| `eval_trace_entries` | `id uuid`, `eval_id uuid`, `sequence bigint`, `entry_type text`, `component text?`, `provider text?`, `model_id text?`, `display_tier text?`, `execution_type text?`, `auth_mode text?`, `upstream_service text?`, `billing_mode text?`, `reasoning_effort text?`, `service_tier text?`, `source_thread_id text?`, `source_execution_id text?`, `source_turn_id text?`, `usage_status text`, `usage_missing_reason text?`, `input_tokens bigint?`, `output_tokens bigint?`, `cache_creation_tokens bigint?`, `cache_read_tokens bigint?`, `reasoning_tokens bigint?`, `total_tokens bigint?`, `estimated_micro_usd bigint?`, `chatgpt_credit_microunits bigint?`, `api_equivalent_micro_usd bigint?`, `rate_card_version text?`, `pricing_snapshot jsonb?`, `facts jsonb`, `created_at timestamptz` | Ordered provider-independent execution trace and model usage/cost detail for an Eval. |
-| `principal_permissions` | `principal_type text`, `principal_id text`, `permission text`, `granted_by text`, `granted_at timestamptz` | Explicit grant identifying who may approve Theme proposals. |
-| `theme_proposals` | `id uuid`, `title text`, `slug text`, `description text`, `rationale text`, `evidence jsonb`, `provenance jsonb`, `status text`, `proposed_by_type text`, `proposed_by_id text`, `centaur_thread_key text`, `centaur_execution_id text?`, `idempotency_key text`, `decided_by_type text?`, `decided_by_id text?`, `decision_reason text?`, `decided_at timestamptz?`, `resulting_theme_object_id uuid?`, `created_at timestamptz`, `updated_at timestamptz` | Immutable agent-proposal and human-decision workflow for creating Themes. |
-
-### Framework and inspection tables
-
-| Table | Current schema | Purpose today |
-| --- | --- | --- |
-| `schema_visualizer_tables` | `table_name text`, `registered_at timestamptz` | Migration-owned allowlist of the 24 application tables exposed by the read-only Schema workspace. It does not register itself or `_sqlx_migrations`. |
-| `_sqlx_migrations` | `version bigint`, `description text`, `installed_on timestamptz`, `success boolean`, `checksum bytea`, `execution_time bigint` | SQLx-owned ledger proving which forward migrations ran and whether their checksums still match. |
-
 ## Execution Plan
 
-**Status:** `still needs work`
+**Status:** `complete and ready`
 
-**Basis checked:** Schema 16, current code paths, and exact live table profiles on
-2026-08-31.
+**Basis checked:** Schema 16 migrations and live row profiles; every Rust reader,
+writer, trigger, worker, API route, listener, web view, standard Python client
+method, test suite, deployment/configuration reference, active dependent RD, and
+the downstream Enyu checkout.
 
-**Missing:** Final types and constraints for consolidated `users`, `artifacts`,
-`runs`, `embeddings`, and simplified `object_events`, plus the remaining-table
-review.
+**Missing:** none for planning. Brad must approve this final target and separately
+authorize execution, destructive migration, deployment, and merge.
 
-1. Agree which tables to delete, merge, or keep.
-2. Write the exact smaller target schema for approval.
-3. Only after separate execution approval, migrate the data and update every
-   first-party reader and writer together.
+1. Implement the exact target schema and migration mapping below.
+2. Move every first-party reader and writer to that schema in the same release.
+3. Rehearse migration and rollback on a restored disposable database.
+4. Stop old writers, back up live data, migrate, deploy the coordinated release,
+   reconcile every migrated row, and run all checks.
 
-## Agreed Direction in Brad's Order
+## Target
 
-The default is consolidation. Keep a separate table only when it represents a
-real one-to-many relationship or immutable history that becomes materially
-worse in one row.
-
-| Question | What the data and code show | Agreed direction |
-| --- | --- | --- |
-| `principal_permissions` | One row grants one permission to the local human. It duplicates an authorization rule that can live in service configuration. | **Delete.** |
-| `theme_proposals` | Zero rows. It exists for a future agent-proposal/human-approval workflow rather than a workflow currently producing data. | **Delete.** Use a normal Task or Note until a dedicated workflow is genuinely needed. |
-| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge into `runs`.** The Run owns the external-action lifecycle; any resulting Object or Connection mutation belongs in `object_events`. |
-| `external_identities` | A User must support multiple provider identities, but these are small provider-specific records that are normally read and maintained with the User. | **Merge into `users` as an `identities` JSON array.** Each entry keeps provider, workspace, provider user ID, display name, avatar data, and refresh time. Enforce provider/workspace/user-ID uniqueness in application validation. |
-| `chat_messages` | Eight Chats contain 31 Messages. Ingestion appends individual Messages; each has its own sender, provider ID, source time, and sequence. Runs refer to exact first/last Messages. | **Keep separate.** This is a real one-Chat-to-many-Messages relationship. |
-| `source_contents` | It currently stores article text, transcripts, paper text, and similar Source captures. There are 44 rows belonging to 42 Sources. Tasks, Chats, and any other Object can also need supporting files or captured content. | **Rename and generalize to `artifacts`.** An Artifact may belong to any Object, not only a Source. Transcript is one Artifact kind. Keep separate because one Object may have many Artifacts and an Artifact may be large or versioned. |
-| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** A Run owns immutable input, execution trace, terminal result, consulted Object IDs, hierarchy, errors, timing, and review. It summarizes affected IDs but does not duplicate mutation or reversal history. |
-| `object_embedding_jobs`, `object_embeddings` | All 407 Objects have pending jobs with zero attempts and no completed vectors yet, but embeddings are an intended feature. Queue state and vector output describe the same Object/model/hash embedding lifecycle. | **Replace both with one `embeddings` table.** A pending row has status/retry fields and a null vector; successful processing fills the vector and completion metadata on that same row. |
-| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate and authoritative.** Every durable Object or Connection mutation is recorded here with sufficient reversal information. Do not duplicate complete reversible changes in `runs`. |
-
-### Minimal `runs` target
-
-- `runs.input` is the immutable input and configuration.
-- `runs.trace` contains execution steps, retrieval facts, model attempts, usage,
-  and errors.
-- `runs.result` contains terminal output, case scores, affected IDs, and a concise
-  outcome summary.
-- `runs.consulted_object_ids` contains Objects read but not changed.
-- `runs.parent_run_id` links orchestration and workflow children to their parent.
-- `object_events`, not `runs`, is the canonical mutation and reversal history.
+Reduce the 24 application tables in schema 16 to these 15:
 
 ```text
-runs
-- id
-- parent_run_id?
-- kind
-- status
-- actor_type
-- actor_id
-- chat_object_id?
-- idempotency_key
-- input jsonb
-- trace jsonb
-- result jsonb
-- consulted_object_ids uuid[]
-- error?
-- verdict
-- review_notes?
-- reviewed_by?
-- reviewed_at?
-- available_at?
-- started_at?
-- completed_at?
-- created_at
-- updated_at
+objects             connections       tasks
+chats               chat_messages     users
+entities            memories          sources
+notes               themes            artifacts
+runs                embeddings        object_events
 ```
 
-### Result of the agreed direction so far
+Delete these 12 tables after their data is migrated:
 
-- Delete `principal_permissions` and `theme_proposals`.
-- Merge `external_identities` into `users` while preserving multiple providers.
-- Replace six operational tables—`external_actions`, the three Eval tables, and
-  the two Curator tables—with one `runs` table.
-- Rename and generalize `source_contents` to `artifacts`, attachable to any
-  Object.
-- Replace `object_embedding_jobs` and `object_embeddings` with one `embeddings`
-  table.
-- Keep `chat_messages` and `object_events` as the two justified separate
-  one-to-many/history tables in this review, while simplifying their columns.
-- Record the exact whole-schema table and column reduction after every remaining
-  table is decided.
+```text
+principal_permissions   theme_proposals       external_identities
+external_actions        source_contents       evals
+eval_trace_entries      eval_objects          curator_runs
+curator_run_changes     object_embedding_jobs object_embeddings
+```
+
+Create `artifacts`, `runs`, and `embeddings`. Modify `users`, `sources`, and
+`object_events`. Keep `chat_messages` separate because it is a genuine
+one-Chat-to-many-Messages relationship. Keep framework-owned
+`schema_visualizer_tables` and `_sqlx_migrations` outside the application count.
+
+### Target shapes
+
+**`users`** keeps `object_id`, `object_kind`, and `user_kind`, and gains
+`identities jsonb NOT NULL DEFAULT '[]'`. Each identity preserves its stable ID,
+provider, workspace, provider user ID, display name, avatar URL/asset fields,
+avatar provenance, and refresh time. A database trigger takes a transaction-level
+advisory lock and rejects a provider/workspace/user-ID claimed by another User;
+application validation alone is not sufficient under concurrent ingestion.
+
+**`artifacts`** replaces and generalizes `source_contents`:
+
+```text
+id, object_id, kind, title?, content?, uri?, media_type?, language?,
+sha256, size_bytes, metadata jsonb, supersedes_artifact_id?, captured_at?, created_at
+```
+
+An Artifact belongs to any Object and may represent a transcript, article text,
+document, file, image, audio, video, dataset, or other supporting capture. Require
+`content` or `uri`; keep large binaries outside PostgreSQL; make rows immutable;
+and use `supersedes_artifact_id` only when a replacement exists. Rename
+`sources.current_content_id` to `current_artifact_id` and retain the same-Source
+foreign-key guarantee. Source and general search may index bounded textual
+Artifact content, but list APIs must never return full bodies accidentally.
+
+**`runs`** replaces External Actions, Evals, Eval traces/Object links, and Curator
+Runs/change journals:
+
+```text
+id, parent_run_id?, kind, status, actor_type, actor_id, chat_object_id?,
+idempotency_key, input jsonb, trace jsonb, result jsonb,
+consulted_object_ids uuid[], error?, verdict, review_notes?, reviewed_by?,
+reviewed_at?, available_at?, started_at?, completed_at?, created_at, updated_at
+```
+
+`input` is immutable configuration and source input. `trace` contains ordered
+execution/retrieval steps, model attempts, usage, and errors. `result` contains
+terminal output, case scores, affected IDs, and a summary. `consulted_object_ids`
+contains Objects read but not changed. `parent_run_id` is a self-reference for
+orchestration. Enforce immutable identity/input fields, valid state/timestamp
+combinations, unique `(kind,idempotency_key)`, bounded JSON, append-only trace,
+and an acyclic parent relationship. Run kinds retain only the workflows in this
+RD; allowed statuses are kind-scoped so the External Action state machine remains
+exact. A trigger validates that every consulted Object exists. Curator input keeps
+its first/last Message IDs and must validate that both belong to `chat_object_id`.
+
+**`embeddings`** combines queue and result state:
+
+```text
+object_id, model, dimensions, source_hash, format_version, input_mode,
+status, attempts, available_at, started_at?, completed_at?, last_error?,
+embedding vector?, created_at, updated_at
+```
+
+Use `(object_id,model)` as the key. A pending/running/failed row has no vector; a
+completed row has a dimension-checked vector. Object text changes atomically mark
+existing rows pending, clear stale vectors, and reset retry state. The configured
+worker creates missing model rows, claims them with `FOR UPDATE SKIP LOCKED`, and
+fills the same row on success. Retrieval reads only completed, current-hash rows.
+The first release keeps the current embedding input contract—Object kind, title,
+and description—while active RD 3 decides any later Artifact-aware expansion.
+
+**`object_events`** is the only mutation and reversal history:
+
+```text
+id, run_id, sequence, target_type, target_id, action, actor_type, actor_id,
+idempotency_key, from_revision?, to_revision, before_state?, after_state,
+reversible, created_at
+```
+
+Every durable Object or Connection mutation must write one immutable event in the
+same transaction. `target_type` is `object` or `connection`; `(run_id,sequence)`
+orders reversal. Events store sufficient before/after state to reverse safely.
+Undo reads one Run's events in reverse order, verifies current revisions, applies
+compensating writes, and creates new events under a child Run; it never edits the
+original events. `runs.result` may summarize affected IDs but must never duplicate
+complete reversible changes. New events are always reversible. Historical events
+that predate full snapshots remain immutable and preserve their original payload,
+but are explicitly marked non-reversible rather than receiving fabricated state.
+
+Themes remain Objects and themed Connections remain supported. Delete the empty
+proposal workflow and single-row permission table. Theme creation stays
+human-only; assigning an existing Theme uses the normal authenticated agent
+contract. External Actions stop being Objects, but retain their dedicated
+credential/listener: those routes create/update `runs`, and only resulting Object
+or Connection mutations create `object_events`.
+
+## Data Migration
+
+Implement `migrations/0017_consolidated_schema.sql` as one forward-only migration
+after a fresh backup and disposable rehearsal. It must abort rather than guess
+when any guard fails.
+
+1. Add new tables/columns, constraints, indexes, immutability functions, and Run
+   transaction context before moving data.
+2. Aggregate all `external_identities` into deterministic `users.identities`
+   arrays, preserving identity IDs and avatar metadata. Prove every old identity
+   appears exactly once and every provider key remains globally unique.
+3. Copy all 44 `source_contents` rows to `artifacts` without changing IDs, text,
+   hashes, byte sizes, timestamps, capture metadata, or current Source pointers.
+   Map extraction, coverage, and locators into bounded `metadata`. Verify hashes
+   from stored bytes and preserve the two existing replacement histories.
+4. Create one Run for every Eval. For the 16 Evals linked to Curator Runs, use the
+   Curator Run ID as the new Run ID and retain the former Eval ID in migration
+   metadata; other Runs keep their Eval IDs. Fold ordered trace entries into
+   `trace`; map `consulted`/`participant` links to `consulted_object_ids`; map
+   affected roles only to `result` summaries; preserve annotations, usage, costs,
+   failures, timestamps, plans, message windows, attempts, and leases.
+5. Convert each `curator_run_changes` row into the matching existing Object Event
+   by exact run/entity/revision/idempotency evidence, adding sequence and full
+   before/after state. Abort if a change lacks exactly one matching event. Move
+   Curator lifecycle and duplicate mutation trace entries into Run trace/result,
+   leaving only Object/Connection mutations in `object_events`.
+6. Map every other retained Object/Connection Event to its Run by exact trace
+   target/action/revision or idempotency evidence. Move message, Source-content,
+   Curator-lifecycle, and other non-mutation events to the appropriate Run trace or
+   Artifact metadata. Put genuinely pre-Run mutation events under one legacy Run,
+   preserve their original payload, and mark them non-reversible. Abort ambiguous
+   mappings.
+7. Convert each External Action and its former Object/Event history into one Run,
+   preserving its stable ID, provider/action/external key, privacy-safe metadata,
+   state, idempotency, actor, and timestamps. Reuse its exact Eval-derived Run when
+   one exists; abort ambiguous matches rather than creating duplicate Runs. Then
+   remove the three obsolete External Action Objects only after proving they have
+   no retained Connection or subtype dependency.
+8. Merge every embedding job/result pair into one `embeddings` row. Current input
+   is 407 pending jobs and zero vectors. The three removed External Action Objects
+   lose their jobs, so the current expected final state is 404 pending rows and
+   zero completed vectors. Refresh and guard all counts if live state changes.
+9. Remove Eval mutation triggers/functions, old foreign keys, indexes, registry
+   entries, Object kind `external_action`, and the 12 old tables only after all
+   count, key, hash, and payload comparisons pass inside the rehearsal.
+10. Register exactly the 15 target tables, bump database schema, ontology, API,
+   standard-client, intake-manifest, and external-action contract versions, and
+   record the final table/column counts.
+
+## Required Code and Contract Changes
+
+- **Database/domain:** Update `src/domain.rs`, `src/db.rs`, and `src/schema.rs`;
+  add typed Identity, Artifact, Run, Embedding, and ObjectEvent contracts; update
+  source, visual/attribution, context, and search joins; remove proposal code and
+  obsolete SQL functions/triggers; keep optimistic revisions and idempotency.
+- **Curator:** Keep reconciliation logic in `src/curator.rs`, but queue/claim one
+  `runs` row, store immutable input and append trace, collect consulted IDs, and
+  commit each mutation plus its full Object Event atomically. Undo exclusively
+  from Object Events and record reversal as a child Run. Validate first/last
+  Message ownership against the Run's Chat before queue, claim, and reconcile.
+- **Evals/usage:** Replace `src/evals.rs` with a focused `src/runs.rs`. Ingestion,
+  human/system writes, model attempts, usage reports, and failures append to the
+  active Run. Every standalone mutation creates a Run rather than relying on an
+  implicit Eval trigger.
+- **Ingestion/intake:** Update `src/ingest.rs`, `src/intake.rs`, and
+  `src/source_intake.rs` to write embedded User identities, generic Artifacts,
+  Runs, and authoritative Object Events. Change intake manifests from
+  `external_identities`/`source_contents` collections to User identities and
+  `artifacts`; update Curator output schema from Source content to Artifact.
+- **External Actions:** Keep the isolated listener/token and privacy validation in
+  `src/external_actions.rs`, but persist Runs rather than Objects/subtypes. Remove
+  `external_action` from Object creation, visuals, and ontology.
+- **Embeddings/search:** Update `src/embeddings.rs`, `src/search.rs`, and database
+  claim/complete/fail methods for the single-table lifecycle; rebuild vectors after
+  cutover; search only current completed rows; index Artifact text where intended.
+- **HTTP API:** Update `src/api.rs`. Replace separate human Eval/Curator routes with `/runs`,
+  `/runs/{id}`, `/runs/{id}/review`, and `/runs/{id}/undo`; add generic
+  `/objects/{id}/artifacts` and bounded Artifact-content routes. Preserve User
+  identity and Source-content convenience responses where their meaning remains,
+  backed by the consolidated data. Remove Theme-proposal endpoints; move existing
+  Theme assignment to normal agent auth. Keep External Action routes but return
+  Run-backed state. Publish the coordinated contract under `/api/v2`, update all
+  first-party callers, and remove `/api/v1` at cutover rather than maintaining
+  indefinite aliases. Unknown and removed versions/routes must fail closed.
+- **Configuration/runtime:** Update `src/config.rs`, `src/main.rs`, `src/lib.rs`,
+  listener startup, readiness, and token-collision checks. Remove Theme-proposal
+  configuration/listener/secret. Do not remove or merge External Action credentials
+  merely because its table disappears.
+- **Web:** Update `web/src/App.tsx`, `types.ts`, `api.ts`, `routing.ts`,
+  `SchemaWorkspace.tsx`, styles, and their tests. Replace separate Curator and Eval
+  sections with one Runs list/detail/review/undo surface; show parent/child Runs,
+  trace, result, consulted Objects, and authoritative linked events. Replace Source
+  Versions with Artifacts, render embedded identities, and remove Theme proposal UI.
+- **Standard agent client:** Update `tools/centaur_context/client.py`, `cli.py`,
+  `pyproject.toml`, and `test_client.py`: payload validation, permissions, URLs,
+  and methods. Remove propose/read Theme
+  proposal commands and token; retain assignment of existing Themes. Add generic
+  Artifact methods and new intake shapes. Keep External Action methods on their
+  dedicated token but adapt responses to Runs.
+- **Deployment/docs:** Update `deploy/deployment.yaml`, `service.yaml`,
+  `secret.example.yaml`, network policies, `README.md`, `docs/installation.md`,
+  `operations.md`, `slack-integration.md`, `context.md`, `ontology.md`, the agent
+  handoff prompt, `compatibility.toml`, `src/version.rs`, schema registry, and
+  package checks. Remove obsolete Theme listener material; retain required model,
+  embedding, Curator, intake, and External Action configuration.
+- **Downstream and planning:** Update the pinned standard client, manifests,
+  prompts, URLs, and workflow payloads in `/Users/bradleymorris/Desktop/dev/enyu-os`
+  in the coordinated release. Reconcile active embedding RD 3 and Eval/golden-
+  scenario RD 4 so they target `embeddings` and `runs`, not deleted tables.
+
+### Route and payload cutover
+
+| Old contract | Target contract |
+| --- | --- |
+| `/api/v1/evals*` and `/api/v1/curator-runs*` | `/api/v2/runs*` |
+| `/api/v1/ingest/evals/usage` | `/api/v2/ingest/runs/usage` |
+| `/api/v1/sources/{id}/contents` | `/api/v2/objects/{id}/artifacts` |
+| `/api/v1/sources/{id}/content` | Keep as a v2 convenience read of `current_artifact_id` |
+| `/api/v1/users/{id}/identities` | Keep the array response, now read from `users.identities` |
+| `/api/v1/theme-proposals*` | Remove; unknown route fails closed |
+| Theme assignment using Theme-proposal token | `/api/v2/theme-assignments*` using normal agent auth |
+| `/api/v1/external-actions*` | Keep under v2 with the dedicated token and Run-backed response |
+| Intake `external_identities` and `source_contents` | User `identities` and top-level `artifacts` |
+
+Update `tests/api_auth.rs`, `database_contract.rs`, `intake_contract.rs`,
+`source_intake_contract.rs`, and `curator_evals.rs` (renamed for Runs) to prove
+these replacements and that every removed v1 route fails closed.
+
+## Rollout and Rollback
+
+This is not compatible with old writers. Build and verify the new service/client
+first, then use a maintenance cutover: stop all writers and workers; ensure no Run
+or Embedding lease is active; take and checksum a fresh backup; rehearse the exact
+live snapshot; migrate; deploy the new service, web bundle, client, and Enyu
+callers together; then run identity, Slack ingestion, Curator reconcile/undo,
+Artifact read/write/search, External Action idempotency, Run review, embedding
+claim/complete/search, and Schema UI canaries. Rollback means stopping new writers,
+restoring the verified pre-cutover backup, and redeploying the old image/client;
+do not attempt a lossy reverse migration.
 
 ## What We Are Doing
 
-- [ ] Reduce table and column count as a primary design objective, accepting
-      breaking internal changes where all first-party consumers can move together.
-- [ ] Prefer one human-understandable table when a separate table provides only
-      theoretical flexibility or conventional database neatness.
-- [ ] Keep separation only for a real one-to-many or immutable-history need.
-- [ ] Deliver an exact before/after schema and preserve only the workflows Brad
-      explicitly chooses to keep.
+- [ ] Land the 15-table target with no competing histories or obsolete writers.
+- [ ] Preserve every approved identity, Artifact byte/hash, Run/evaluation fact,
+      usage/cost record, mutation, reversal, idempotency key, and stable ID defined
+      above; report intentionally removed speculative/duplicate structure.
+- [ ] Prove every retained workflow through the coordinated API rather than direct
+      database access.
 
 ## Contract
 
-- **Goal:** Delete unnecessary tables and columns and consolidate the rest so a
-  human can understand and maintain the schema easily.
-- **Done:** Brad approves the exact smaller schema; it is migrated without
-  unintended data loss; all retained workflows work; and the final table and
-  column counts are recorded against this baseline.
-- **Files:** `migrations/`; affected Rust domain/database/API/ingestion/Curator/
-  eval/search code and tests; `tools/centaur_context`; affected web schema and
-  product surfaces; `docs/ontology.md`; `compatibility.toml`; this RD.
-- **Agent owns:** Careful pushback only where separation is genuinely necessary,
-  the minimal target proposal, approved implementation, and verification.
-- **Requester owns:** Choosing which useful workflows may be dropped, approving
-  the exact destructive manifest, live database writes/deployment, and merge.
-- **Out of scope:** `ai_v2`, Console databases, new features, public ingress,
-  cloud deployment, and external integrations.
+- **Goal:** Make the database and every first-party consumer materially simpler
+  while keeping the accepted operational behavior intact.
+- **Done:** Schema 16 migrates to the exact 15-table target; all old-table readers,
+  writers, routes, triggers, configs, and UI surfaces are gone or deliberately
+  remapped; live reconciliation and all checks pass.
+- **Files:** `migrations/`; `src/`; `tests/`; `web/`; `tools/centaur_context/`;
+  deployment/configuration; documentation; compatibility metadata; active dependent
+  RDs; authorized Enyu overlay contract updates.
+- **Agent owns:** Implementation, migration/reconciliation manifests, coordinated
+  first-party updates, local/disposable verification, and a ready PR after execution
+  is authorized.
+- **Requester owns:** Final target approval, permission to discard the explicitly
+  obsolete structures/history representations, live cutover, deployment, and merge.
+- **Out of scope:** `ai_v2`, Console databases, new public ingress, unrelated
+  product features, and new external integrations.
 
 ## Checks
 
-- [ ] Exact before/after table and column list is approved.
-- [ ] Disposable migration rehearsal and reconciliation prove no unintended data
-      loss and every retained workflow works.
+- [ ] Fresh schema and populated schema-16 migration tests pass, including a second
+      idempotence/reconciliation pass and exact row/key/hash/payload comparisons.
+- [ ] Multi-provider identity uniqueness and concurrent Slack replay pass.
+- [ ] Artifact ownership, immutability, replacement, bounded reads, and search pass.
+- [ ] Run queue, hierarchy, trace ordering, review, usage/cost, External Action
+      idempotency, Curator commit, and event-only undo pass.
+- [ ] Embedding queue/lease/retry/completion/staleness and hybrid retrieval pass.
+- [ ] Auth tests prove removed Theme permissions/routes are gone and retained write
+      surfaces still require the correct distinct credential.
+- [ ] Web and standard-client contract tests pass; Enyu golden workflows pass.
+- [ ] Schema registry contains exactly the 15 application tables and no old name.
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo test`
@@ -181,6 +324,6 @@ runs
 
 ## Approval Boundary
 
-This RD authorizes planning only. Do not implement, migrate, deploy, delete, or
-write hosted data until Brad approves the exact target schema and separately
-starts execution. Never touch `ai_v2` or Console databases.
+Planning only. Do not implement, migrate, deploy, delete, write hosted data, or
+change the Enyu overlay until Brad approves this target and separately starts RD
+execution. Never access or modify `ai_v2` or Console databases.
