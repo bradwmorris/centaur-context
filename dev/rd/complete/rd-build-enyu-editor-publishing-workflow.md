@@ -1,4 +1,4 @@
-# 3 — RD: Build the Enyu Editor Publishing Workflow
+# RD: Build the Enyu Editor Publishing Workflow
 
 **Status:** `complete`
 **GitHub Issue:** [#47](https://github.com/bradwmorris/centaur-context/issues/47)

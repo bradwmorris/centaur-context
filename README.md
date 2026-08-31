@@ -46,7 +46,8 @@ Extend Centaur Context only when the feature would help many Centaur users.
 - The Curator uses a separate write credential.
 - No public ingress is included.
 
-See [Ontology](docs/ontology.md) for the data model.
+See [Ontology](docs/ontology.md) for the data model and
+[Context and search](docs/context.md) for the retrieval path.
 
 ## Start
 

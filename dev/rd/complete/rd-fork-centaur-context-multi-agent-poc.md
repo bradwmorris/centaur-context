@@ -1,11 +1,12 @@
 # RD: Deploy and Dogfood Centaur Context for Enyu with Named Slack Agents
 
-**Status:** `in_progress`
+**Status:** `complete`
 **Created:** 2026-08-29
-**GitHub Issue:** `#15`
+**Completed:** 2026-08-30
+**GitHub Issue:** [#15](https://github.com/bradwmorris/centaur-context/issues/15)
 **Prerequisite Issues:** Centaur `#3`, `#4`
 **Follow-on:** `rd-build-enyu-source-ingestion-overlay.md` extends the existing
-Enyu overlay with its first concrete workflow; this RD still owns named Slack
+Enyu overlay with its first concrete workflow; this RD owned named Slack
 instances, shared-context handshakes, deployment, and cross-agent dogfood
 acceptance.
 
@@ -19,10 +20,9 @@ the ACME overlay guidance; the existing private overlay; and Centaur Context's
 ingestion, Context Builder, Curator, identity, client, deployment, and database
 contracts through migration 9.
 
-**Missing:** No planning decision. Execution is gated by the requester-owned
-resources and approvals listed below. The two reusable product gaps in phases 1
-and 2 must be implemented through their own issue, branch, tests, and PR before
-the Enyu overlay is deployed.
+**Missing:** none. The requester-approved resources were supplied, and the two
+reusable product gaps in phases 1 and 2 were implemented through their own
+issues, branches, tests, and merged PRs before the Enyu overlay was deployed.
 
 ### Fixed execution decisions
 
@@ -59,14 +59,14 @@ one Chat when they participate in the same Slack thread.
 
 ## What We Are Doing
 
-- [ ] Prove unchanged reusable Centaur and Centaur Context products can support
+- [x] Prove unchanged reusable Centaur and Centaur Context products can support
   an organization overlay with two named agents.
-- [ ] Run distinct Editor and Researcher Slack apps through one Centaur control
+- [x] Run distinct Editor and Researcher Slack apps through one Centaur control
   plane with isolated personas, sessions, state, tools, credentials, and
   failure domains.
-- [ ] Give both agents one fresh, shared Centaur Context through authenticated
+- [x] Give both agents one fresh, shared Centaur Context through authenticated
   HTTP APIs only.
-- [ ] Demonstrate durable knowledge transfer in both directions and classify
+- [x] Demonstrate durable knowledge transfer in both directions and classify
   every discovered gap.
 
 ## Contract
@@ -155,19 +155,40 @@ one Chat when they participate in the same Slack thread.
 
 ## Checks
 
-- [ ] Each reusable product change has its own issue/branch/PR, focused tests,
+- [x] Each reusable product change has its own issue/branch/PR, focused tests,
   and passing repository checks; singleton Centaur remains compatible.
-- [ ] The overlay pins reviewed product revisions and contains no product copy,
+- [x] The overlay pins reviewed product revisions and contains no product copy,
   Enyu credentials, private IDs, database DSN, or unrestricted write path.
-- [ ] Tests cover handshake, two instances, personas, permissions, signature
+- [x] Tests cover handshake, two instances, personas, permissions, signature
   rejection, idempotency, collision avoidance, recovery, and independent
   failure.
-- [ ] A fresh Context database proves first-turn and later-turn Chat resolution,
+- [x] A fresh Context database proves first-turn and later-turn Chat resolution,
   distinct agent Users, shared authorized Objects, Curator provenance, and UI
   visibility.
-- [ ] Both directional acceptance scenarios pass first with signed fixtures and
-  then, after approval, in live Slack.
-- [ ] Relevant checks in every changed repository and `git diff --check` pass.
+- [x] Signed fixtures and the approved live Slack Source-ingestion workflow prove
+  the intended cross-agent durable-context path. At closeout, the requester
+  accepted this stronger live workflow as superseding a separate replay of the
+  original synthetic Editor-to-Researcher and Researcher-to-Editor script.
+- [x] Relevant checks in every changed repository and `git diff --check` pass.
+
+## Completion
+
+- Centaur issue #3 and PR #5 delivered persistent canonical Slack Chat identity;
+  issue #4 and PR #6 delivered isolated multi-Slack instances with singleton
+  compatibility.
+- The private `centaur-enyu` overlay contains the Editor and Researcher personas,
+  distinct least-privilege grants, signed fixtures, deployment configuration,
+  and pinned standard Context client.
+- The approved private deployment ran both Slack applications through one
+  Centaur control plane and one fresh shared Context installation with durable
+  callback ingress, authenticated HTTP-only Context access, Curator provenance,
+  idempotent replay, and enforced Editor/Researcher isolation.
+- The follow-on Source-ingestion workflow completed live Slack acceptance,
+  including a durable Researcher workflow, Context commit and retrieval, Slack
+  completion, replay safety, and Editor write denial. The non-secret evidence is
+  recorded in `centaur-enyu/deploy/live-source-ingestion.md`.
+- Context issue #15 is closed. Later production hardening remains separate work;
+  no `centaur-enyu-infra` repository was required to complete this POC.
 
 ## Approval Boundary
 

@@ -20,9 +20,16 @@ be created or linked when execution is explicitly requested.
 ## RD Location And Naming
 
 - Store RDs in `dev/rd/`.
-- Name each file `rd-<short-kebab-case-slug>.md`.
+- Prefix every active RD filename with its unique positive-integer priority:
+  `<priority>_rd-<short-kebab-case-slug>.md`. Lower numbers are worked first.
+- Before adding a new RD, inspect the active priorities, suggest the simplest
+  appropriate number, and ask Brad to confirm or change it. Do not assign the
+  number or create the RD until he answers.
+- When Brad changes priorities, rename the affected active RDs and update their
+  priority headings and repository references. Do not infer a broader reorder.
 - Keep backlog and active RDs directly in `dev/rd/`.
-- Move finished RDs to `dev/rd/complete/`.
+- Move finished RDs to `dev/rd/complete/` and remove the priority prefix because
+  completed work is no longer in the active queue.
 - Treat the Git-tracked RD as the executable specification.
 
 ## Intake
@@ -36,15 +43,16 @@ Before writing an RD:
    task.
 4. Keep new work in `backlog` unless scoping or execution is explicitly
    requested.
-5. Do not assign a due date, priority, owner, GitHub Issue, or database Task ID
-   unless one is requested or execution has been explicitly authorized.
+5. Suggest and confirm the required RD priority as described above. Do not
+   assign a due date, owner, GitHub Issue, or database Task ID unless one is
+   requested or execution has been explicitly authorized.
 
 ## RD Format
 
 Use this compact structure:
 
 ```markdown
-# RD: [Task title]
+# [Priority] — RD: [Task title]
 
 **Status:** `backlog|scoped|in_progress|blocked|review|complete`
 **Created:** YYYY-MM-DD
@@ -100,6 +108,12 @@ explicit requester approval.]
 - Do not add public ingress, cloud deployment, or external integrations without
   explicit approval.
 
+## Downstream Sync
+
+Before handing off repository changes, check whether the same change is needed
+in `/Users/bradleymorris/Desktop/dev/enyu-os`. Apply it there when authorized;
+otherwise explicitly remind Brad of the required downstream update.
+
 ## RD Planning
 
 When asked to create or plan an RD:
@@ -122,8 +136,8 @@ When asked to execute an RD:
 5. Run the checks required by the RD and the repository-root `AGENTS.md`.
 6. If problems remain, report them and do not present the work as ready.
 7. If the work is ready, mark the RD `complete`, check off its completed
-   outcomes and checks, record concise verification results, and move it to
-   `dev/rd/complete/` without changing its filename.
+   outcomes and checks, record concise verification results, remove the priority
+   from its heading and filename, and move it to `dev/rd/complete/`.
 8. Commit and push the branch, then open one PR containing
    `Closes #<issue-number>` and the verification results.
 9. Ask whether to merge. Never merge without explicit approval.
