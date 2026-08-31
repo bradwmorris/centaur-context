@@ -7,7 +7,7 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
@@ -54,7 +54,8 @@ export default function App() {
     setError(null);
     try {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals] = await Promise.all([api.objects(query, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "runs" ? api.runs() : Promise.resolve([]), api.objectVisuals()]);
+      const objectQuery = section === "runs" ? "" : query;
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals] = await Promise.all([api.objects(objectQuery, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "runs" ? api.runs() : Promise.resolve([]), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
       setSources(nextSources.items);
@@ -144,16 +145,16 @@ export default function App() {
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
-                  <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
+                  <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
                   {"actor_type" in item ? <span className="object-id-pill">ID: {shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges">{"actor_type" in item ? <StateBadge state={item.status} /> : <><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && <TaskStatusBadge status={item.status} />}</>}</span>{!("actor_type" in item) && <AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} />}<DescriptionSnippet description={itemDescription(item)} /></span>
+                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges">{"actor_type" in item ? <><span className="visual-badge run-type-badge">↻ {runType(item, objects)}</span><StateBadge state={item.status} /></> : <><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && <TaskStatusBadge status={item.status} />}</>}</span><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /><DescriptionSnippet description={itemDescription(item, objects)} /></span>
                   <time>{relative(item.updated_at)}</time>
                 </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "runs" ? <RunDetailView id={selectedId!} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "runs" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
@@ -181,7 +182,7 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
   }
   if (section === "runs") {
     const normalized = query.trim().toLocaleLowerCase();
-    return normalized ? runs.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id}`.toLocaleLowerCase().includes(normalized)) : runs;
+    return normalized ? runs.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id} ${itemTitle(item, objects)} ${itemDescription(item, objects)}`.toLocaleLowerCase().includes(normalized)) : runs;
   }
   if (section === "objects") return objects;
   const kind = sectionKinds[section];
@@ -190,10 +191,43 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
 
 function itemRouteId(item: ListItem) { return "actor_type" in item ? item.id : canonicalObjectId(item); }
 function canonicalObjectId(item: ListItem) { return "actor_type" in item ? item.chat_object_id ?? item.id : "object_id" in item ? item.object_id : item.id; }
+function itemVisualObjectId(item: ListItem) { return "actor_type" in item ? item.chat_object_id ?? item.primary_object_id ?? item.id : canonicalObjectId(item); }
 
 function itemObjectKind(item: Exclude<ListItem, Run>): ObjectKind { return "kind" in item ? item.kind : "slug" in item ? "theme" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
-function itemTitle(item: ListItem, objects: SharedObject[]) { return "actor_type" in item ? `${item.kind.replaceAll("_", " ")} run${item.chat_object_id ? ` · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}` : ""}` : "title" in item ? item.title : shortId(canonicalObjectId(item)); }
-function itemDescription(item: ListItem) { return "actor_type" in item ? `${item.actor_type}:${item.actor_id} · ${item.verdict}` : "description" in item ? item.description : ""; }
+function itemTitle(item: ListItem, objects: SharedObject[]) {
+  if (!("actor_type" in item)) return "title" in item ? item.title : shortId(canonicalObjectId(item));
+  const primary = item.primary_object_id ? objects.find((object) => object.id === item.primary_object_id) : undefined;
+  return primary ? `${runType(item, objects)} · ${primary.title}` : runType(item, objects);
+}
+function itemDescription(item: ListItem, objects: SharedObject[]) {
+  if (!("actor_type" in item)) return "description" in item ? item.description : "";
+  return runOutcome(item, objects);
+}
+function runType(run: Run, objects: SharedObject[] | RunObject[]) {
+  const primary = run.primary_object_id ? objects.find((object) => ("id" in object ? object.id : object.object_id) === run.primary_object_id) : undefined;
+  if (run.kind === "intake" && primary?.kind === "source") return "Source ingestion";
+  if (run.kind === "intake") return "Data ingestion";
+  if (run.kind === "slack_interaction") return "Slack interaction";
+  if (run.kind === "curator") return "Conversation curation";
+  if (run.kind === "curator_undo") return "Curation reversal";
+  if (run.kind === "external_action") return "External action";
+  if (["human_mutation", "system_mutation", "mutation"].includes(run.kind)) return "Record change";
+  if (run.kind === "legacy_import") return "Legacy import";
+  return `${run.kind.replaceAll("_", " ").replace(/^./, (value) => value.toUpperCase())} run`;
+}
+function runOutcome(run: Run, objects: SharedObject[] | RunObject[]) {
+  const counts = run.result.counts as Record<string, unknown> | undefined;
+  const primary = run.primary_object_id ? objects.find((object) => ("id" in object ? object.id : object.object_id) === run.primary_object_id) : undefined;
+  const objectCount = Number(counts?.objects ?? 0);
+  const connectionCount = Number(counts?.connections ?? 0);
+  if (run.kind === "intake" && primary) {
+    const subject = primary.kind === "source" ? "Source" : "Object";
+    const action = objectCount > 0 ? `Created ${objectCount} ${subject}${objectCount === 1 ? "" : "s"}` : `Reused ${subject}`;
+    return connectionCount > 0 ? `${action} · Added ${connectionCount} connection${connectionCount === 1 ? "" : "s"}` : action;
+  }
+  if (run.error) return run.error;
+  return `${run.actor_type}:${run.actor_id} · ${run.verdict}`;
+}
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
 function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | undefined { return section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
 
@@ -658,7 +692,7 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
   </div>;
 }
 
-function RunDetailView({ id, onChanged }: { id: string; onChanged: () => Promise<void> }) {
+function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -686,22 +720,33 @@ function RunDetailView({ id, onChanged }: { id: string; onChanged: () => Promise
     catch (cause) { setError(conflictMessage(cause)); }
     finally { setBusy(false); }
   };
+  const primary = run.primary_object_id ? objects.find((object) => object.object_id === run.primary_object_id) : undefined;
+  const chatVisual = run.chat_object_id ? visuals.get(run.chat_object_id) : undefined;
+  const title = primary ? `${runType(run, objects)} · ${primary.title}` : runType(run, objects);
+  const outcome = runOutcome(run, objects);
   return <div className="record-page"><div className="record-primary eval-detail">
-    <h1 className="detail-title">{run.kind.replaceAll("_", " ")} run</h1>
-    <p className="detail-description">{run.actor_type}:{run.actor_id}</p>
+    <div className="detail-heading run-heading"><span className="object-id-pill">Run ID: {shortId(run.id)}</span><h1 className="detail-title">{title}</h1><AttributionStack users={chatVisual?.users ?? []} /></div>
+    <p className="detail-description">{outcome}</p>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
+      <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
+      <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
+      {primary && <Property label="Primary Object"><a className="run-object-title" href={detailPath("objects", primary.object_id)}>{primary.title}</a><ObjectTypeBadge kind={primary.kind} /><ObjectId id={primary.object_id} compact /></Property>}
       <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>
-      {run.chat_object_id && <Property label="Chat"><ObjectId id={run.chat_object_id} /></Property>}<Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
+      {run.chat_object_id && <Property label="Originating Chat"><a href={detailPath("objects", run.chat_object_id)}>Open Slack conversation</a><ObjectId id={run.chat_object_id} compact /></Property>}<Property label="Technical actor">{run.actor_type}:{run.actor_id}</Property><Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
     </div></section>
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
     <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={run.verdict}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={run.review_notes ?? ""} /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></form>
     {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
-    <Section title="Trace"><div className="trace-list">{run.trace.map((entry, index) => <article className="trace-entry" key={index}><span>{index + 1}</span><strong>{textValue(entry.type, "step").replaceAll("_", " ")}</strong><code title={JSON.stringify(entry)}>{JSON.stringify(entry)}</code></article>)}</div></Section>
-    <Section title="Result"><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></Section>
-    <Section title="Related Objects"><div className="eval-objects">{objects.map((object) => <ObjectId id={object.object_id} linkPill key={`${object.object_id}-${object.role}`} />)}</div></Section>
+    <Section title="Activity"><div className="trace-list">{run.trace.map((entry, index) => <article className="trace-entry run-trace-entry" key={index}><span>{index + 1}</span><strong>{textValue(entry.entry_type ?? entry.type, "step").replaceAll("_", " ")}</strong><p>{runTraceDescription(entry)}</p><details className="run-technical"><summary>Technical details</summary><code>{JSON.stringify(entry)}</code></details></article>)}</div></Section>
+    <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
+    <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectId id={object.object_id} compact /><ObjectContext visual={visuals.get(object.object_id)} /></article>)}</div></Section>
     <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><div><strong>{item.action} {item.target_type}</strong><p>revision {item.from_revision ?? "new"} → {item.to_revision}</p>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} />}</div></article>)}</div></Section>
   </div></div>;
+}
+
+function runTraceDescription(entry: Record<string, unknown>) {
+  const facts = entry.facts as Record<string, unknown> | undefined;
+  return textValue(facts?.description, "Recorded a workflow step.");
 }
 
 function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {

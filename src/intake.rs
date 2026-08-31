@@ -1261,8 +1261,29 @@ pub(crate) async fn write_batch(
         )
         .await?;
     }
-    sqlx::query("UPDATE runs SET status='completed',result=jsonb_build_object('counts',$2::jsonb,'object_ids',$3::uuid[]),completed_at=now(),updated_at=now() WHERE id=$1")
-      .bind(run_id).bind(batch.counts()).bind(batch.object_ids.values().copied().collect::<Vec<_>>()).execute(&mut *tx).await?;
+    let object_ids = batch.object_ids.values().copied().collect::<Vec<_>>();
+    let primary_object_id = (object_ids.len() == 1).then_some(object_ids[0]);
+    let originating_chat_object_id = batch
+        .request
+        .connections
+        .iter()
+        .find(|connection| connection.client_key == "originating-chat")
+        .and_then(|connection| connection.source.object_id);
+    sqlx::query(
+        r#"UPDATE runs SET status='completed',
+           result=jsonb_build_object('counts',$2::jsonb,'object_ids',$3::uuid[]),
+           primary_object_id=$4,
+           chat_object_id=CASE WHEN EXISTS(SELECT 1 FROM chats WHERE object_id=$5)
+             THEN $5 ELSE chat_object_id END,
+           completed_at=now(),updated_at=now() WHERE id=$1"#,
+    )
+    .bind(run_id)
+    .bind(batch.counts())
+    .bind(object_ids)
+    .bind(primary_object_id)
+    .bind(originating_chat_object_id)
+    .execute(&mut *tx)
+    .await?;
     for connection in &batch.request.connections {
         let id = batch.connection_ids[&connection.client_key];
         let source_id = connection

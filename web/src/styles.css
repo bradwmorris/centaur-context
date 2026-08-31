@@ -108,6 +108,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .eval-verdict.fail { color: #cc8585; background: rgba(204,133,133,.08); }
 .usage-badges { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; }
 .usage-badge { max-width: 100%; border: 1px solid #3b3d44; border-radius: 999px; padding: 4px 8px; background: #191a1d; color: #b5b7bf; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-type-badge { color: #aeb8d2; background: rgba(116,132,177,.12); }
+.record > .object-id-pill, .run-heading > .object-id-pill { display: inline-flex; align-items: center; border: 1px solid #40424a; border-radius: 999px; background: #1a1b1f; color: #b9bbc2; padding: 4px 8px; font-size: 10px; font-weight: 540; letter-spacing: .02em; white-space: nowrap; }
 .eval-detail a { color: #aeb0b6; }
 .eval-annotation { display: grid; grid-template-columns: 140px minmax(180px, 1fr) auto; align-items: end; gap: 9px; margin: 18px 0; padding: 0; }
 .eval-review-field { min-width: 0; display: grid; gap: 4px; }
@@ -126,6 +128,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .trace-entry small { color: var(--text-muted); font-size: 10px; }
 .trace-entry code { color: var(--text-subtle); font-size: 9px; }
 .trace-entry.failure strong { color: #cc8585; }
+.run-heading { align-items: center; }
+.run-heading .detail-title { flex: 1 1 420px; margin: 0; }
+.run-trace-entry { grid-template-columns: 22px minmax(120px,.55fr) minmax(220px,1.45fr) max-content; }
+.run-trace-entry p { min-width: 0; margin: 0; color: #b4b6bd; font-size: 11px; line-height: 1.45; }
+.run-technical { color: var(--text-subtle); font-size: 10px; }
+.run-technical summary { cursor: pointer; color: #989aa2; white-space: nowrap; }
+.run-technical code { display: block; max-width: 100%; margin-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-result { margin-top: 10px; }
+.run-outcome { margin: 0; color: #c8cad0; font-size: 13px; line-height: 1.55; }
+.run-object-title { max-width: min(500px, 55vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-related-objects { display: grid; gap: 4px; }
+.run-related-object { min-width: 0; display: grid; grid-template-columns: max-content minmax(140px,1fr) max-content max-content max-content; align-items: center; gap: 7px; min-height: 42px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.run-related-object > a { min-width: 0; color: #d5d6da; font-size: 12px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-related-object > span { color: var(--text-subtle); font-size: 9px; text-transform: capitalize; }
 .eval-objects { display: flex; flex-wrap: wrap; gap: 6px; }
 .record-title, .record-badges, .record-source, .object-context { min-width: 0; display: flex; align-items: center; gap: 5px; }
 .record-title { overflow: hidden; }
@@ -534,6 +550,10 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
   .record-primary { padding: 38px 24px 45px; }
   .eval-annotation { grid-template-columns: 1fr; align-items: stretch; }
   .eval-annotation button { justify-self: start; }
+  .run-trace-entry { grid-template-columns: 20px minmax(0, 1fr); padding: 8px 0; }
+  .run-trace-entry p, .run-trace-entry .run-technical { grid-column: 2; }
+  .run-related-object { grid-template-columns: max-content minmax(0, 1fr) max-content; }
+  .run-related-object > .object-identity, .run-related-object > .object-context { display: none; }
   .modal-backdrop { padding-top: 8vh; }
   .create-footer { align-items: stretch; flex-wrap: wrap; }
   .create-actions { width: 100%; justify-content: flex-end; }

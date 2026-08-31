@@ -35,6 +35,7 @@ pub struct RunSummary {
     pub actor_type: String,
     pub actor_id: String,
     pub chat_object_id: Option<Uuid>,
+    pub primary_object_id: Option<Uuid>,
     pub idempotency_key: String,
     pub input: Value,
     pub trace: Value,
@@ -75,7 +76,7 @@ pub struct RunDetail {
 }
 
 const RUN_SELECT: &str = r#"SELECT id,parent_run_id,kind,status,actor_type,actor_id,
- chat_object_id,idempotency_key,input,trace,result,consulted_object_ids,error,verdict,
+ chat_object_id,primary_object_id,idempotency_key,input,trace,result,consulted_object_ids,error,verdict,
  review_notes,reviewed_by,reviewed_at,available_at,started_at,completed_at,created_at,updated_at
  FROM runs"#;
 
@@ -101,9 +102,16 @@ pub async fn list(pool: &PgPool, filter: RunFilter) -> Result<Vec<RunSummary>, D
         query.push(" AND created_at<").push_bind(value);
     }
     if let Some(value) = filter.object_id {
-        query.push(" AND (").push_bind(value)
+        query
+            .push(" AND (")
+            .push_bind(value)
+            .push("=primary_object_id OR ")
+            .push_bind(value)
+            .push("=chat_object_id OR ")
+            .push_bind(value)
             .push("=ANY(consulted_object_ids) OR EXISTS(SELECT 1 FROM object_events e WHERE e.run_id=runs.id AND e.target_type='object' AND e.target_id=")
-            .push_bind(value).push("))");
+            .push_bind(value)
+            .push("))");
     }
     for (key, value) in [
         ("component", filter.component),
@@ -136,12 +144,32 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<RunDetail, DbError> {
         .ok_or(DbError::NotFound)?;
     let objects = sqlx::query_as(
         r#"WITH linked AS (
-             SELECT unnest($2::uuid[]) object_id,'consulted'::text role
-             UNION SELECT target_id,'changed' FROM object_events WHERE run_id=$1 AND target_type='object'
-           ) SELECT linked.object_id,linked.role,o.kind,o.title,
+             SELECT $3::uuid object_id,'primary'::text role,1 priority WHERE $3 IS NOT NULL
+             UNION ALL SELECT $4::uuid,'origin_chat',2 WHERE $4 IS NOT NULL
+             UNION ALL SELECT unnest($2::uuid[]),'consulted',3
+             UNION ALL SELECT target_id,'changed',4 FROM object_events
+               WHERE run_id=$1 AND target_type='object'
+             UNION ALL SELECT c.source_object_id,'connected',5
+               FROM object_events e JOIN connections c ON c.id=e.target_id
+               WHERE e.run_id=$1 AND e.target_type='connection'
+             UNION ALL SELECT c.target_object_id,'connected',5
+               FROM object_events e JOIN connections c ON c.id=e.target_id
+               WHERE e.run_id=$1 AND e.target_type='connection'
+           ), ranked AS (
+             SELECT DISTINCT ON (object_id) object_id,role,priority
+             FROM linked WHERE object_id IS NOT NULL
+             ORDER BY object_id,priority
+           ) SELECT ranked.object_id,ranked.role,o.kind,o.title,
              CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END lifecycle
-           FROM linked JOIN objects o ON o.id=linked.object_id ORDER BY linked.role,o.title,o.id"#,
-    ).bind(id).bind(&run.consulted_object_ids).fetch_all(pool).await?;
+           FROM ranked JOIN objects o ON o.id=ranked.object_id
+           ORDER BY ranked.priority,o.title,o.id"#,
+    )
+    .bind(id)
+    .bind(&run.consulted_object_ids)
+    .bind(run.primary_object_id)
+    .bind(run.chat_object_id)
+    .fetch_all(pool)
+    .await?;
     let events = sqlx::query_as("SELECT * FROM object_events WHERE run_id=$1 ORDER BY sequence")
         .bind(id)
         .fetch_all(pool)

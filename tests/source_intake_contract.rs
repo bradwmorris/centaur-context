@@ -110,6 +110,14 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     let committed_body: Value =
         serde_json::from_slice(&committed.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(committed_body["data"]["object_id"], object_id);
+    let run_primary_object_id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT primary_object_id FROM runs WHERE kind='intake' AND input->>'batch_id'=$1",
+    )
+    .bind(&key)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(run_primary_object_id.to_string(), object_id);
 
     let replayed = app
         .clone()

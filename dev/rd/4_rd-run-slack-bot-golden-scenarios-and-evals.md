@@ -85,19 +85,24 @@ reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gat
 
 ## Execution Evidence
 
-- **R2 video — hard-gate fail, awaiting fixture review (2026-09-01):** the
+- **R2 video — pass 1 of 2 with accepted fixture variance (2026-09-01):** the
   selected YouTube URL resolved to its canonical watch URL and reused the
   existing Source, Ryan Greenblatt, Hugging Face, and Agents Objects. The
   same-subject video decoy was absent. The Source reached lexical and semantic
   readiness, and exact webhook replay reused the completed Run without changing
   the Source revision, artifact count, or connection count. The redacted private
   bundle records the Slack thread, deployed revisions, object IDs, hashes, and
-  verification results. The content hash gate did not pass: the frozen fixture
-  describes 51,501 bytes, 1,141 lines, and 8,959 words, while the current stored
-  caption artifact has 42,664 bytes, 1,137 lines, and 7,813 words. This must be
-  reconciled as corpus drift or a representation mismatch rather than accepted
-  post hoc. The idempotent replay response also labels the already completed
-  reused Run as `queued`; terminal Run readback remains `completed`.
+  verification results. The frozen fixture describes 51,501 bytes, 1,141 lines,
+  and 8,959 words, while the current stored caption artifact has 42,664 bytes,
+  1,137 lines, and 7,813 words. Brad reviewed and accepted this caption-capture
+  variance as non-blocking; both exact hashes remain recorded. The idempotent
+  replay response also labels the already completed reused Run as `queued`;
+  terminal Run readback remains `completed`.
+- **Run review UI:** Runs now carry a deterministic primary Object and
+  originating Chat. The Runs list and detail page derive their interaction type,
+  subject title, Slack attribution, participants, outcome summary, and related
+  Object links from those structured records. Raw trace and result JSON remain
+  available under collapsed technical details.
 
 ## Checks
 
