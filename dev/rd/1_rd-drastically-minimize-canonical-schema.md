@@ -59,45 +59,47 @@ schema below, `?` marks a nullable column; all other columns are `NOT NULL`.
 **Basis checked:** Schema 16, current code paths, and exact live table profiles on
 2026-08-31.
 
-**Missing:** Brad's decisions on the recommendations below.
+**Missing:** The exact target columns for consolidated `users`, `artifacts`,
+`runs`, `embeddings`, and simplified `object_events`, plus the remaining-table
+review.
 
 1. Agree which tables to delete, merge, or keep.
 2. Write the exact smaller target schema for approval.
 3. Only after separate execution approval, migrate the data and update every
    first-party reader and writer together.
 
-## Decisions in Brad's Order
+## Agreed Direction in Brad's Order
 
 The default is consolidation. Keep a separate table only when it represents a
 real one-to-many relationship or immutable history that becomes materially
 worse in one row.
 
-| Question | What the data and code show | Recommendation |
+| Question | What the data and code show | Agreed direction |
 | --- | --- | --- |
 | `principal_permissions` | One row grants one permission to the local human. It duplicates an authorization rule that can live in service configuration. | **Delete.** |
-| `theme_proposals` | Zero rows. It exists for a future agent-proposal/human-approval workflow rather than a workflow currently producing data. | **Delete.** A future proposal can be a normal Task or Note until a dedicated system is genuinely needed. |
-| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge.** Put external actions in the consolidated `runs` model below and record their immutable transitions in `object_events`. |
-| `external_identities` | Three rows, for three Users, all from one provider. Its one-to-many flexibility is unused. Slack identity and avatar fields are required, but the table is not. | **Merge into `users`.** Accept one external identity per User for the current product. |
-| `chat_messages` | Eight Chats contain 31 Messages. Ingestion appends individual Messages; each has its own sender, provider ID, source time, and sequence. Curator Runs refer to exact first/last Messages. | **Keep separate.** This is a real one-Chat-to-many-Messages relationship. Putting Messages in `chats` means a growing JSON array, rewriting the Chat row on every message, and losing simple message identity and boundaries. |
-| `source_contents` | It stores article text, transcripts, paper text, and similar captures. There are 44 rows belonging to 42 Sources: only two historical versions beyond one current capture per Source. | **Merge into `sources`** if Brad accepts one current captured body per Source. Move the current content text, hash, capture time, kind, and only useful extraction fields onto `sources`; discard superseded versions. Keep this separate only if preserving complete old transcripts is an actual requirement. |
-| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split supports relational trace querying and undo, but it creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** One row owns run kind/status, actor, times, input/result/error, review verdict/notes, affected Object references, trace, and reversible changes. Use bounded JSON only for the naturally repeated trace/Object/change lists. |
-| `object_embedding_jobs` | All 407 Objects have pending jobs, every job has zero attempts, and `object_embeddings` has zero rows. Vector retrieval is not operating. | **Delete `object_embedding_jobs` and `object_embeddings`.** Reintroduce a smaller design only if embeddings become an active requirement. |
-| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate, simplify columns.** This is genuine one-to-many immutable history. Remove overlap exposed by the new `runs` design and retain only identity, Object, Run, action, actor, revisions, change payload, idempotency key, and time. |
+| `theme_proposals` | Zero rows. It exists for a future agent-proposal/human-approval workflow rather than a workflow currently producing data. | **Delete.** Use a normal Task or Note until a dedicated workflow is genuinely needed. |
+| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge into `runs`.** Record immutable transitions in `object_events`. |
+| `external_identities` | A User must support multiple provider identities, but these are small provider-specific records that are normally read and maintained with the User. | **Merge into `users` as an `identities` JSON array.** Each entry keeps provider, workspace, provider user ID, display name, avatar data, and refresh time. Enforce provider/workspace/user-ID uniqueness in application validation. |
+| `chat_messages` | Eight Chats contain 31 Messages. Ingestion appends individual Messages; each has its own sender, provider ID, source time, and sequence. Runs refer to exact first/last Messages. | **Keep separate.** This is a real one-Chat-to-many-Messages relationship. |
+| `source_contents` | It currently stores article text, transcripts, paper text, and similar Source captures. There are 44 rows belonging to 42 Sources. Tasks, Chats, and any other Object can also need supporting files or captured content. | **Rename and generalize to `artifacts`.** An Artifact may belong to any Object, not only a Source. Transcript is one Artifact kind. Keep separate because one Object may have many Artifacts and an Artifact may be large or versioned. |
+| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** One row owns run kind/status, actor, times, input/result/error, review verdict/notes, affected Object references, trace, and reversible changes. Use bounded JSON for the naturally repeated trace/Object/change lists. |
+| `object_embedding_jobs`, `object_embeddings` | All 407 Objects have pending jobs with zero attempts and no completed vectors yet, but embeddings are an intended feature. Queue state and vector output describe the same Object/model/hash embedding lifecycle. | **Replace both with one `embeddings` table.** A pending row has status/retry fields and a null vector; successful processing fills the vector and completion metadata on that same row. |
+| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate and simplify.** Retain identity, Object, Run, action, actor, revisions, change payload, idempotency key, and time. |
 
-### Proposed direction if Brad accepts every recommendation
+### Result of the agreed direction so far
 
-- Delete five tables outright: `principal_permissions`, `theme_proposals`,
-  `object_embedding_jobs`, `object_embeddings`, and `source_contents` after its
-  current values move to `sources`.
-- Merge `external_identities` into `users`.
+- Delete `principal_permissions` and `theme_proposals`.
+- Merge `external_identities` into `users` while preserving multiple providers.
 - Replace six operational tables—`external_actions`, the three Eval tables, and
   the two Curator tables—with one `runs` table.
+- Rename and generalize `source_contents` to `artifacts`, attachable to any
+  Object.
+- Replace `object_embedding_jobs` and `object_embeddings` with one `embeddings`
+  table.
 - Keep `chat_messages` and `object_events` as the two justified separate
   one-to-many/history tables in this review, while simplifying their columns.
-- Across these questions and the linked `users`, `sources`, and embedding store,
-  16 affected tables become five: `users`, `sources`, `runs`, `chat_messages`,
-  and `object_events`. The exact whole-schema total will be recorded after every
-  remaining table is decided.
+- Record the exact whole-schema table and column reduction after every remaining
+  table is decided.
 
 ## What We Are Doing
 
