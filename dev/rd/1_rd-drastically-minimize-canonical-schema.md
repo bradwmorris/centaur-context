@@ -54,87 +54,83 @@ schema below, `?` marks a nullable column; all other columns are `NOT NULL`.
 
 ## Execution Plan
 
-**Status:** `complete and ready`
+**Status:** `still needs work`
 
-**Basis checked:** Repository boundaries and RD rules; completed canonical-data
-cleanup RD and its 24-table ledger; migrations `0001`–`0016`; materialized
-schema-16 column inventory; ontology, compatibility contract, Rust readers and
-writers, tests, agent client, and Schema workspace.
+**Basis checked:** Schema 16, current code paths, and exact live table profiles on
+2026-08-31.
 
-**Missing:** none for investigation and design. Execution still requires a
-separate instruction and approval of the exact destructive migration manifest.
+**Missing:** Brad's decisions on the recommendations below.
 
-1. Measure every table and column against live shape, row counts, null/default
-   rates, constraints, indexes, triggers, and every first-party reader/writer.
-   Mark each item `mandatory`, `keep`, `merge`, `derive`, `rebuild`, or `remove`.
-2. Produce the smallest coherent target schema and a complete current-to-target
-   map. Start from deletion or consolidation, and require evidence for every
-   retained non-mandatory table and column. Do not count moving typed fields into
-   opaque JSON as simplification.
-3. Present the proposed table/column removals, merges, data-loss consequences,
-   migration path, and consumer changes for Brad's approval before implementation.
-4. After approval, implement one forward-only migration with all Rust API,
-   Curator, ingestion, client, web, test, documentation, and compatibility
-   changes in lockstep. Rehearse it on a disposable restored database first.
-5. Reconcile the migrated database, run the full repository verification suite,
-   and confirm every retained workflow with materially less persisted structure.
+1. Agree which tables to delete, merge, or keep.
+2. Write the exact smaller target schema for approval.
+3. Only after separate execution approval, migrate the data and update every
+   first-party reader and writer together.
+
+## Decisions in Brad's Order
+
+The default is consolidation. Keep a separate table only when it represents a
+real one-to-many relationship or immutable history that becomes materially
+worse in one row.
+
+| Question | What the data and code show | Recommendation |
+| --- | --- | --- |
+| `principal_permissions` | One row grants one permission to the local human. It duplicates an authorization rule that can live in service configuration. | **Delete.** |
+| `theme_proposals` | Zero rows. It exists for a future agent-proposal/human-approval workflow rather than a workflow currently producing data. | **Delete.** A future proposal can be a normal Task or Note until a dedicated system is genuinely needed. |
+| `external_actions` | Three rows track reservations and state transitions so an external side effect is not sent twice. The durable protection is useful; making each action a special Object and subtype is not. | **Merge.** Put external actions in the consolidated `runs` model below and record their immutable transitions in `object_events`. |
+| `external_identities` | Three rows, for three Users, all from one provider. Its one-to-many flexibility is unused. Slack identity and avatar fields are required, but the table is not. | **Merge into `users`.** Accept one external identity per User for the current product. |
+| `chat_messages` | Eight Chats contain 31 Messages. Ingestion appends individual Messages; each has its own sender, provider ID, source time, and sequence. Curator Runs refer to exact first/last Messages. | **Keep separate.** This is a real one-Chat-to-many-Messages relationship. Putting Messages in `chats` means a growing JSON array, rewriting the Chat row on every message, and losing simple message identity and boundaries. |
+| `source_contents` | It stores article text, transcripts, paper text, and similar captures. There are 44 rows belonging to 42 Sources: only two historical versions beyond one current capture per Source. | **Merge into `sources`** if Brad accepts one current captured body per Source. Move the current content text, hash, capture time, kind, and only useful extraction fields onto `sources`; discard superseded versions. Keep this separate only if preserving complete old transcripts is an actual requirement. |
+| `evals`, `eval_trace_entries`, `eval_objects`, `curator_runs`, `curator_run_changes` | 297 Evals, 2,197 trace rows, 1,731 Object links, 16 Curator Runs, and 32 Curator changes. The split supports relational trace querying and undo, but it creates five tables for one operational story. Every Curator Run already has an Eval. | **Replace all five with one `runs` table.** One row owns run kind/status, actor, times, input/result/error, review verdict/notes, affected Object references, trace, and reversible changes. Use bounded JSON only for the naturally repeated trace/Object/change lists. |
+| `object_embedding_jobs` | All 407 Objects have pending jobs, every job has zero attempts, and `object_embeddings` has zero rows. Vector retrieval is not operating. | **Delete `object_embedding_jobs` and `object_embeddings`.** Reintroduce a smaller design only if embeddings become an active requirement. |
+| `object_events` | 2,144 immutable events cover all 407 Objects and provide attribution, revision history, and idempotency for writes. Many events can belong to one Object or Run. | **Keep separate, simplify columns.** This is genuine one-to-many immutable history. Remove overlap exposed by the new `runs` design and retain only identity, Object, Run, action, actor, revisions, change payload, idempotency key, and time. |
+
+### Proposed direction if Brad accepts every recommendation
+
+- Delete five tables outright: `principal_permissions`, `theme_proposals`,
+  `object_embedding_jobs`, `object_embeddings`, and `source_contents` after its
+  current values move to `sources`.
+- Merge `external_identities` into `users`.
+- Replace six operational tables—`external_actions`, the three Eval tables, and
+  the two Curator tables—with one `runs` table.
+- Keep `chat_messages` and `object_events` as the two justified separate
+  one-to-many/history tables in this review, while simplifying their columns.
+- Across these questions and the linked `users`, `sources`, and embedding store,
+  16 affected tables become five: `users`, `sources`, `runs`, `chat_messages`,
+  and `object_events`. The exact whole-schema total will be recorded after every
+  remaining table is decided.
 
 ## What We Are Doing
 
 - [ ] Reduce table and column count as a primary design objective, accepting
       breaking internal changes where all first-party consumers can move together.
-- [ ] Challenge support, queue, governance, subtype, evaluation, trace, identity,
-      and derived-data boundaries; merge or remove them unless separation protects
-      an evidenced invariant that cannot be kept more simply.
-- [ ] Remove stored values that can be cheaply and reliably derived; remove empty,
-      speculative, duplicated, and rebuildable persistence unless current operation
-      demonstrably requires it.
-- [ ] Deliver an exact before/after schema and prove the retained application still
-      supports its explicitly accepted workflows and data.
+- [ ] Prefer one human-understandable table when a separate table provides only
+      theoretical flexibility or conventional database neatness.
+- [ ] Keep separation only for a real one-to-many or immutable-history need.
+- [ ] Deliver an exact before/after schema and preserve only the workflows Brad
+      explicitly chooses to keep.
 
 ## Contract
 
-- **Goal:** Replace schema 16 with the smallest understandable schema that still
-  satisfies Centaur Context's accepted product and safety contracts.
-- **Done:** Brad approves an exact current-to-target manifest; every retained
-  table and column has a concrete justification and consumer; the approved
-  forward migration and coordinated consumers pass all checks; and final table
-  and column counts are recorded against this baseline.
+- **Goal:** Delete unnecessary tables and columns and consolidate the rest so a
+  human can understand and maintain the schema easily.
+- **Done:** Brad approves the exact smaller schema; it is migrated without
+  unintended data loss; all retained workflows work; and the final table and
+  column counts are recorded against this baseline.
 - **Files:** `migrations/`; affected Rust domain/database/API/ingestion/Curator/
   eval/search code and tests; `tools/centaur_context`; affected web schema and
   product surfaces; `docs/ontology.md`; `compatibility.toml`; this RD.
-- **Agent owns:** Read-only inventory, consumer mapping, minimal target proposal,
-  explicit trade-offs, approved migration implementation, reconciliation, and
-  local verification.
+- **Agent owns:** Careful pushback only where separation is genuinely necessary,
+  the minimal target proposal, approved implementation, and verification.
 - **Requester owns:** Choosing which useful workflows may be dropped, approving
   the exact destructive manifest, live database writes/deployment, and merge.
-- **Out of scope:** `ai_v2`, Console databases, new product features, public
-  ingress, cloud deployment, external integrations, and hiding relational
-  complexity inside unstructured JSON.
-
-## Non-Negotiable Repository Boundaries
-
-- Keep canonical Objects; one-to-one subtype records for Tasks, Chats, Users,
-  Entities, and event-shaped Memories; explained Connections; and immutable
-  Object Events. Their columns remain open to reduction.
-- Use the authenticated HTTP API for agents and never expose a database DSN to a
-  sandbox. Never query or migrate Centaur's `ai_v2` or Console databases.
-- Preserve stable Object IDs and explicitly approved immutable evidence. Any
-  proposal to discard retained history, source content, messages, eval evidence,
-  or reversibility must quantify the loss and receive Brad's explicit approval.
-- Judge total system complexity, not only PostgreSQL table count: a merge that
-  increases application branching, weakens constraints, or duplicates records
-  must show a net simplification.
+- **Out of scope:** `ai_v2`, Console databases, new features, public ingress,
+  cloud deployment, and external integrations.
 
 ## Checks
 
-- [ ] Inventory accounts for all 24 application tables, both framework tables,
-      every column, constraint, index, trigger, row family, and first-party consumer.
-- [ ] Approved target manifest states exact tables and columns kept, merged,
-      derived, rebuilt, and removed, with baseline and final counts.
-- [ ] Disposable migration rehearsal proves subtype, referential, revision,
-      immutable evidence, idempotency, search, queue, and authorization invariants
-      that remain in scope; reconciliation proves no unintended payload loss.
+- [ ] Exact before/after table and column list is approved.
+- [ ] Disposable migration rehearsal and reconciliation prove no unintended data
+      loss and every retained workflow works.
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] `cargo test`
@@ -146,9 +142,6 @@ separate instruction and approval of the exact destructive migration manifest.
 
 ## Approval Boundary
 
-This RD authorizes planning only. Do not implement, migrate, deploy, delete,
-merge, or write hosted data until Brad separately starts execution and approves
-the exact destructive manifest. Prefer a reversible rehearsal and verified
-backup before any approved live cutover. No work may touch `ai_v2`, Console, or
-another organization's private overlay; assess and explicitly coordinate any
-required Enyu overlay update during execution.
+This RD authorizes planning only. Do not implement, migrate, deploy, delete, or
+write hosted data until Brad approves the exact target schema and separately
+starts execution. Never touch `ai_v2` or Console databases.
