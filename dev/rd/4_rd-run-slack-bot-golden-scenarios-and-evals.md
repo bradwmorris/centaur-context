@@ -28,17 +28,24 @@ durable effects on that same Run.
 **Missing:** Priorities 1 and 3 completion; the one-Run interaction
 instrumentation described here; a pre-capture Entity-resolution and confirmation
 step; embedding rollout/backfill; the focused Evals dashboard; Brad's later
-article/email instructions; and approval for live Slack, provider, workflow,
-hosted-write, publication, or email actions.
+article/email instructions; and approval for deployment, publication, or email
+actions. Brad has approved the executing agent operating the signed-in Slack UI
+for Tests 001/002, starting their Source workflows, and answering the expected
+MTS creation question with `Yes, create MTS and continue.`
 
-1. Make one Slack interaction the single causal Run and instrument every stage
-   that it starts.
-2. Add a minimal Evals dashboard that presents the same Runs with stage-level
-   evidence and automatic checks; add no eval table.
-3. Implement one private executable module per real interaction test, beginning
-   with the article and YouTube captures below.
-4. Preflight, run through real Slack, inspect every Run, classify first failures,
-   fix product defects separately, and replay without deleting canonical data.
+1. Preflight the deployed system, then have the executing agent control the real
+   signed-in Slack UI and perform Tests 001/002 exactly as a user would. Do not
+   substitute API calls or synthetic messages for this first pass.
+2. After each interaction, inspect the resulting Run and durable records. Fix an
+   immediately blocking, obvious, self-contained defect directly on a clean,
+   current `main`; verify and push it before continuing. Use the normal issue/
+   branch/PR path for broader, risky, coordinated, or multi-commit changes.
+3. Build the minimal Evals dashboard incrementally from the evidence the first
+   real Runs actually produce, while making one interaction the single causal Run
+   and instrumenting missing stages. Add no eval table.
+4. Encode each proven interaction as one private executable module, replay after
+   approved deployment of fixes, and continue the same observe→fix→inspect loop
+   without deleting canonical data.
 
 ## What We Are Doing
 
@@ -86,6 +93,57 @@ for the dashboard to reconstruct the complete interaction.
   idempotently.
 - A later, distinct request opens a new Run, even when it uses Sources created by
   an earlier Run.
+
+## Required First Execution
+
+The agent executing this RD does not merely prepare scripts for Brad. It operates
+the signed-in Slack UI itself using the available browser-control capability,
+types the exact Test 001 and Test 002 messages, reads Rez's replies, follows the
+threads, waits for workflow completion, and then inspects the trusted-human Run
+and Object views. It must not claim an interaction occurred from a local function
+call, fixture, or direct workflow/API invocation.
+
+For Test 002, Brad's approval in this RD authorizes the agent to send the exact
+reply `Yes, create MTS and continue.` only after Rez correctly reports that Ryan
+Greenblatt exists and MTS does not. Any different proposed new Entity, ambiguous
+match, changed Source, destructive action, publication, email send, credential
+change, or deployment requires Brad's further direction.
+
+Run the first pass in this order:
+
+1. Record deployed Context/Enyu revisions, model and embedding configuration,
+   Slack workspace/channel, and the existing Source/Entity preflight without
+   writing anything.
+2. Run Test 001 through Slack. Wait for its workflow and interaction to become
+   terminal. Inspect its complete Run, Source, Artifact, Connections, embeddings,
+   messages, events, and final response before starting Test 002.
+3. Classify the first failing stage. If a small code defect prevents useful
+   continuation, fix it immediately under the direct-main rule below. Do not
+   weaken the expected interaction.
+4. Add or refine only the smallest dashboard slice needed to make Test 001 easy
+   to understand from one screen.
+5. Run Test 002 through Slack, including the approved MTS confirmation. Inspect
+   it completely, fix immediate blockers, and add the missing Entity-resolution,
+   approval, transcript, and embedding views to the dashboard.
+6. Repeat each interaction only when the relevant fix is deployed. A deliberate
+   repeat is a new Run and must reuse the canonical Source; a duplicated Slack
+   delivery remains on the original Run.
+
+### Direct-main rule for immediate fixes
+
+Brad explicitly authorizes direct-to-`main` fixes discovered during these first
+interactions only when the change is obvious, self-contained, reversible, and
+small enough for one reviewed commit. Before editing, the agent must use the
+canonical checkout, confirm it is clean, run `git pull --ff-only`, and preserve
+all unrelated work. It must run proportionate targeted tests plus the required
+repository checks, inspect its diff, commit, and push the verified fix.
+
+If `main` is dirty, cannot fast-forward, the cause is uncertain, the change spans
+repositories or migrations, or it needs multiple commits/meaningful design, the
+agent must not mix it into `main`; it records the failure on the Run and uses the
+normal issue/branch/PR workflow. Direct-to-main approval does not authorize
+deployment. The agent may prepare and push the fix, but must obtain explicit
+deployment approval before validating that fix against the live system.
 
 ## What One Run Must Expose
 
@@ -173,9 +231,10 @@ evals/
     test_006_replay_permissions_and_failures.py
 ```
 
-Each module contains the exact messages Brad sends, required starting state,
+Each module contains the exact messages the executing agent sends as Brad's
+approved operator, required starting state,
 expected dialogue, expected final outcome, automatic checks, and any short human
-questions. Shared code operates real Slack after approval, finds the one Run,
+questions. Shared code correlates the real Slack interaction, finds the one Run,
 collects trusted HTTP evidence, computes checks, and writes the structured check
 summary back into that same Run's result. No module receives a database DSN.
 
@@ -191,9 +250,10 @@ Every module reports the same sections:
 8. Slack outcome and curation.
 9. Idempotency, usage, latency, and first failure.
 
-Start manually: Brad sends or approves the exact real interaction, the runner
-collects and checks it, and Brad reads the resulting Run. Automate repeated Slack
-operation only after these first traces reveal which failures actually matter.
+Start with agent-operated Slack: the executing agent types the approved exact
+interaction in the real UI, watches the complete response, and then the runner
+collects and checks the Run. Automate repeated Slack operation only after these
+first traces reveal which failures actually matter.
 
 ## Minimal Evals Dashboard
 
@@ -237,6 +297,13 @@ Render one interaction on one screen in these sections:
 
 The screen must show failure and partial state, not only successful final output.
 It must link rather than duplicate full transcripts and Artifact bodies.
+
+Do not wait to design the entire dashboard before running Slack. After Test 001,
+ship the smallest useful list and detail view for conversation, workflow, Source,
+Artifact, Connections, embeddings, and errors. After Test 002, add the missing
+Entity-resolution and human-confirmation detail. Later question, publication, and
+email Runs add their own sections only when real traces demonstrate the required
+shape. The existing generic Runs screen remains available throughout.
 
 ## Test 001 — Real Dwarkesh Article Capture
 
@@ -409,10 +476,14 @@ not invent artificial prompts merely to make the system pass.
 
 ## Approval Boundary
 
-This RD authorizes planning only. Implementation requires the normal Issue,
-branch, review, and merge workflow. Operating real Slack, fetching/capturing the
-selected Sources, calling models or embedding providers, creating MTS, hosted
-writes, workflows, publication, email preview/send, credentials, deployment,
-backfill, deletion, or provider spend each requires Brad's explicit approval.
-The Evals/Run-review surface remains trusted-human-only; agents and sandboxes
-receive neither its credential nor a database DSN.
+Brad has explicitly approved the executing agent controlling the signed-in Slack
+UI for Tests 001/002, fetching and capturing those two selected Sources through
+the existing workflow, using the already configured model/embedding providers,
+performing their expected hosted writes, and approving creation of MTS exactly as
+specified. He has also approved small qualifying fixes directly on `main` under
+the rule above. This does not authorize another Source, another new Entity,
+credential or provider changes, backfill, deletion, public ingress, deployment,
+publication, email preview/send, or additional spend outside the existing
+configuration; those require explicit approval. The Evals/Run-review surface
+remains trusted-human-only, and agents/sandboxes receive neither its credential
+nor a database DSN.
