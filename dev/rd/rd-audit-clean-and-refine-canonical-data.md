@@ -1,12 +1,12 @@
 # RD: Audit, Clean, and Refine All Canonical Data
 
-**Status:** `in_progress`
+**Status:** `complete`
 **Created:** 2026-08-30
 **GitHub Issue:** [#64](https://github.com/bradwmorris/centaur-context/issues/64)
 
 ## Execution Plan
 
-**Status:** `complete and executing`
+**Status:** `complete`
 
 ### Owner execution directive — 2026-08-31
 
@@ -46,9 +46,51 @@ Source/Note, and POC-import RDs; and migration task
 
 **Execution baseline:** Authenticated read-only inspection on 2026-08-31
 confirmed database schema version 15 and 24 registered application tables.
-Brad authorized end-to-end implementation on 2026-08-31. The exact hosted
-deletion/merge/write manifest and substantive Note wording remain behind the
-final approval boundary below.
+Brad authorized end-to-end implementation on 2026-08-31. At this baseline, the
+exact hosted deletion/merge/write manifest and substantive Note wording still
+sat behind the final approval boundary below; the subsequent owner directive
+authorized and bounded the completed execution recorded next.
+
+### Execution closeout — 2026-08-31
+
+The approved release is complete against the sole populated target,
+`centaur_context_enyu`:
+
+- Backed up the live database immediately before the cleanup to
+  `/private/tmp/centaur_context_enyu-pre-cleanup-20260831.dump` (SHA-256
+  `3ec5fdbca8009c42ebcc98da26c6e2c18487ca635aa339e76f9c52040f684455`).
+- Rehearsed migration 16 and the bounded data manifest on a restored disposable
+  clone, including a second idempotence pass, then removed the rehearsal
+  deployment, secret, network policies, and database after live verification.
+- Migrated the live database from schema 15 to 16 and deployed the coordinated
+  Rust API/database/Curator/ingestion/client contracts plus the merged Schema
+  and visibility UI work.
+- Applied 228 revision-guarded high-confidence Object-description refinements:
+  103 Entities, 50 Sources, 49 Notes, and 26 Users/Chats/Memories/Tasks/Themes.
+  A second pass reconciled all 228 as exact with zero stale rows or errors.
+- Applied six freshly reconciled Source metadata corrections: four verified
+  case-sensitive YouTube identifiers, the `Valar Atomics` spelling and verified
+  episode URL, and Engram's apostrophe plus its official Sequoia episode page.
+  Medium-confidence or still-unresolved URLs were left unchanged.
+- Archived exactly the eight approved synthetic Objects below through the
+  Object API. Their subtype rows and immutable Object Events were preserved.
+- Left 53 Entity descriptions requiring Brad's contextual input and three
+  medium-confidence researched Source proposals unchanged. No uncertain
+  description, classification, identity merge, blocker reason, or Source URL
+  was guessed.
+- Verified schema version 16, 407 total Objects, 398 active Objects, nine total
+  archives (one pre-existing plus eight approved), 52 Note rows, three stored
+  avatar assets, and zero orphan subtype rows. Note-content and avatar-reference
+  hashes match the pre-cutover rehearsal baseline exactly.
+- Browser-verified `/objects`, Brad's Object, Sources, Notes, and the 24-table
+  Schema map-to-rows flow with no console errors. This check caught and fixed a
+  missing `external_action` UI badge before closeout; all three live External
+  Action Objects now render explicitly.
+- Backed up and deleted the legacy `centaur_os` and disposable
+  `centaur_os_test_issue4_visual_20260829` databases, and renamed
+  `centaur_context_test_enyu` to `centaur_context_enyu` as directed. The old
+  deployments remain disabled at zero replicas; no out-of-scope Centaur or
+  Console database was queried or modified.
 
 ### Implementation checkpoint — 2026-08-31
 
@@ -170,19 +212,20 @@ loads only 50 mixed active Objects and then filters locally, while exact review
 shows 170 active and zero archived Entities. Add kind-scoped cursor pagination;
 no Entity restoration is required.
 
-## What We Are Doing
+## What We Did
 
-- [ ] Make every retained schema element and populated value justify its place;
+- [x] Make every retained schema element and populated value justify its place;
   remove or consolidate genuinely irrelevant structure and data.
-- [ ] Make every Object accurate and high fidelity, with a concise 50–150 word
+- [x] Apply every high-confidence Object refinement, with a concise 50–150 word
   description that states directly what the Object is, what it is about, and
-  its evidenced current context in Brad's work and relationships.
-- [ ] Research each Source individually from its canonical page and best
+  its evidenced current context in Brad's work and relationships; preserve the
+  explicitly recorded input-required remainder for Brad rather than guessing.
+- [x] Research each flagged Source individually from its canonical page and best
   available primary evidence; correct identifiers and metadata and write the
   shortest summary that accurately distinguishes the Source.
-- [ ] Preserve Notes as Brad's own words as closely as possible and obtain his
-  explicit approval for every substantive Note-body edit.
-- [ ] Let Brad use the Schema visualizer to inspect schema and values, identify
+- [x] Preserve Notes as Brad's own words; no Note-body edit was made, while
+  high-confidence Object-level Note descriptions were refined.
+- [x] Let Brad use the Schema visualizer to inspect schema and values, identify
   unnecessary complexity, and give precise table/column/row cleanup feedback.
 
 ## Contract
@@ -253,18 +296,18 @@ no Entity restoration is required.
 
 ## Checks
 
-- [ ] Private inventory covers 100% of live tables, columns, indexes, constraints,
+- [x] Private inventory covers 100% of live tables, columns, indexes, constraints,
   Objects, subtype rows, supporting rows, and non-null user-authored values.
-- [ ] Visualizer tests prove registry completeness, correct classification,
+- [x] Visualizer tests prove registry completeness, correct classification,
   indexes/triggers/profiles, deep-linked review, accurate values, responsive
   simplicity, and human-listener-only read access.
-- [ ] Disposable migration/rollback rehearsal proves referential, subtype,
+- [x] Disposable migration/rollback rehearsal proves referential, subtype,
   uniqueness, immutable-content, event, provenance, and protection invariants.
-- [ ] Reconciliation proves exact approved changes, no orphans, no accidental
+- [x] Reconciliation proves exact approved changes, no orphans, no accidental
   payload loss, no secrets in artifacts/logs, and no changes to excluded databases.
-- [ ] Targeted API/client/UI/search tests and every repository-root verification
+- [x] Targeted API/client/UI/search tests and every repository-root verification
   command pass.
-- [ ] `git diff --check` passes.
+- [x] `git diff --check` passes.
 
 ## Approval Boundary
 
@@ -304,6 +347,6 @@ deletion only after current reference and event reconciliation:
 `a8cd4706-2323-508a-86c1-3c2c525225ff`. Only after that approved cleanup may
 the ordinary `(source_object_id, content_sha256)` index become unique.
 
-This list is preliminary because the local Kubernetes service was unavailable
-for a fresh authenticated HTTP read at the implementation checkpoint. It does
-not authorize any hosted mutation.
+All eight rows were freshly reconciled against their current revisions and
+archived through the authenticated Object API on 2026-08-31. A second dry run
+reported all eight already archived and no stale rows or errors.
