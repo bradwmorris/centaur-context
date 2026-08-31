@@ -730,6 +730,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
 
 fn allowed_database_name(database: &str) -> bool {
     database == "centaur_context"
+        || database == "centaur_context_enyu"
         || database.contains("centaur_context_test")
         || database == "centaur_os"
         || database.contains("centaur_os_test")
@@ -2982,6 +2983,7 @@ mod rename_compatibility_tests {
     fn accepts_canonical_and_legacy_database_names_only() {
         for allowed in [
             "centaur_context",
+            "centaur_context_enyu",
             "centaur_context_test_issue_10",
             "centaur_os",
             "centaur_os_test_upgrade",

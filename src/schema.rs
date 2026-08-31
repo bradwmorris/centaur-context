@@ -668,6 +668,7 @@ async fn validate_database(pool: &PgPool) -> Result<(), SchemaError> {
         .fetch_one(pool)
         .await?;
     let allowed = database == "centaur_context"
+        || database == "centaur_context_enyu"
         || database == "centaur_os"
         || database.contains("centaur_context_test")
         || database.contains("centaur_os_test");
