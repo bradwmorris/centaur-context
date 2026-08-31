@@ -358,6 +358,7 @@ class CentaurContextClient:
         query: str,
         kind: str | None = None,
         limit: int = 20,
+        lexical_only: bool = False,
         principal_id: str | None = None,
         thread_key: str | None = None,
     ) -> dict[str, Any]:
@@ -368,6 +369,8 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(kind):
             params["kind"] = _clean(kind)
+        if lexical_only:
+            params["lexical_only"] = "true"
         return self._request(
             "GET",
             "/api/v2/search/objects",

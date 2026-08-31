@@ -426,6 +426,8 @@ struct SearchQuery {
     q: String,
     kind: Option<String>,
     limit: Option<i64>,
+    #[serde(default)]
+    lexical_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,7 +500,11 @@ async fn search_objects(
         .transpose()?;
     let packet = search::search(
         &state.pool,
-        state.embeddings.as_ref(),
+        if query.lexical_only {
+            None
+        } else {
+            state.embeddings.as_ref()
+        },
         state.text_search_config,
         &query_text,
         kind.as_deref(),

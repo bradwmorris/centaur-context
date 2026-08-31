@@ -45,9 +45,13 @@ def test_search_uses_v2():
         requests.append(request)
         return response([])
     assert client(handler).search_objects(
-        "shared", principal_id="workflow-source", thread_key="workflow:run-1"
+        "shared",
+        lexical_only=True,
+        principal_id="workflow-source",
+        thread_key="workflow:run-1",
     ) == []
     assert requests[0].url.path == "/api/v2/search/objects"
+    assert requests[0].url.params["lexical_only"] == "true"
     assert requests[0].headers["x-centaur-principal-id"] == "workflow-source"
     assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-1"
 
