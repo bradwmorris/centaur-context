@@ -1,6 +1,6 @@
 import type { SchemaViewMode } from "./types";
 
-export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "sources" | "notes" | "themes" | "runs" | "schema";
+export type Section = "objects" | "connections" | "tasks" | "chats" | "users" | "entities" | "memories" | "sources" | "notes" | "themes" | "runs" | "schema";
 
 export interface AppRoute {
   section: Section;
@@ -10,6 +10,7 @@ export interface AppRoute {
 
 const sections: Record<string, Section> = {
   objects: "objects",
+  connections: "connections",
   tasks: "tasks",
   chats: "chats",
   users: "users",
@@ -24,6 +25,7 @@ const sections: Record<string, Section> = {
 
 const paths: Record<Section, string> = {
   objects: "objects",
+  connections: "connections",
   tasks: "tasks",
   chats: "chats",
   users: "users",
@@ -39,7 +41,7 @@ const paths: Record<Section, string> = {
 export function parseRoute(pathname: string): AppRoute {
   const parts = pathname.split("/").filter(Boolean).map(safeDecode);
   if (parts[0] === "connections" && parts[1]) {
-    return { section: "objects", selectedId: null, connectionId: parts[1] };
+    return { section: "connections", selectedId: null, connectionId: parts[1] };
   }
   const section = sections[parts[0] ?? ""];
   if (!section) return { section: "objects", selectedId: null, connectionId: null };

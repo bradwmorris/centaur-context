@@ -67,6 +67,31 @@ pub struct Connection {
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ConnectionGraphNode {
+    pub id: Uuid,
+    pub kind: String,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+pub struct ConnectionGraphEdge {
+    pub id: Uuid,
+    pub source_object_id: Uuid,
+    pub target_object_id: Uuid,
+    pub kind: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConnectionGraphSnapshot {
+    pub fingerprint: String,
+    pub node_count: usize,
+    pub connection_count: usize,
+    pub nodes: Vec<ConnectionGraphNode>,
+    pub edges: Vec<ConnectionGraphEdge>,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
 pub struct Task {
     pub object_id: Uuid,
     pub title: String,
@@ -1573,6 +1598,64 @@ pub async fn list_connections(pool: &PgPool, object_id: Uuid) -> Result<Vec<Conn
     .bind(object_id)
     .fetch_all(pool)
     .await?)
+}
+
+pub async fn connection_graph(pool: &PgPool) -> Result<ConnectionGraphSnapshot, DbError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let nodes = sqlx::query_as::<_, ConnectionGraphNode>(
+        "SELECT id,kind,title FROM objects WHERE archived_at IS NULL ORDER BY id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let edges = sqlx::query_as::<_, ConnectionGraphEdge>(
+        r#"SELECT c.id,c.source_object_id,c.target_object_id,c.kind,c.description
+           FROM connections c
+           JOIN objects source ON source.id=c.source_object_id AND source.archived_at IS NULL
+           JOIN objects target ON target.id=c.target_object_id AND target.archived_at IS NULL
+           WHERE c.archived_at IS NULL
+           ORDER BY c.id"#,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let fingerprint = connection_graph_fingerprint(&nodes, &edges);
+    Ok(ConnectionGraphSnapshot {
+        fingerprint,
+        node_count: nodes.len(),
+        connection_count: edges.len(),
+        nodes,
+        edges,
+    })
+}
+
+fn connection_graph_fingerprint(
+    nodes: &[ConnectionGraphNode],
+    edges: &[ConnectionGraphEdge],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"centaur-connection-graph-v1\0");
+    for node in nodes {
+        hasher.update(node.id.as_bytes());
+        hasher.update([0]);
+        hasher.update(node.kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(node.title.as_bytes());
+        hasher.update([0xff]);
+    }
+    for edge in edges {
+        hasher.update(edge.id.as_bytes());
+        hasher.update(edge.source_object_id.as_bytes());
+        hasher.update(edge.target_object_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(edge.kind.as_bytes());
+        hasher.update([0]);
+        hasher.update(edge.description.as_bytes());
+        hasher.update([0xff]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 pub async fn get_connection(pool: &PgPool, id: Uuid) -> Result<Connection, DbError> {

@@ -1,7 +1,9 @@
-# 2 — RD: Add a Connections Graph View
+# RD: Add a Connections Graph View
 
-**Status:** `scoped`
+**Status:** `complete`
 **Created:** 2026-08-31
+**Completed:** 2026-08-31
+**GitHub Issue:** [#74](https://github.com/bradwmorris/centaur-context/issues/74)
 **Centaur Context Task:** `08752bd6-d14d-4b01-8216-3ca062c74b70`
 **Dependencies:** Active priority 1, because the graph must target the simplified
 canonical Object and Connection contract that survives that RD.
@@ -29,11 +31,11 @@ detail UI; UI/routing tests; and the live local profile of 398 active Objects an
 
 ## What We Are Doing
 
-- [ ] Show all active Objects as nodes and all active Connections as lines in one
+- [x] Show all active Objects as nodes and all active Connections as lines in one
   dedicated Connections workspace.
-- [ ] Make highly connected Objects and natural connected groups visually
+- [x] Make highly connected Objects and natural connected groups visually
   prominent while preserving Connection direction and meaning.
-- [ ] Let a user find, focus, and open any Object or Connection from the graph.
+- [x] Let a user find, focus, and open any Object or Connection from the graph.
 
 ## Contract
 
@@ -101,19 +103,38 @@ detail UI; UI/routing tests; and the live local profile of 398 active Objects an
 
 ## Checks
 
-- [ ] API tests prove complete stable snapshots, active-only filtering,
+- [x] API tests prove complete stable snapshots, active-only filtering,
   endpoint integrity, pagination/fingerprint behavior if used, and no N+1
   requests.
-- [ ] Layout tests prove deterministic connected components, degree prominence,
+- [x] Layout tests prove deterministic connected components, degree prominence,
   isolated-node placement, direction preservation, and safe empty/single-node
   behavior.
-- [ ] UI/routing tests cover navigation, `/connections` and
+- [x] UI/routing tests cover navigation, `/connections` and
   `/connections/:id`, search/focus/reset, Object and Connection links, keyboard
   operation, loading/error/empty states, and accessible text equivalents.
-- [ ] Browser checks cover the live-size graph plus dense and disconnected
+- [x] Browser checks cover the live-size graph plus dense and disconnected
   fixtures at desktop and narrow widths, reduced motion, text zoom, responsive
   interaction, acceptable frame time, and absence of console errors.
-- [ ] The repository verification suite and `git diff --check` pass.
+- [x] The repository verification suite and `git diff --check` pass.
+
+## Verification Results
+
+- The graph rendered the live local snapshot of 396 Objects and 1,361 directed
+  Connections as two connected components plus one isolated Object. Initial
+  navigation-to-render completed in under one second on the review server.
+- Browser checks passed at 1280×800 and 390×844 with no document overflow or
+  console errors. Search/focus, neighbourhood inspection, Connection and Object
+  links, fit/zoom controls, Escape clearing, touch-sized narrow-list rows, and
+  the reduced-motion CSS path were verified. The narrow layout retained all 396
+  accessible Object rows rather than relying on the miniature graph alone.
+- Eight web test files passed with 41 tests. The production bundle is 269.44 kB
+  JavaScript (80.35 kB gzip) and 49.39 kB CSS (10.21 kB gzip); no graph library
+  was added.
+- `cargo fmt --check`, strict Clippy, `cargo test`, web type-check/build, the
+  Python client tests, Python compilation, and `git diff --check` passed. The
+  database-backed test is environment-gated and therefore skipped when
+  `TEST_DATABASE_URL` is absent; it covers active-only endpoint integrity,
+  deterministic fingerprints, ETag response headers, and conditional 304s.
 
 ## Approval Boundary
 

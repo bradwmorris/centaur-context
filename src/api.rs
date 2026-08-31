@@ -200,6 +200,7 @@ fn service_router(state: AppState) -> Router {
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
                 .route("/objects/{id}/events", get(list_events))
+                .route("/connection-graph", get(read_connection_graph))
                 .route("/connections", post(create_connection))
                 .route(
                     "/connections/{id}",
@@ -322,6 +323,30 @@ async fn read_schema(
     response.headers_mut().insert(
         header::ETAG,
         HeaderValue::from_str(&etag).expect("schema fingerprint is an HTTP-safe ETag"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+async fn read_connection_graph(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let snapshot = db::connection_graph(&state.pool).await?;
+    let etag = format!("\"{}\"", snapshot.fingerprint);
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    }
+    let mut response = Json(json!({"data": snapshot})).into_response();
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("graph fingerprint is an HTTP-safe ETag"),
     );
     response
         .headers_mut()

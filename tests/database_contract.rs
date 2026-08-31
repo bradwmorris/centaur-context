@@ -1,6 +1,16 @@
-use centaur_context::db;
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use centaur_context::{
+    api::{AppState, human_router},
+    db,
+};
+use http_body_util::BodyExt;
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use std::path::PathBuf;
+use tower::ServiceExt;
 use uuid::Uuid;
 
 static DB_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -212,4 +222,118 @@ async fn embeddings_are_jobs_and_results_in_one_table() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn connection_graph_is_complete_stable_and_active_only() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let source_id = Uuid::new_v4();
+    let target_id = Uuid::new_v4();
+    let archived_id = Uuid::new_v4();
+    let active_connection_id = Uuid::new_v4();
+    let archived_connection_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    for (id, title, archived) in [
+        (source_id, "Graph source", false),
+        (target_id, "Graph target", false),
+        (archived_id, "Archived graph node", true),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,archived_at) VALUES($1,'memory',$2,'A graph contract fixture with enough context for validation.','system','graph-test','system','graph-test','{}',CASE WHEN $3 THEN now() ELSE NULL END)")
+            .bind(id)
+            .bind(title)
+            .bind(archived)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,now())")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,$2,'related_to',$3,'The graph source is related to the graph target.','system','graph-test','system','graph-test','{}')")
+        .bind(active_connection_id)
+        .bind(source_id)
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,archived_at) VALUES($1,$2,'related_to',$3,'This archived edge must not appear in the active graph.','system','graph-test','system','graph-test','{}',now())")
+        .bind(archived_connection_id)
+        .bind(source_id)
+        .bind(archived_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let first = db::connection_graph(&pool).await.unwrap();
+    let second = db::connection_graph(&pool).await.unwrap();
+    assert_eq!(first.fingerprint, second.fingerprint);
+    assert_eq!(first.node_count, first.nodes.len());
+    assert_eq!(first.connection_count, first.edges.len());
+    assert!(first.nodes.iter().any(|node| node.id == source_id));
+    assert!(first.nodes.iter().any(|node| node.id == target_id));
+    assert!(!first.nodes.iter().any(|node| node.id == archived_id));
+    assert!(
+        first
+            .edges
+            .iter()
+            .any(|edge| edge.id == active_connection_id)
+    );
+    assert!(
+        !first
+            .edges
+            .iter()
+            .any(|edge| edge.id == archived_connection_id)
+    );
+    assert!(first.edges.iter().all(|edge| {
+        first
+            .nodes
+            .iter()
+            .any(|node| node.id == edge.source_object_id)
+            && first
+                .nodes
+                .iter()
+                .any(|node| node.id == edge.target_object_id)
+    }));
+
+    let router = human_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+        },
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/connection-graph")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-cache");
+    let etag = response.headers()["etag"].clone();
+    let payload: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(payload["data"]["fingerprint"], first.fingerprint);
+    let unchanged = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/connection-graph")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
 }
