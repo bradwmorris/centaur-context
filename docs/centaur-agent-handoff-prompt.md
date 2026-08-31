@@ -86,7 +86,7 @@ Current repository baseline:
 - The implemented sequence is: preserved POC baseline; canonical graph migration; deterministic Slack ingestion; read-only Context Builder; atomic Context Curator; completed MVP human surfaces; packaged operations.
 - `dev/` contains the tracked development workflow and backlog. Its RDs are
   plans and are not evidence that the described work has shipped.
-- Release contract: Centaur Context `0.2.0`, HTTP API `v1`, ontology `v2`, database schema version `10`, standard tool version `0.2.0`.
+- Release contract: Centaur Context `0.3.0`, HTTP API `v1`, ontology `v2`, database schema version `10`, standard tool version `0.3.0`.
 - Deployment profile: single organization, local machine or trusted private network. Verified container architecture is `linux/arm64`; builds declare `linux/amd64` and `linux/arm64` support.
 
 ### Product and ontology
@@ -119,18 +119,18 @@ The server is Rust using Axum, Tokio, SQLx, Serde, and PostgreSQL 16 with pgvect
 
 The process exposes four distinct listeners and trust boundaries:
 
-- Human UI/API on port `8080`, intended to be reached only through localhost port-forwarding. It has the management/read surfaces under `/api/v1`.
-- Agent API on port `8081`, ClusterIP-only and bearer-authenticated. It exposes only read operations: `GET /api/v1/context`, `GET /api/v1/search/objects`, and `GET /api/v1/objects/{id}`.
+- Human UI/API on port `8080`, intended to be reached only through localhost port-forwarding. It has the management/read surfaces under `/api/v2`.
+- Agent API on port `8081`, ClusterIP-only and bearer-authenticated. It exposes only read operations: `GET /api/v2/context`, `GET /api/v2/search/objects`, and `GET /api/v2/objects/{id}`.
 - Chat ingestion API on port `8082`, protected by a distinct token and exact Slack workspace/channel allowlist.
 - Internal Context Curator API on port `8083`, protected by a third token and isolated from agent sandboxes and Slack transport by the supplied network policy.
 
-Human `/api/v1` surfaces include metadata; Object listing/creation/read/update; Connection listing/creation/update/archive; Task listing/creation/read/update; Chat Messages; Users and external identities; Curator Run listing/detail/Undo; search; context; and Object Events. Unknown API versions fail closed rather than being silently reinterpreted.
+Human `/api/v2` surfaces include metadata; Object listing/creation/read/update; Connection listing/creation/update/archive; Task listing/creation/read/update; Chat Messages; Users with embedded identities; Run listing/detail/review/Undo; search; context; and Object Events. Unknown API versions fail closed rather than being silently reinterpreted.
 
 The database is always the separate logical database `centaur_context`, owned through the least-privilege application role `centaur_context_app`. Migration and operations code refuses unrelated database names except disposable test databases containing `centaur_context_test`.
 
 ### Slack interaction ingestion
 
-Centaur's Slack transport posts a provider-neutral transcript envelope to `POST /api/v1/ingest/slack/interactions`. Centaur Context does not read Centaur's private session tables.
+Centaur's Slack transport posts a provider-neutral transcript envelope to `POST /api/v2/ingest/slack/interactions`. Centaur Context does not read Centaur's private session tables.
 
 For each approved Slack thread, ingestion:
 
@@ -165,7 +165,7 @@ There is no default or automatic external model provider. Curator processing is 
 
 Canonical Object title and description are always indexed with PostgreSQL full-text search using an allowlisted installation-level configuration and a language-neutral default. If configured, an OpenAI-compatible embedding provider adds pgvector semantic retrieval. Reciprocal-rank fusion combines text and vector candidates; the Context Builder requires an authenticated canonical Chat, anchors its participants and direct Connections, includes compact subtype state, and returns at most ten Objects inside a deterministic serialized-size budget. Plain Object search remains Chat-independent and does not use connection-count popularity; Context Builder uses it only as a small importance signal.
 
-Embeddings and embedding jobs are rebuildable derived search data, never canonical business truth. Their versioned document format, model, dimensions, and query/document mode participate in stale detection. Object writes queue regeneration. If embeddings are absent, stale, incomplete, or failing, retrieval falls back to full text.
+Embeddings and embedding rows are rebuildable derived search data, never canonical business truth. Their versioned document format, model, dimensions, and query/document mode participate in stale detection. Object writes queue regeneration. If embeddings are absent, stale, incomplete, or failing, retrieval falls back to full text.
 
 The public standard agent tool lives in `tools/centaur_context` because it is part of the public API contract. It provides only:
 
@@ -185,7 +185,7 @@ The intended Centaur integration is a pinned overlay tool source plus authentica
 
 ### Human workspace
 
-The current human UI has navigation for Objects, Tasks, Chats, Users, Entities, Memories, and Curator Runs. It exposes the canonical ontology rather than raw database concepts. Object/Task details include incoming and outgoing Connections and activity. Chat details include messages. User details include provider identities. Curator Run detail shows its source window/messages, model/prompt information, result, committed changes, failure state, and guarded whole-run Undo.
+The current human UI has navigation for Objects, Tasks, Chats, Users, Entities, Memories, Sources, Notes, Themes, and Runs. It exposes the canonical ontology rather than raw database concepts. Object/Task details include incoming and outgoing Connections and activity. Chat details include messages. User details include provider identities. curator Run detail shows its source window/messages, model/prompt information, result, committed changes, failure state, and guarded whole-run Undo.
 
 The workspace is deliberately local/private. Deployment manifests are reviewable artifacts, not authorization to apply them.
 
@@ -230,7 +230,7 @@ merge-approval workflow during execution.
 - Do not copy code, credentials, data, or schema wholesale from The AGI Post.
 - Do not add public ingress, cloud deployment, external integrations, hosted writes, new credentials, spending, publishing, repository-visibility changes, or destructive data operations without explicit repository-owner approval.
 - Preserve user work and unrelated changes. Do not treat untracked files as disposable.
-- Prefer the smallest compatible change and keep the public `/api/v1` plus standard tool contract stable unless a deliberate versioned change is requested.
+- Prefer the smallest compatible change and keep the public `/api/v2` plus standard tool contract stable unless a deliberate versioned change is requested.
 - Distinguish human controls, Curator writes, ingestion writes, and agent reads. Do not widen the agent surface casually.
 - Never call external model or embedding providers merely because configuration support exists. Provider choice, credentials, and cost require explicit approval.
 

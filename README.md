@@ -12,7 +12,7 @@ Centaur Context does not replace Centaur. It adds a context layer beside it.
 - Keeps one canonical record for each important thing.
 - Turns completed Slack interactions into structured context.
 - Gives agents a short, relevant context packet before they reply.
-- Keeps source messages, revisions, and audit history.
+- Keeps source messages, immutable artifacts, Runs, and authoritative mutation history.
 - Includes a simple UI for people to inspect and manage the context.
 
 ## How it works
@@ -62,7 +62,7 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `read-object`
 - `search-sources` (bounded metadata and content excerpts)
 - `read-source` (metadata without long-form content)
-- `read-source-content` (a bounded window from one content version)
+- `read-artifact` (a bounded window from one Source artifact)
 - `search-notes` (bounded Note excerpts)
 - `read-note` (one Note and its content)
 - `create-note` (requires the separate `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`)
@@ -72,8 +72,7 @@ The standard agent tool is in `tools/centaur_context`. It provides:
   `read-external-action` (configured workflow principals only; requires its
   separate External-action token)
 - `list-themes`, `read-theme`, and `list-theme-objects`
-- `propose-theme` and `read-theme-proposal`, plus `assign-theme` and
-  `unassign-theme` (requires the separate Theme listener token)
+- `assign-theme` and `unassign-theme` for the existing Theme vocabulary
 
 All reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation never falls back to
 that read token: configure the separately scoped
@@ -91,13 +90,9 @@ bootstrap intake listener and credential. The tool uses
 `CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN`; neither falls back to another Context
 credential.
 
-The optional Theme listener is disabled unless `THEME_PROPOSAL_API_TOKEN` is
-configured. It defaults to port `8087` and uses
-`CENTAUR_CONTEXT_THEME_PROPOSAL_URL` and
-`CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN`. Agents can assign or unassign existing
-approved Themes and submit new Theme proposals, but cannot approve proposals.
-Approval requires the `approve_themes` permission on the human API; schema 13
-grants it only to the initial local human administrator identity (`local-human`).
+Theme creation remains a trusted human operation. Agents may assign or unassign
+existing Themes through the normal authenticated agent contract; there is no
+separate proposal table, permission table, listener, or credential.
 
 The optional generic External-action listener is disabled unless
 `EXTERNAL_ACTION_API_TOKEN` and `EXTERNAL_ACTION_ALLOWED_PRINCIPALS` are
@@ -108,7 +103,7 @@ bodies are never accepted by this contract.
 
 ## Status
 
-Version `0.2.0` is a single-organization MVP for a local machine or trusted
+Version `0.3.0` is a single-organization MVP for a local machine or trusted
 private network. The supported contract is in
 [`compatibility.toml`](compatibility.toml).
 

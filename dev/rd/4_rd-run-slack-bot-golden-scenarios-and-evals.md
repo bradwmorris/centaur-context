@@ -13,7 +13,7 @@ stable Enyu researcher identity) and `Ed` (the stable editor identity).
 **Basis checked:** Active priority 3 and the completed canonical-data,
 Editor-publishing, and Paradigm-corpus RDs; Slack interaction snapshots and the
 literal `done`/`finished` close signal; Chat-aware hybrid Context Builder;
-Source-intake workflow; Curator reconciliation; eval traces and dashboard; Enyu
+Source-intake workflow; Curator reconciliation; Run traces and dashboard; Enyu
 roles and live acceptance record. Today closure curates a primary Memory, not a
 Note, and interactive bots cannot write Context.
 
@@ -39,16 +39,16 @@ expected and decoy Object IDs before any run.
 - [ ] Prove Rez can ingest one article and one YouTube transcript, reuse the
   correct existing identities, and avoid duplicates or attractive decoys.
 - [ ] Prove a Rez conversation closes into correctly linked canonical records
-  and one complete eval.
+  and one complete Run.
 - [ ] Prove Ed retrieves the required existing evidence through the intended
-  search/context path, answers faithfully, and produces complete eval evidence.
+  search/context path, answers faithfully, and produces complete Run evidence.
 - [ ] Make the suite repeatable by an agent operating Slack without database
   credentials, timestamps copied by hand, or subjective inspection as the only
   oracle.
 
 ## Contract
 
-- **Goal:** Validate the complete human→Slack→bot/workflow→Context→Curator→eval
+- **Goal:** Validate the complete human→Slack→bot/workflow→Context→curator→Run
   loop against known answers after priority 3.
 - **Done:** Every required scenario passes its hard invariants and reviewed
   rubric twice, exact replay creates no duplicates, every failure is attributable
@@ -73,12 +73,12 @@ expected and decoy Object IDs before any run.
 | R2 video | Ask Rez to ingest a YouTube URL whose transcript overlaps R1 and one pre-existing Theme/Entity. | Canonical watch URL, real transcript, correct content hash/kind, shared IDs reused, readiness terminal, replay returns same Source/run. |
 | R3 discuss/close | In the R1 thread ask one source-grounded fact, one connection question, and one unsupported question; then send `done`. | Cited/grounded answers, explicit uncertainty for unsupported claim; one Chat/window, one Curator run, one primary Memory, exact `derived_from` Chat link, expected Source/Entity links, one completed eval. |
 | E1 retrieve | In a fresh Ed thread ask for a fact present only in existing Source/Note body; include a lexical decoy and paraphrase the query. | Expected evidence is in the Context packet and answer; retrieval mode/ranks and consulted Object IDs are recorded; decoy does not support the answer. |
-| E2 record/deny | Ask Ed to `create a note`, then close. | Until a narrow Note workflow is approved, Ed must not claim a durable Note or create one; closure still produces the expected Memory/eval. If Note creation becomes a product contract, replace this negative oracle with exact Note/Source/Entity/Chat linkage. |
-| X1 isolation/replay | Ask Ed to ingest and replay R1/R2; resend one event. | Ed is denied ingestion, Rez remains allowed, duplicate Slack delivery and workflow replay create no duplicate messages, records, changes, or eval usage. |
+| E2 record/deny | Ask Ed to `create a note`, then close. | Until a narrow Note workflow is approved, Ed must not claim a durable Note or create one; closure still produces the expected Memory/Run. If Note creation becomes a product contract, replace this negative oracle with exact Note/Source/Entity/Chat linkage. |
+| X1 isolation/replay | Ask Ed to ingest and replay R1/R2; resend one event. | Ed is denied ingestion, Rez remains allowed, duplicate Slack delivery and workflow replay create no duplicate messages, records, changes, or Run usage. |
 
 Each fixture includes expected IDs, forbidden IDs, required evidence spans,
 allowed connection kinds/directions, expected retrieval slice, and a corpus hash.
-Score identity/content/linkage/idempotency/eval completeness as binary gates;
+Score identity/content/linkage/idempotency/Run completeness as binary gates;
 score answer support, completeness, concision, and calibrated uncertainty on a
 reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gate.
 
@@ -87,7 +87,7 @@ reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gat
 - [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread
   identity, not timing alone, and emits machine-readable JSON plus a short report.
 - [ ] Reports separate retrieval candidate/rank, Context packet inclusion, bot
-  answer, durable changes, Curator result, and eval trace/usage.
+  answer, durable changes, curator result, and Run trace/usage.
 - [ ] Tests cover missing/stale embeddings and lexical fallback, timeouts,
   retries, wrong persona, decoys, unsupported answers, partial failure, and
   cleanup without deleting canonical evidence.

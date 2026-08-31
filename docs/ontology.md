@@ -25,21 +25,21 @@ An Object may have one matching subtype row:
 
 The Object is canonical. The subtype stores fields specific to that type.
 
-A Source stores only bounded bibliographic and original-artifact metadata in its subtype.
-Immutable versions of normalized article text or transcripts live separately in
-`source_contents`; the current version is selected without overwriting older
-evidence. Original binary files remain outside PostgreSQL and are referenced by
-an opaque artifact identifier. Each captured content version records its own
-SHA-256 digest, completeness, capture time, recording time, extraction lineage,
-and optional capture-artifact reference. Source list and agent APIs never return
-complete long-form text accidentally.
+A Source stores bounded bibliographic metadata in its subtype. Immutable
+supporting material lives in `artifacts`. Artifacts can belong to any Object,
+not only Sources, and cover transcripts, normalized text, files, URLs, and
+other evidence. A Source may point at its current Artifact without overwriting
+older Artifacts. Each Artifact carries its own SHA-256 digest, size, media type,
+capture time, metadata, and optional predecessor. Long text is read only through
+bounded Artifact windows.
 
 A Note keeps its concise identity and summary in the canonical Object row while
 its bounded Markdown or plain-text body lives in the one-to-one `notes`
 subtype. Authorized agents create Notes only through the dedicated authenticated
 Note-write API; general Context agent access remains read-only.
 
-A User may have provider identities such as Slack. Those identities retain the
+A User embeds zero or more provider identities such as Slack or GitHub in its
+`identities` JSON array. The same User may have identities from many providers. They retain the
 provider/workspace key, display name, and an optional HTTP(S) avatar reference.
 The UI always has a deterministic local fallback avatar, so the canonical User
 does not depend on an external image remaining available.
@@ -51,9 +51,9 @@ These are not Objects:
 - Connections
 - Chat messages
 - Embeddings
-- Curator Runs
-- Audit events
-- Source content versions
+- Runs, including curator, evaluation, ingestion, external-action, and mutation Runs
+- Object Events, the sole durable Object/Connection mutation history
+- Artifacts
 
 They support the graph but are not first-class business nodes.
 
@@ -77,14 +77,15 @@ short explanation.
   says what it is, what it is about, and its current context.
 - Every Object has one primary type.
 - Each subtype row belongs to exactly one Object.
-- A Curator Run creates zero or more Memories only when the messages contain
+- A curator Run creates zero or more Memories only when the messages contain
   durable events or insights worth retaining.
 - Sources represent evidence; Memories represent events or derived insights.
 - A Task is created only from an explicit instruction or commitment.
 - Updates use revisions so newer changes are not overwritten.
-- Every Curator change points back to its source Chat and messages.
+- Every durable Object or Connection change belongs to a Run and has a complete
+  reversible before/after Object Event snapshot.
 - Source and User visuals are derived from stored Chat, message, owner,
   `involves`, `derived_from`, and supporting-message evidence. Display names
   alone never establish attribution.
 - Curator Runs are atomic: all changes commit, or none do.
-- Undo reverses a whole Curator Run without deleting its audit history.
+- Undo creates a compensating child Run and new Object Events; it never rewrites history.

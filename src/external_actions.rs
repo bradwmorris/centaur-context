@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{api::AppState, domain::ActorContext, intake::IntakeError};
 
-const CONTRACT_VERSION: &str = "centaur-context-external-action-v1";
+const CONTRACT_VERSION: &str = "centaur-context-external-action-v2";
 const MAX_BODY_BYTES: usize = 32 * 1024;
 
 #[derive(Clone)]
@@ -29,13 +29,13 @@ struct ExternalActionState {
 
 #[derive(Clone, Debug, sqlx::FromRow, Serialize)]
 pub struct ExternalAction {
-    pub object_id: Uuid,
+    pub id: Uuid,
     pub provider: String,
     pub action_kind: String,
     pub external_key: String,
     pub state: String,
     pub metadata: Value,
-    pub revision: i64,
+    pub trace: Value,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -76,9 +76,9 @@ pub fn router(app: AppState, token: String, allowed_principals: HashSet<String>)
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .route("/api/v1/external-actions/reserve", post(reserve))
-        .route("/api/v1/external-actions/{id}", get(status))
-        .route("/api/v1/external-actions/{id}/events", post(append_event))
+        .route("/api/v2/external-actions/reserve", post(reserve))
+        .route("/api/v2/external-actions/{id}", get(status))
+        .route("/api/v2/external-actions/{id}/events", post(append_event))
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, auth))
@@ -142,8 +142,8 @@ async fn reserve(
     let summary = bounded_text(&request.summary, "summary", 500)?;
     let metadata = safe_metadata(request.metadata)?;
 
-    if let Some(object_id) = idempotent_entity(&state.app, &actor, &idempotency_key).await? {
-        let action = get_action(&state.app, object_id).await?;
+    if let Some(run_id) = idempotent_run(&state.app, &actor, &idempotency_key).await? {
+        let action = get_action(&state.app, run_id).await?;
         if action.provider != provider
             || action.action_kind != action_kind
             || action.external_key != external_key
@@ -155,72 +155,48 @@ async fn reserve(
         return Ok(Json(json!({"data":action,"idempotent":true})));
     }
 
-    let object_id = Uuid::new_v4();
-    let mut tx = state.app.pool.begin().await?;
+    let run_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO objects
-           (id,kind,title,description,protected,created_by_type,created_by_id,
-            updated_by_type,updated_by_id,provenance)
-           VALUES ($1,'external_action',$2,$3,true,$4,$5,$4,$5,$6)"#,
+        r#"INSERT INTO runs
+           (id,kind,status,actor_type,actor_id,idempotency_key,input,result,available_at)
+           VALUES ($1,'external_action','reserved',$2,$3,$4,$5,$6,now())"#,
     )
-    .bind(object_id)
-    .bind(title)
-    .bind(summary)
+    .bind(run_id)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
-    .bind(json!({"source_type":"external_action_listener"}))
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        r#"INSERT INTO external_actions
-           (object_id,provider,action_kind,external_key,metadata)
-           VALUES ($1,$2,$3,$4,$5)"#,
-    )
-    .bind(object_id)
-    .bind(&provider)
-    .bind(&action_kind)
-    .bind(&external_key)
-    .bind(&metadata)
-    .execute(&mut *tx)
-    .await?;
-    insert_event(
-        &mut tx,
-        &actor,
-        object_id,
-        "reserved",
-        &idempotency_key,
-        1,
-        metadata,
-    )
-    .await?;
-    tx.commit().await?;
+    .bind(&idempotency_key)
+    .bind(json!({"provider":provider,"action_kind":action_kind,"external_key":external_key,
+      "title":title,"summary":summary,"metadata":metadata,"centaur_thread_key":actor.centaur_thread_key,
+      "centaur_execution_id":actor.centaur_execution_id}))
+    .bind(json!({"state":"reserved"}))
+    .execute(&state.app.pool).await?;
     Ok(Json(
-        json!({"data":get_action(&state.app, object_id).await?,"idempotent":false}),
+        json!({"data":get_action(&state.app, run_id).await?,"idempotent":false}),
     ))
 }
 
 async fn append_event(
     State(state): State<ExternalActionState>,
     Extension(actor): Extension<ActorContext>,
-    Path(object_id): Path<Uuid>,
+    Path(run_id): Path<Uuid>,
     Json(request): Json<EventRequest>,
 ) -> Result<Json<Value>, IntakeError> {
     version(&request.version)?;
     let idempotency_key = bounded_token(&request.idempotency_key, "idempotency_key", 128)?;
     let event_type = bounded_token(&request.event_type, "event_type", 80)?;
     let metadata = safe_metadata(request.metadata)?;
-    if let Some(existing_id) = idempotent_entity(&state.app, &actor, &idempotency_key).await? {
-        if existing_id != object_id {
+    if let Some(existing_id) = idempotent_run(&state.app, &actor, &idempotency_key).await? {
+        if existing_id != run_id {
             return Err(IntakeError::Conflict(
                 "idempotency key belongs to a different External action".into(),
             ));
         }
         return Ok(Json(
-            json!({"data":get_action(&state.app, object_id).await?,"idempotent":true}),
+            json!({"data":get_action(&state.app, run_id).await?,"idempotent":true}),
         ));
     }
 
-    let current = get_action(&state.app, object_id).await?;
+    let current = get_action(&state.app, run_id).await?;
     if request
         .expected_state
         .as_deref()
@@ -231,101 +207,53 @@ async fn append_event(
         ));
     }
     let next_state = transition(&current.state, &event_type)?;
-    let mut tx = state.app.pool.begin().await?;
-    let revision: i64 = sqlx::query_scalar(
-        r#"UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,
-           updated_at=now() WHERE id=$1 RETURNING revision"#,
-    )
-    .bind(object_id)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE external_actions SET state=$2,updated_at=now() WHERE object_id=$1")
-        .bind(object_id)
-        .bind(next_state)
-        .execute(&mut *tx)
-        .await?;
-    insert_event(
-        &mut tx,
-        &actor,
-        object_id,
-        &event_type,
-        &idempotency_key,
-        revision,
-        metadata,
-    )
-    .await?;
-    tx.commit().await?;
+    let entry = json!({"id":Uuid::new_v4(),"entry_type":"external_action_event","event_type":event_type,
+      "idempotency_key":idempotency_key,"metadata":metadata,"actor_type":actor.actor_type,
+      "actor_id":actor.actor_id,"created_at":OffsetDateTime::now_utc()});
+    sqlx::query(r#"UPDATE runs SET status=$2,trace=trace||jsonb_build_array($3::jsonb),
+      result=result||jsonb_build_object('state',$2::text),
+      completed_at=CASE WHEN $2 IN ('delivered','suppressed','failed') THEN now() ELSE completed_at END,
+      updated_at=now() WHERE id=$1 AND kind='external_action'"#)
+      .bind(run_id).bind(next_state).bind(entry).execute(&state.app.pool).await?;
     Ok(Json(
-        json!({"data":get_action(&state.app, object_id).await?,"idempotent":false}),
+        json!({"data":get_action(&state.app, run_id).await?,"idempotent":false}),
     ))
 }
 
 async fn status(
     State(state): State<ExternalActionState>,
-    Path(object_id): Path<Uuid>,
+    Path(run_id): Path<Uuid>,
 ) -> Result<Json<Value>, IntakeError> {
-    Ok(Json(
-        json!({"data":get_action(&state.app, object_id).await?}),
-    ))
+    Ok(Json(json!({"data":get_action(&state.app, run_id).await?})))
 }
 
-async fn get_action(app: &AppState, object_id: Uuid) -> Result<ExternalAction, IntakeError> {
+async fn get_action(app: &AppState, run_id: Uuid) -> Result<ExternalAction, IntakeError> {
     sqlx::query_as(
-        r#"SELECT e.object_id,e.provider,e.action_kind,e.external_key,e.state,e.metadata,
-                  o.revision,e.created_at,e.updated_at
-           FROM external_actions e JOIN objects o ON o.id=e.object_id
-           WHERE e.object_id=$1"#,
+        r#"SELECT id,input->>'provider' provider,input->>'action_kind' action_kind,
+          input->>'external_key' external_key,status state,input->'metadata' metadata,
+          trace,created_at,updated_at FROM runs WHERE id=$1 AND kind='external_action'"#,
     )
-    .bind(object_id)
+    .bind(run_id)
     .fetch_optional(&app.pool)
     .await?
     .ok_or_else(|| IntakeError::BadRequest("External action not found".into()))
 }
 
-async fn idempotent_entity(
+async fn idempotent_run(
     app: &AppState,
     actor: &ActorContext,
     key: &str,
 ) -> Result<Option<Uuid>, IntakeError> {
     Ok(sqlx::query_scalar(
-        "SELECT entity_id FROM object_events WHERE actor_type=$1 AND actor_id=$2 AND idempotency_key=$3",
+        r#"SELECT id FROM runs WHERE kind='external_action' AND actor_type=$1 AND actor_id=$2
+           AND (idempotency_key=$3 OR EXISTS(SELECT 1 FROM jsonb_array_elements(trace) entry
+             WHERE entry->>'idempotency_key'=$3))"#,
     )
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(key)
     .fetch_optional(&app.pool)
     .await?)
-}
-
-async fn insert_event(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    actor: &ActorContext,
-    object_id: Uuid,
-    event_type: &str,
-    idempotency_key: &str,
-    revision: i64,
-    metadata: Value,
-) -> Result<(), IntakeError> {
-    sqlx::query(
-        r#"INSERT INTO object_events
-           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
-            centaur_thread_key,centaur_execution_id,idempotency_key,to_revision,changes)
-           VALUES ($1,'external_action',$2,$2,'external_action_event',$3,$4,$5,$6,$7,$8,$9)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(object_id)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(&actor.centaur_thread_key)
-    .bind(&actor.centaur_execution_id)
-    .bind(idempotency_key)
-    .bind(revision)
-    .bind(json!({"event_type":event_type,"metadata":metadata}))
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
 }
 
 fn version(value: &str) -> Result<(), IntakeError> {

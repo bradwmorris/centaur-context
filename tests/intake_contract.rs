@@ -41,7 +41,8 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
     };
     db::migrate(&pool).await.unwrap();
     let token = "i".repeat(32);
-    let batch_id = format!("intake-contract-{}", uuid::Uuid::new_v4());
+    let fixture_id = uuid::Uuid::new_v4();
+    let batch_id = format!("intake-contract-{fixture_id}");
     let normalized_text = "  A high-quality source body.\n";
     let content_hash = format!("{:x}", Sha256::digest(normalized_text.as_bytes()));
     let manifest_sha256 = "a".repeat(64);
@@ -49,13 +50,12 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
         "batch_id":batch_id,
         "manifest_sha256":manifest_sha256,
         "objects":[
-            {"client_key":"owner","kind":"user","title":"Test Owner","description":"Human owner of the synthetic imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"owner"},"user_kind":"human"},
-            {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":"https://example.test/paper","byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":"en","original_media_type":"text/plain","original_artifact_reference":null}},
+            {"client_key":"owner","kind":"user","title":"Test Owner","description":"Human owner of the synthetic imported research corpus.","protected":true,"provenance":{"source_type":"test","source_ref":"owner"},"user_kind":"human","identities":[{"id":null,"provider":"slack","workspace_id":"TTEST","provider_user_id":format!("U{fixture_id}"),"display_name":"Test Owner"}]},
+            {"client_key":"source-1","kind":"source","title":"A durable research source","description":"A verified source used to exercise the bounded intake contract.","protected":true,"provenance":{"source_type":"test","source_ref":"source-1"},"source":{"source_kind":"paper","canonical_uri":format!("https://example.test/paper/{fixture_id}"),"byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":"en","original_media_type":"text/plain","original_artifact_reference":null}},
             {"client_key":"note-1","kind":"note","title":"A grounded research note","description":"A grounded note derived from the verified test source.","protected":true,"provenance":{"source_type":"test","source_ref":"note-1"},"note":{"content":"A durable, source-grounded observation.","content_format":"markdown"}},
-            {"client_key":"theme-1","kind":"theme","title":"Durable Research","description":"A research vertical for durable, source-grounded evidence and related work.","protected":true,"provenance":{"source_type":"test","source_ref":"theme-1"},"theme":{"slug":"durable-research"}}
+            {"client_key":"theme-1","kind":"theme","title":"Durable Research","description":"A research vertical for durable, source-grounded evidence and related work.","protected":true,"provenance":{"source_type":"test","source_ref":"theme-1"},"theme":{"slug":format!("durable-research-{fixture_id}")}}
         ],
-        "external_identities":[{"client_key":"owner-slack","user":{"client_key":"owner"},"provider":"slack","workspace_id":"TTEST","provider_user_id":"UTEST","display_name":"Test Owner"}],
-        "source_contents":[{"client_key":"source-1-v1","source":{"client_key":"source-1"},"content_kind":"paper_text","normalized_text":normalized_text,"content_sha256":content_hash,"language":"en","extraction_method":"test","extraction_version":"1","capture_artifact_reference":null,"coverage":"complete","captured_at":"2026-08-30T00:00:00Z","locators":{}}],
+        "artifacts":[{"client_key":"source-1-v1","object":{"client_key":"source-1"},"kind":"paper_text","title":"Captured paper text","content":normalized_text,"uri":null,"media_type":"text/plain","sha256":content_hash,"language":"en","captured_at":"2026-08-30T00:00:00Z","metadata":{"extraction_method":"test","extraction_version":"1","coverage":"complete"},"supersedes_artifact_id":null}],
         "connections":[
             {"client_key":"note-source","source":{"client_key":"note-1"},"kind":"derived_from","target":{"client_key":"source-1"},"description":"The note is directly derived from this verified source.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-1"}},
             {"client_key":"source-theme","source":{"client_key":"source-1"},"kind":"themed","target":{"client_key":"theme-1"},"description":"The verified source is directly relevant to this approved research Theme.","protected":true,"provenance":{"source_type":"test","source_ref":"edge-2"}}
@@ -75,7 +75,7 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
     let validated = app
         .clone()
         .oneshot(request(
-            "/api/v1/intake/batches/validate",
+            "/api/v2/intake/batches/validate",
             &token,
             payload.clone(),
         ))
@@ -91,7 +91,7 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
     let committed = app
         .clone()
         .oneshot(request(
-            "/api/v1/intake/batches/commit",
+            "/api/v2/intake/batches/commit",
             &token,
             payload.clone(),
         ))
@@ -102,16 +102,15 @@ async fn validates_commits_and_replays_one_atomic_source_batch() {
         serde_json::from_slice(&committed.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["data"]["counts"]["objects"], 4);
     assert_eq!(body["data"]["counts"]["events"], 7);
-    let stored_text: String =
-        sqlx::query_scalar("SELECT normalized_text FROM source_contents WHERE content_sha256=$1")
-            .bind(&content_hash)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let stored_text: String = sqlx::query_scalar("SELECT content FROM artifacts WHERE sha256=$1")
+        .bind(&content_hash)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(stored_text, normalized_text);
 
     let replayed = app
-        .oneshot(request("/api/v1/intake/batches/commit", &token, payload))
+        .oneshot(request("/api/v2/intake/batches/commit", &token, payload))
         .await
         .unwrap();
     assert_eq!(replayed.status(), StatusCode::OK);

@@ -9,16 +9,16 @@ const user = {
   user_kind: "human" as const,
   role: "source author" as const,
   avatar_url: "https://example.test/avatar.png",
-  avatar_asset_url: "/api/v1/identity-assets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example.png",
+  avatar_asset_url: "/api/v2/identity-assets/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example.png",
 };
 
 describe("record visual language", () => {
   it("gives every Object type and Task state text plus a non-colour icon", () => {
     render(<>
-      {(["task", "chat", "user", "entity", "memory", "external_action"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
+      {(["task", "chat", "user", "entity", "memory"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
       {(["todo", "doing", "blocked", "review", "done"] as const).map((status) => <TaskStatusBadge status={status} key={status} />)}
     </>);
-    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "External action", "To do", "Doing", "Blocked", "Review", "Done"]) {
+    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "To do", "Doing", "Blocked", "Review", "Done"]) {
       expect(screen.getByText(label)).toBeVisible();
     }
     expect(screen.getByText("Memory")).toHaveTextContent("✦Memory");

@@ -32,21 +32,22 @@ Small context packet for the agent
 | --- | --- |
 | Objects | Title and description |
 | Notes | Title, description, and Note body |
-| Sources | Metadata and the current captured text |
+| Sources | Metadata and attached Artifact text |
 | Connections | Used to expand conversation context |
 
-A Source and its captured text are kept separately:
+A Source and its supporting material are kept separately:
 
 - A **Source** is the article, video, paper, or other work.
-- **Source Content** is the full text or transcript captured from it.
+- An **Artifact** is a transcript, captured full text, URL, file reference, or
+  other immutable supporting item attached to the Source.
 
-Each Source Content version is stored as one complete capture. It is not split
-into chunks today.
+Each text Artifact is stored as one complete capture. It is not split into
+chunks today, and the same Artifact model can support Tasks, Chats, or any other Object.
 
 ## Word search and meaning search
 
 Word search is always available. It uses PostgreSQL to find words in titles,
-descriptions, Note bodies, and Source content.
+descriptions, Note bodies, and textual Artifact content.
 
 Meaning search is optional. It creates a vector from an Object's kind, title,
 and description. This can find related ideas even when the wording is different.

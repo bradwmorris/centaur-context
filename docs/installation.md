@@ -16,7 +16,7 @@ database.
 
 ```bash
 ./scripts/check-package.py
-./scripts/build-image.sh centaur-context:0.2.0
+./scripts/build-image.sh centaur-context:0.3.0
 ```
 
 Record the image identity printed by the build.
@@ -72,7 +72,7 @@ CURATOR_MODEL_TIMEOUT_SECONDS
 
 Use `centaur_subscription` (the default) with Centaur's private inference URL,
 the purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model `gpt-5.6-luna`.
-Use `direct_api` only for rollback. Without these values, Curator Runs stay
+Use `direct_api` only for rollback. Without these values, curator Runs stay
 queued. If the direct model provider is outside the cluster, review
 [`deploy/provider-egress.example.yaml`](../deploy/provider-egress.example.yaml)
 before allowing that traffic.
@@ -94,7 +94,7 @@ default; set `EMBEDDING_INPUT_MODE=typed` only when the provider supports the
 ```bash
 export CENTAUR_CONTEXT_KUBE_CONTEXT=<exact-kubectl-context>
 export CENTAUR_CONTEXT_NAMESPACE=<existing-centaur-namespace>
-./scripts/install-kubernetes.sh --image centaur-context:0.2.0 --apply
+./scripts/install-kubernetes.sh --image centaur-context:0.3.0 --apply
 ```
 
 The installer checks the context, Secret, rollout, and resource boundaries.
@@ -106,7 +106,7 @@ with the retained values, including the existing `centaur_os` `DATABASE_URL`,
 then take and validate a backup. Scale `deployment/centaur-os` to zero and run:
 
 ```bash
-./scripts/install-kubernetes.sh --image centaur-context:0.2.0 --apply --legacy-cutover
+./scripts/install-kubernetes.sh --image centaur-context:0.3.0 --apply --legacy-cutover
 ```
 
 The installer refuses this handoff while the legacy Deployment has any desired
@@ -123,7 +123,7 @@ kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" \
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
-`/api/v1/meta`.
+`/api/v2/meta`.
 
 ## 6. Connect Centaur
 
@@ -140,7 +140,7 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 
 1. Send a Slack interaction on an approved surface.
 2. Reply `done` or `finished`, or wait 10 minutes.
-3. Confirm the Chat, Memory, and Curator Run appear in the UI.
+3. Confirm the Chat, Memory, and curator Run appear in the UI.
 4. Start a new interaction and confirm the agent receives the saved context.
 
 For backup, restore, upgrade, and removal, use the

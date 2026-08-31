@@ -11,7 +11,7 @@ describe("durable application routes", () => {
     ["/memories/memory-id", "memories", "memory-id"],
     ["/sources/source-id", "sources", "source-id"],
     ["/notes/note-id", "notes", "note-id"],
-    ["/curator-runs/run-id", "curator", "run-id"],
+    ["/runs/run-id", "runs", "run-id"],
     ["/schema/objects/structure", "schema", "objects"],
   ])("parses %s", (path, section, selectedId) => {
     expect(parseRoute(path)).toEqual({ section, selectedId, connectionId: null });
@@ -21,7 +21,7 @@ describe("durable application routes", () => {
     expect(parseRoute("/connections/connection-id")).toEqual({ section: "objects", selectedId: null, connectionId: "connection-id" });
     expect(objectPath("object id")).toBe("/objects/object%20id");
     expect(connectionPath("connection id")).toBe("/connections/connection%20id");
-    expect(sectionPath("curator")).toBe("/curator-runs");
+    expect(sectionPath("runs")).toBe("/runs");
     expect(detailPath("tasks", "task-id")).toBe("/tasks/task-id");
     expect(schemaPath()).toBe("/schema");
     expect(schemaPath("objects")).toBe("/schema/objects/rows");

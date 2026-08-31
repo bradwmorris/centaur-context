@@ -73,16 +73,6 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let theme_proposal_listener = if let Some(theme_proposals) = config.theme_proposals.as_ref() {
-        Some((
-            TcpListener::bind(theme_proposals.addr)
-                .await
-                .context("bind Theme proposal listener")?,
-            theme_proposals.clone(),
-        ))
-    } else {
-        None
-    };
     let external_action_listener = if let Some(external_actions) = config.external_actions.as_ref()
     {
         Some((
@@ -118,9 +108,6 @@ async fn main() -> Result<()> {
     let source_intake = source_intake_listener.as_ref().map(|(_, config)| {
         centaur_context::source_intake::router(state.clone(), config.api_token.clone())
     });
-    let theme_proposals = theme_proposal_listener
-        .as_ref()
-        .map(|(_, config)| api::theme_proposal_router(state.clone(), config.api_token.clone()));
     let external_actions = external_action_listener.as_ref().map(|(_, config)| {
         centaur_context::external_actions::router(
             state.clone(),
@@ -195,11 +182,6 @@ async fn main() -> Result<()> {
     } else {
         info!("permanent Source intake listener disabled");
     }
-    if let Some((_, config)) = theme_proposal_listener.as_ref() {
-        info!(address = %config.addr, "Theme proposal listener ready");
-    } else {
-        info!("Theme proposal listener disabled");
-    }
     if let Some((_, config)) = external_action_listener.as_ref() {
         info!(address = %config.addr, "External-action listener ready");
     } else {
@@ -226,16 +208,6 @@ async fn main() -> Result<()> {
         }
     };
 
-    let theme_proposal_server = async move {
-        if let (Some((listener, _)), Some(router)) = (theme_proposal_listener, theme_proposals) {
-            axum::serve(listener, router)
-                .await
-                .context("Theme proposal server stopped")
-        } else {
-            std::future::pending::<Result<()>>().await
-        }
-    };
-
     let external_action_server = async move {
         if let (Some((listener, _)), Some(router)) = (external_action_listener, external_actions) {
             axum::serve(listener, router)
@@ -254,7 +226,6 @@ async fn main() -> Result<()> {
         result = axum::serve(curator_listener, curator) => result.context("context curator server stopped")?,
         result = intake_server => result?,
         result = source_intake_server => result?,
-        result = theme_proposal_server => result?,
         result = external_action_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),

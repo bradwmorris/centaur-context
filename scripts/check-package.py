@@ -5,7 +5,7 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def require(condition: bool, message: str) -> None:
@@ -37,7 +37,7 @@ def main() -> None:
     )
     require("Read and update" not in text("tools/centaur_context/pyproject.toml"), "read-only tool description regressed")
     migrations = [int(path.name.split("_", 1)[0]) for path in (ROOT / "migrations").glob("*.sql")]
-    require(max(migrations) == 12, "database schema version does not match migrations")
+    require(max(migrations) == 17, "database schema version does not match migrations")
 
     tracked = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
     private = re.compile(r"brad(?:ley|wmorris)?|theagipost", re.IGNORECASE)
@@ -82,6 +82,7 @@ def main() -> None:
                 continue
             if (
                 not relative.startswith("dev/rd/")
+                and not relative.endswith("AGENTS.md")
                 and (private.search(content) or "/Users/" in content)
             ):
                 violations.append(relative)

@@ -12,7 +12,6 @@ DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
 DEFAULT_INTAKE_URL = "http://centaur-context-intake.centaur.svc.cluster.local:8085"
 DEFAULT_SOURCE_INTAKE_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8086"
-DEFAULT_THEME_PROPOSAL_URL = "http://centaur-context-theme-proposals.centaur.svc.cluster.local:8087"
 DEFAULT_EXTERNAL_ACTION_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8088"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
@@ -21,7 +20,6 @@ LEGACY_TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 NOTE_WRITE_TOKEN_NAME = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN"
 INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
 SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
-THEME_PROPOSAL_TOKEN_NAME = "CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN"
 EXTERNAL_ACTION_TOKEN_NAME = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
@@ -137,8 +135,6 @@ class CentaurContextClient:
         intake_token: str | None = None,
         source_intake_url: str | None = None,
         source_intake_token: str | None = None,
-        theme_proposal_url: str | None = None,
-        theme_proposal_token: str | None = None,
         external_action_url: str | None = None,
         external_action_token: str | None = None,
         principal_id: str | None = None,
@@ -165,10 +161,6 @@ class CentaurContextClient:
             _clean(source_intake_url or os.getenv("CENTAUR_CONTEXT_SOURCE_INTAKE_URL"))
             or DEFAULT_SOURCE_INTAKE_URL
         ).rstrip("/")
-        self.theme_proposal_url = (
-            _clean(theme_proposal_url or os.getenv("CENTAUR_CONTEXT_THEME_PROPOSAL_URL"))
-            or DEFAULT_THEME_PROPOSAL_URL
-        ).rstrip("/")
         self.external_action_url = (
             _clean(external_action_url or os.getenv("CENTAUR_CONTEXT_EXTERNAL_ACTION_URL"))
             or DEFAULT_EXTERNAL_ACTION_URL
@@ -180,7 +172,6 @@ class CentaurContextClient:
         self._explicit_note_write_token = _clean(note_write_token)
         self._explicit_intake_token = _clean(intake_token)
         self._explicit_source_intake_token = _clean(source_intake_token)
-        self._explicit_theme_proposal_token = _clean(theme_proposal_token)
         self._explicit_external_action_token = _clean(external_action_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
@@ -235,18 +226,6 @@ class CentaurContextClient:
         if not value:
             raise RuntimeError(
                 f"{SOURCE_INTAKE_TOKEN_NAME} is required for Enyu Source intake"
-            )
-        return value
-
-    def _theme_proposal_token(self) -> str:
-        value = self._explicit_theme_proposal_token or _clean(
-            os.getenv(THEME_PROPOSAL_TOKEN_NAME)
-        )
-        if not value:
-            value = _tool_secret(THEME_PROPOSAL_TOKEN_NAME)
-        if not value:
-            raise RuntimeError(
-                f"{THEME_PROPOSAL_TOKEN_NAME} is required to propose Themes"
             )
         return value
 
@@ -372,7 +351,7 @@ class CentaurContextClient:
         }
         if _clean(kind):
             params["kind"] = _clean(kind)
-        return self._request("GET", "/api/v1/context", params=params)
+        return self._request("GET", "/api/v2/context", params=params)
 
     def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> dict[str, Any]:
         """Search canonical Objects without Context Builder importance boosting."""
@@ -382,23 +361,23 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(kind):
             params["kind"] = _clean(kind)
-        return self._request("GET", "/api/v1/search/objects", params=params)
+        return self._request("GET", "/api/v2/search/objects", params=params)
 
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""
-        return self._request("GET", f"/api/v1/objects/{quote(id, safe='')}")
+        return self._request("GET", f"/api/v2/objects/{quote(id, safe='')}")
 
     def list_themes(self, slug: str | None = None) -> list[dict[str, Any]]:
         """List approved Themes, optionally selecting one exact slug."""
         params = {"slug": _clean(slug)} if _clean(slug) else None
-        return self._request("GET", "/api/v1/themes", params=params)
+        return self._request("GET", "/api/v2/themes", params=params)
 
     def read_theme(self, theme_id: str) -> dict[str, Any]:
         """Read one approved Theme."""
         theme_id = _clean(theme_id)
         if not theme_id:
             raise ValueError("theme_id is required")
-        return self._request("GET", f"/api/v1/themes/{quote(theme_id, safe='')}")
+        return self._request("GET", f"/api/v2/themes/{quote(theme_id, safe='')}")
 
     def list_theme_objects(
         self, theme_id: str, *, kind: str | None = None, limit: int = 20
@@ -411,53 +390,7 @@ class CentaurContextClient:
         if _clean(kind):
             params["kind"] = _clean(kind)
         return self._request(
-            "GET", f"/api/v1/themes/{quote(theme_id, safe='')}/objects", params=params
-        )
-
-    def propose_theme(
-        self,
-        *,
-        title: str,
-        slug: str,
-        description: str,
-        rationale: str,
-        evidence: dict[str, Any] | None = None,
-        provenance: dict[str, Any] | None = None,
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Propose a new Theme for human approval; this never creates a Theme directly."""
-        values = {
-            "title": _clean(title),
-            "slug": _clean(slug),
-            "description": _clean(description),
-            "rationale": _clean(rationale),
-        }
-        for field, value in values.items():
-            if not value:
-                raise ValueError(f"{field} is required")
-        if evidence is not None and not isinstance(evidence, dict):
-            raise ValueError("evidence must be a JSON object")
-        if provenance is not None and not isinstance(provenance, dict):
-            raise ValueError("provenance must be a JSON object")
-        return self._request(
-            "POST",
-            "/api/v1/theme-proposals",
-            json={**values, "evidence": evidence or {}, "provenance": provenance or {}},
-            idempotency_key=idempotency_key,
-            token=self._theme_proposal_token(),
-            base_url=self.theme_proposal_url,
-        )
-
-    def read_theme_proposal(self, proposal_id: str) -> dict[str, Any]:
-        """Read the approval status of one Theme proposal."""
-        proposal_id = _clean(proposal_id)
-        if not proposal_id:
-            raise ValueError("proposal_id is required")
-        return self._request(
-            "GET",
-            f"/api/v1/theme-proposals/{quote(proposal_id, safe='')}",
-            token=self._theme_proposal_token(),
-            base_url=self.theme_proposal_url,
+            "GET", f"/api/v2/themes/{quote(theme_id, safe='')}/objects", params=params
         )
 
     def assign_theme(
@@ -484,7 +417,7 @@ class CentaurContextClient:
             raise ValueError("provenance must be a JSON object")
         return self._request(
             "POST",
-            "/api/v1/theme-assignments",
+            "/api/v2/theme-assignments",
             json={
                 "object_id": object_id,
                 "theme_id": theme_id,
@@ -493,8 +426,6 @@ class CentaurContextClient:
                 "protected": bool(protected),
             },
             idempotency_key=idempotency_key,
-            token=self._theme_proposal_token(),
-            base_url=self.theme_proposal_url,
         )
 
     def unassign_theme(
@@ -510,11 +441,9 @@ class CentaurContextClient:
             raise ValueError("assignment_id is required")
         return self._request(
             "POST",
-            f"/api/v1/theme-assignments/{quote(assignment_id, safe='')}/archive",
+            f"/api/v2/theme-assignments/{quote(assignment_id, safe='')}/archive",
             json={"expected_revision": int(expected_revision)},
             idempotency_key=idempotency_key,
-            token=self._theme_proposal_token(),
-            base_url=self.theme_proposal_url,
         )
 
     def search_sources(
@@ -530,7 +459,7 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(cursor):
             params["cursor"] = _clean(cursor)
-        return self._request("GET", "/api/v1/search/sources", params=params)
+        return self._request("GET", "/api/v2/search/sources", params=params)
 
     def read_source(
         self,
@@ -546,23 +475,31 @@ class CentaurContextClient:
         target_url = _clean(base_url).rstrip("/") or None
         return self._request(
             "GET",
-            f"/api/v1/sources/{quote(source_id, safe='')}",
+            f"/api/v2/sources/{quote(source_id, safe='')}",
             thread_key=thread_key,
             base_url=target_url,
         )
 
-    def read_source_content(
+    def list_artifacts(self, object_id: str) -> list[dict[str, Any]]:
+        """List immutable supporting artifacts attached to any Object."""
+        object_id = _clean(object_id)
+        if not object_id:
+            raise ValueError("object_id is required")
+        return self._request(
+            "GET", f"/api/v2/objects/{quote(object_id, safe='')}/artifacts"
+        )
+
+    def read_artifact(
         self,
-        source_id: str,
+        artifact_id: str,
         *,
-        version: int | None = None,
         offset: int = 0,
         limit: int = 8_000,
     ) -> dict[str, Any]:
-        """Read one bounded character window from a selected Source version."""
-        source_id = _clean(source_id)
-        if not source_id:
-            raise ValueError("source_id is required")
+        """Read one bounded text window from an Artifact attached to any Object."""
+        artifact_id = _clean(artifact_id)
+        if not artifact_id:
+            raise ValueError("artifact_id is required")
         offset = int(offset)
         if offset < 0:
             raise ValueError("offset must be zero or greater")
@@ -570,17 +507,13 @@ class CentaurContextClient:
         if limit < 1:
             raise ValueError("limit must be at least one")
         params: dict[str, Any] = {
+            "artifact_id": artifact_id,
             "offset": offset,
             "limit": min(limit, MAX_SOURCE_CONTENT_WINDOW),
         }
-        if version is not None:
-            version = int(version)
-            if version < 1:
-                raise ValueError("version must be at least one")
-            params["version"] = version
         return self._request(
             "GET",
-            f"/api/v1/sources/{quote(source_id, safe='')}/content",
+            f"/api/v2/artifacts/{quote(artifact_id, safe='')}/content",
             params=params,
         )
 
@@ -599,14 +532,14 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(cursor):
             params["cursor"] = _clean(cursor)
-        return self._request("GET", "/api/v1/search/notes", params=params)
+        return self._request("GET", "/api/v2/search/notes", params=params)
 
     def read_note(self, note_id: str) -> dict[str, Any]:
         """Read one canonical Note and its content."""
         note_id = _clean(note_id)
         if not note_id:
             raise ValueError("note_id is required")
-        return self._request("GET", f"/api/v1/notes/{quote(note_id, safe='')}")
+        return self._request("GET", f"/api/v2/notes/{quote(note_id, safe='')}")
 
     def create_note(
         self,
@@ -646,7 +579,7 @@ class CentaurContextClient:
             raise ValueError("idempotency_key must be at most 200 characters")
         return self._request(
             "POST",
-            "/api/v1/notes",
+            "/api/v2/notes",
             json={
                 "title": title,
                 "description": description,
@@ -664,7 +597,7 @@ class CentaurContextClient:
         payload = self._intake_batch(batch)
         return self._request(
             "POST",
-            "/api/v1/intake/batches/validate",
+            "/api/v2/intake/batches/validate",
             json=payload,
             token=self._intake_token(),
             base_url=self.intake_url,
@@ -675,7 +608,7 @@ class CentaurContextClient:
         payload = self._intake_batch(batch)
         return self._request(
             "POST",
-            "/api/v1/intake/batches/commit",
+            "/api/v2/intake/batches/commit",
             json=payload,
             token=self._intake_token(),
             base_url=self.intake_url,
@@ -690,7 +623,7 @@ class CentaurContextClient:
             raise ValueError("batch_id must be at most 100 characters")
         return self._request(
             "GET",
-            f"/api/v1/intake/batches/{quote(batch_id, safe='')}",
+            f"/api/v2/intake/batches/{quote(batch_id, safe='')}",
             token=self._intake_token(),
             base_url=self.intake_url,
         )
@@ -740,7 +673,7 @@ class CentaurContextClient:
             raise ValueError("manifest must be a JSON object")
         return self._request(
             "POST",
-            f"/api/v1/source-intake/{action}",
+            f"/api/v2/source-intake/{action}",
             json=manifest,
             token=self._source_intake_token(),
             base_url=self.source_intake_url,
@@ -759,7 +692,7 @@ class CentaurContextClient:
             raise ValueError("manifest must be a JSON object")
         return self._request(
             "POST",
-            "/api/v1/external-actions/reserve",
+            "/api/v2/external-actions/reserve",
             json=manifest,
             token=self._external_action_token(),
             base_url=self.external_action_url,
@@ -782,7 +715,7 @@ class CentaurContextClient:
             raise ValueError("event must be a JSON object")
         return self._request(
             "POST",
-            f"/api/v1/external-actions/{quote(action_id, safe='')}/events",
+            f"/api/v2/external-actions/{quote(action_id, safe='')}/events",
             json=event,
             token=self._external_action_token(),
             base_url=self.external_action_url,
@@ -802,7 +735,7 @@ class CentaurContextClient:
             raise ValueError("action_id is required")
         return self._request(
             "GET",
-            f"/api/v1/external-actions/{quote(action_id, safe='')}",
+            f"/api/v2/external-actions/{quote(action_id, safe='')}",
             token=self._external_action_token(),
             base_url=self.external_action_url,
             principal_id=principal_id,

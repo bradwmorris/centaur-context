@@ -1,7 +1,7 @@
 [project]
 name = "centaur-context"
 description = "Use the constrained Centaur Context agent API"
-version = "0.2.0"
+version = "0.3.0"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -29,6 +29,5 @@ secrets = [
     {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-note-write.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-intake.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
-    {type = "http", name = "CENTAUR_CONTEXT_THEME_PROPOSAL_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-theme-proposals.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
 ]

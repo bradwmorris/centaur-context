@@ -63,17 +63,14 @@ def read_source(source_id: str, thread_key: str | None = None) -> None:
     _print(_client().read_source(source_id, thread_key=thread_key))
 
 
-def read_source_content(
-    source_id: str,
-    version: int | None = None,
+def read_artifact(
+    artifact_id: str,
     offset: int = 0,
     limit: int = 8_000,
 ) -> None:
-    """Read a bounded text window from one Source content version."""
+    """Read a bounded text window from an Artifact attached to any Object."""
     _print(
-        _client().read_source_content(
-            source_id, version=version, offset=offset, limit=limit
-        )
+        _client().read_artifact(artifact_id, offset=offset, limit=limit)
     )
 
 
@@ -158,33 +155,6 @@ def _json_object(value: str, field: str) -> dict[str, Any]:
     return parsed
 
 
-def propose_theme(
-    title: str,
-    slug: str,
-    description: str,
-    rationale: str,
-    evidence_json: str = "{}",
-    provenance_json: str = "{}",
-    idempotency_key: str = "",
-) -> None:
-    """Propose a Theme for human approval."""
-    _print(
-        _client().propose_theme(
-            title=title,
-            slug=slug,
-            description=description,
-            rationale=rationale,
-            evidence=_json_object(evidence_json, "evidence_json"),
-            provenance=_json_object(provenance_json, "provenance_json"),
-            idempotency_key=idempotency_key,
-        )
-    )
-
-
-def read_theme_proposal(proposal_id: str) -> None:
-    """Read one Theme proposal and its decision status."""
-    _print(_client().read_theme_proposal(proposal_id))
-
 
 def assign_theme(
     object_id: str,
@@ -262,9 +232,9 @@ def _build_parser() -> argparse.ArgumentParser:
     command = commands.add_parser("read-source")
     command.add_argument("source_id")
 
-    command = commands.add_parser("read-source-content")
+    command = commands.add_parser("read-artifact")
     command.add_argument("source_id")
-    command.add_argument("--version", type=_bounded_int(1, 2**31 - 1))
+    command.add_argument("artifact_id")
     command.add_argument("--offset", type=_bounded_int(0, 2**31 - 1), default=0)
     command.add_argument("--limit", type=_bounded_int(1, 20_000), default=8_000)
 
@@ -297,18 +267,6 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("theme_id")
     command.add_argument("--kind")
     command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
-
-    command = commands.add_parser("propose-theme")
-    command.add_argument("title")
-    command.add_argument("--slug", required=True)
-    command.add_argument("--description", required=True)
-    command.add_argument("--rationale", required=True)
-    command.add_argument("--evidence-json", default="{}")
-    command.add_argument("--provenance-json", default="{}")
-    command.add_argument("--idempotency-key", required=True)
-
-    command = commands.add_parser("read-theme-proposal")
-    command.add_argument("proposal_id")
 
     command = commands.add_parser("assign-theme")
     command.add_argument("object_id")

@@ -6,11 +6,11 @@ import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBad
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { ChatMessage, Connection, CuratorRun, CuratorRunDetail, EvalDetail, EvalSummary, EvalTraceEntry, EvalUsageSource, EvalVerdict, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, SharedObject, Source, SourceContentVersion, SourceContentWindow, SourceKind, Task, TaskStatus, Theme, ThemeProposal, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", curator: "Curator Runs", evals: "Evals", schema: "Schema" };
+const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
@@ -24,7 +24,6 @@ const descriptionExamples: Record<ObjectKind, string> = {
   source: "A concise summary of the evidence and why it matters.",
   note: "A short summary that helps people recognize what this note contains.",
   theme: "A research vertical used to group related work for retrieval and audience interests.",
-  external_action: "A recorded outbound action performed through an external system.",
 };
 const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video", "book", "report", "document", "dataset", "web_page", "social_post", "other"];
 
@@ -37,8 +36,7 @@ export default function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [themes, setThemes] = useState<Theme[]>([]);
-  const [themeProposals, setThemeProposals] = useState<ThemeProposal[]>([]);
-  const [curatorRuns, setCuratorRuns] = useState<CuratorRun[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -55,14 +53,13 @@ export default function App() {
     setError(null);
     try {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextThemeProposals, nextCuratorRuns, nextVisuals] = await Promise.all([api.objects(query, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "themes" ? api.themeProposals() : Promise.resolve([]), api.curatorRuns(), api.objectVisuals()]);
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals] = await Promise.all([api.objects(query, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "runs" ? api.runs() : Promise.resolve([]), api.objectVisuals()]);
       setObjects(nextObjects);
       setTasks(nextTasks);
       setSources(nextSources.items);
       setNotes(nextNotes.items);
       setThemes(nextThemes);
-      setThemeProposals(nextThemeProposals);
-      setCuratorRuns(nextCuratorRuns);
+      setRuns(nextRuns);
       setVisuals(nextVisuals);
     } catch (cause) {
       setError(message(cause));
@@ -89,7 +86,7 @@ export default function App() {
     navigate(sectionPath(next));
   };
 
-  const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, curatorRuns, query);
+  const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, runs, query);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
@@ -116,8 +113,7 @@ export default function App() {
           <NavButton active={section === "sources"} compact={collapsed} icon="▤" label="Sources" onClick={() => selectSection("sources")} />
           <NavButton active={section === "notes"} compact={collapsed} icon="▱" label="Notes" onClick={() => selectSection("notes")} />
           <NavButton active={section === "themes"} compact={collapsed} icon="#" label="Themes" onClick={() => selectSection("themes")} />
-          <NavButton active={section === "curator"} compact={collapsed} icon="↻" label="Curator Runs" onClick={() => selectSection("curator")} />
-          <NavButton active={section === "evals"} compact={collapsed} icon="≋" label="Evals" onClick={() => selectSection("evals")} />
+          <NavButton active={section === "runs"} compact={collapsed} icon="↻" label="Runs" onClick={() => selectSection("runs")} />
           <NavButton active={section === "schema"} compact={collapsed} icon="⌘" label="Schema" onClick={() => selectSection("schema")} />
         </nav>
         <div className="nav-foot" title="Running locally"><span className="status-dot" />{!collapsed && "Local workspace"}</div>
@@ -133,30 +129,29 @@ export default function App() {
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : section === "evals" ? (selectedId ? <section className="detail-page"><EvalDetailView id={selectedId} /></section> : <EvalsList />) : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
             <div className="list-toolbar">
-              {section !== "tasks" && section !== "curator" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
+              {section !== "tasks" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
               <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
             </div>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
-            {section === "themes" && <ThemeProposalQueue proposals={themeProposals} onChanged={load} />}
             <div className="record-list">
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="record-source"><SourceBadge provider={visualsById.get(canonicalObjectId(item))?.source_provider} /></span>
-                  <ObjectId id={canonicalObjectId(item)} rowPill />
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges"><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && ("trigger" in item ? <StateBadge state={item.status} /> : <TaskStatusBadge status={item.status} />)}</span><AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} /><DescriptionSnippet description={itemDescription(item)} /></span>
-                  <time>{relative("updated_at" in item ? item.updated_at : item.queued_at)}</time>
+                  {"actor_type" in item ? <span className="object-id-pill">ID: {shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}
+                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges">{"actor_type" in item ? <StateBadge state={item.status} /> : <><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && <TaskStatusBadge status={item.status} />}</>}</span>{!("actor_type" in item) && <AttributionStack users={visualsById.get(canonicalObjectId(item))?.users ?? []} />}<DescriptionSnippet description={itemDescription(item)} /></span>
+                  <time>{relative(item.updated_at)}</time>
                 </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "curator" ? <CuratorDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "runs" ? <RunDetailView id={selectedId!} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
           </section>}
         </div>
       </section>
@@ -171,9 +166,9 @@ export default function App() {
   );
 }
 
-type ListItem = SharedObject | Task | Source | NoteSummary | Theme | CuratorRun;
+type ListItem = SharedObject | Task | Source | NoteSummary | Theme | Run;
 
-function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], curatorRuns: CuratorRun[], query: string): ListItem[] {
+function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], runs: Run[], query: string): ListItem[] {
   if (section === "schema") return [];
   if (section === "tasks") return tasks;
   if (section === "sources") return sources;
@@ -182,48 +177,26 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
     const normalized = query.trim().toLocaleLowerCase();
     return normalized ? themes.filter((item) => `${item.title} ${item.slug} ${item.description}`.toLocaleLowerCase().includes(normalized)) : themes;
   }
-  if (section === "curator") return curatorRuns;
+  if (section === "runs") {
+    const normalized = query.trim().toLocaleLowerCase();
+    return normalized ? runs.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id}`.toLocaleLowerCase().includes(normalized)) : runs;
+  }
   if (section === "objects") return objects;
-  if (section === "evals") return [];
   const kind = sectionKinds[section];
   return objects.filter((item) => item.kind === kind);
 }
 
-function itemRouteId(item: ListItem) { return "trigger" in item ? item.id : canonicalObjectId(item); }
-function canonicalObjectId(item: ListItem) { return "trigger" in item ? item.chat_object_id : "object_id" in item ? item.object_id : item.id; }
+function itemRouteId(item: ListItem) { return "actor_type" in item ? item.id : canonicalObjectId(item); }
+function canonicalObjectId(item: ListItem) { return "actor_type" in item ? item.chat_object_id ?? item.id : "object_id" in item ? item.object_id : item.id; }
 
-function itemObjectKind(item: ListItem): ObjectKind { return "kind" in item ? item.kind : "trigger" in item ? "chat" : "slug" in item ? "theme" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
-function itemTitle(item: ListItem, objects: SharedObject[]) { return "title" in item ? item.title : `Chat · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}`; }
-function itemDescription(item: ListItem) { return "description" in item ? item.description : `${item.trigger.replace("_", " ")} · ${item.message_count} message${item.message_count === 1 ? "" : "s"}`; }
+function itemObjectKind(item: Exclude<ListItem, Run>): ObjectKind { return "kind" in item ? item.kind : "slug" in item ? "theme" : "source_kind" in item ? "source" : "content_format" in item ? "note" : "task"; }
+function itemTitle(item: ListItem, objects: SharedObject[]) { return "actor_type" in item ? `${item.kind.replaceAll("_", " ")} run${item.chat_object_id ? ` · ${objects.find((object) => object.id === item.chat_object_id)?.title ?? shortId(item.chat_object_id)}` : ""}` : "title" in item ? item.title : shortId(canonicalObjectId(item)); }
+function itemDescription(item: ListItem) { return "actor_type" in item ? `${item.actor_type}:${item.actor_id} · ${item.verdict}` : "description" in item ? item.description : ""; }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
 function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | undefined { return section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
 
 function NavButton({ active, compact, icon, label, onClick }: { active: boolean; compact: boolean; icon: string; label: string; onClick: () => void }) {
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
-}
-
-function ThemeProposalQueue({ proposals, onChanged }: { proposals: ThemeProposal[]; onChanged: () => Promise<void> }) {
-  if (proposals.length === 0) return null;
-  return <Section title={`Pending proposals (${proposals.length})`}>
-    <div className="change-list">{proposals.map((proposal) => <ThemeProposalCard proposal={proposal} onChanged={onChanged} key={proposal.id} />)}</div>
-  </Section>;
-}
-
-function ThemeProposalCard({ proposal, onChanged }: { proposal: ThemeProposal; onChanged: () => Promise<void> }) {
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const decide = async (decision: "approve" | "reject") => {
-    if (!reason.trim()) { setError("A decision reason is required."); return; }
-    setBusy(true); setError(null);
-    try {
-      if (decision === "approve") await api.approveThemeProposal(proposal.id, reason.trim());
-      else await api.rejectThemeProposal(proposal.id, reason.trim());
-      await onChanged();
-    } catch (cause) { setError(message(cause)); }
-    finally { setBusy(false); }
-  };
-  return <article className="change"><span className="event-dot" /><div><strong>{proposal.title}</strong><p><code>{proposal.slug}</code> · {proposal.description}</p><small>{proposal.rationale} · proposed by {proposal.proposed_by_id}</small><input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={1000} placeholder="Decision reason" aria-label={`Decision reason for ${proposal.title}`} />{error && <p className="form-error">{error}</p>}</div><span><button className="secondary" type="button" disabled={busy} onClick={() => void decide("approve")}>Approve</button><button className="text-button" type="button" disabled={busy} onClick={() => void decide("reject")}>Reject</button></span></article>;
 }
 
 function ThemeDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
@@ -374,12 +347,12 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
-  const [versions, setVersions] = useState<SourceContentVersion[]>([]);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
-      const [nextSource, nextObject, nextConnections, nextEvents, nextVersions] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.sourceContents(id)]);
-      setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setVersions(nextVersions); setError(null);
+      const [nextSource, nextObject, nextConnections, nextEvents, nextArtifacts] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.artifacts(id)]);
+      setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setError(null);
     } catch (cause) { setError(message(cause)); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -412,55 +385,55 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
       <button className="secondary save-button">Save changes</button>
     </form>
     {error && <p className="form-error">{error}</p>}
-    <SourceContents sourceId={id} sourceRevision={source.revision} versions={versions} currentContentId={source.current_content_id} onCreated={load} />
+    <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={source.current_artifact_id} onCreated={load} />
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={source.provenance} />
   </div></div>;
 }
 
-function SourceContents({ sourceId, sourceRevision, versions, currentContentId, onCreated }: { sourceId: string; sourceRevision: number; versions: SourceContentVersion[]; currentContentId: string | null; onCreated: () => Promise<void> }) {
-  const currentVersion = versions.find((item) => item.id === currentContentId)?.version ?? versions[0]?.version ?? null;
-  const [selectedVersion, setSelectedVersion] = useState<number | null>(currentVersion);
-  const [preview, setPreview] = useState<SourceContentWindow[]>([]);
+function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { objectId: string; artifacts: Artifact[]; currentArtifactId: string | null; onCreated: () => Promise<void> }) {
+  const selectedDefault = currentArtifactId ?? artifacts[0]?.id ?? null;
+  const [selectedId, setSelectedId] = useState<string | null>(selectedDefault);
+  const [preview, setPreview] = useState<ArtifactWindow[]>([]);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setSelectedVersion(currentVersion); setPreview([]); }, [currentContentId, currentVersion]);
+  useEffect(() => { setSelectedId(selectedDefault); setPreview([]); }, [selectedDefault]);
   const read = async (offset: number) => {
-    if (selectedVersion === null) return; setBusy(true); setError(null);
-    try { const window = await api.sourceContent(sourceId, selectedVersion, offset); setPreview((items) => offset === 0 ? [window] : [...items, window]); }
+    if (selectedId === null) return; setBusy(true); setError(null);
+    try { const window = await api.artifactContent(selectedId, offset); setPreview((items) => offset === 0 ? [window] : [...items, window]); }
     catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   };
   const append = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try {
-      await api.createSourceContent(sourceId, { expected_revision: sourceRevision, content_kind: String(data.get("content_kind")), normalized_text: String(data.get("text")), language: optional(data, "language"), extraction_method: optional(data, "extraction_method"), extraction_version: optional(data, "extraction_version"), capture_artifact_reference: optional(data, "capture_artifact_reference"), coverage: String(data.get("coverage")), captured_at: optionalDate(data, "captured_at") });
+      await api.createArtifact(objectId, { kind: String(data.get("kind")), title: optional(data, "title"), content: String(data.get("text")), media_type: "text/plain", language: optional(data, "language"), metadata: { source_type: "human_paste" }, supersedes_artifact_id: selectedId, captured_at: optionalDate(data, "captured_at") });
       setPasteOpen(false); setPreview([]); await onCreated();
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   };
   const nextOffset = preview.at(-1)?.next_offset ?? null;
-  return <Section title="Content" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Paste version</button>}>
+  return <Section title="Artifacts" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Add artifact</button>}>
     {pasteOpen && <form className="form source-content-form" onSubmit={append}>
-      <div className="source-fields"><Field label="Content kind"><select name="content_kind" aria-label="Content kind"><option value="article_text">Article text</option><option value="transcript">Transcript</option><option value="paper_text">Paper text</option><option value="document_text">Document text</option><option value="dataset_description">Dataset description</option><option value="other">Other</option></select></Field><Field label="Coverage"><select name="coverage" defaultValue="unknown"><option value="complete">Complete</option><option value="partial">Partial</option><option value="unknown">Unknown</option></select></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Extraction method"><input name="extraction_method" maxLength={200} defaultValue="human_paste" /></Field><Field label="Extraction version"><input name="extraction_version" maxLength={100} /></Field><Field label="Capture artifact reference"><input name="capture_artifact_reference" maxLength={1000} /></Field></div>
-      <Field label="Normalized text"><textarea name="text" aria-label="Normalized source text" rows={12} required placeholder="Paste the normalized article or transcript…" /></Field>
-      <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save new version"}</button></div>
+      <div className="source-fields"><Field label="Kind"><input name="kind" required maxLength={100} defaultValue="transcript" /></Field><Field label="Title"><input name="title" maxLength={300} /></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field></div>
+      <Field label="Text"><textarea name="text" aria-label="Artifact text" rows={12} required placeholder="Paste a transcript or other supporting text…" /></Field>
+      <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save artifact"}</button></div>
     </form>}
-    {versions.length > 0 ? <div className="content-preview">
-      <div className="content-toolbar"><label>Version <select aria-label="Content version" value={selectedVersion ?? ""} onChange={(event) => { setSelectedVersion(Number(event.target.value)); setPreview([]); }}>{versions.map((version) => <option value={version.version} key={version.id}>v{version.version}{version.id === currentContentId ? " · current" : ""}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
-      {selectedVersion !== null && <SourceVersionSummary version={versions.find((item) => item.version === selectedVersion)} />}
-      {preview.length > 0 && <pre className="source-text-preview" aria-label="Source content preview">{preview.map((item) => item.text).join("")}</pre>}
+    {artifacts.length > 0 ? <div className="content-preview">
+      <div className="content-toolbar"><label>Artifact <select aria-label="Artifact" value={selectedId ?? ""} onChange={(event) => { setSelectedId(event.target.value); setPreview([]); }}>{artifacts.map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.title ?? artifact.kind}{artifact.id === currentArtifactId ? " · current" : ""}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
+      {selectedId !== null && <ArtifactSummary artifact={artifacts.find((item) => item.id === selectedId)} />}
+      {preview.length > 0 && <pre className="source-text-preview" aria-label="Artifact content preview">{preview.map((item) => item.text).join("")}</pre>}
       {nextOffset !== null && <button className="secondary" type="button" disabled={busy} onClick={() => void read(nextOffset)}>{busy ? "Loading…" : "Load next 8,000 characters"}</button>}
-    </div> : <p className="muted">No content versions yet. Metadata remains available without loading long-form text.</p>}
+    </div> : <p className="muted">No artifacts yet.</p>}
     {error && <p className="form-error">{error}</p>}
   </Section>;
 }
 
-function SourceVersionSummary({ version }: { version: SourceContentVersion | undefined }) {
-  if (!version) return null;
-  return <p className="content-version-summary">{version.content_kind.replaceAll("_", " ")} · {version.coverage} · {version.size_bytes.toLocaleString()} bytes · {version.language ?? "language unspecified"} · {relative(version.recorded_at)}</p>;
+function ArtifactSummary({ artifact }: { artifact: Artifact | undefined }) {
+  if (!artifact) return null;
+  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}</p>;
 }
 
 function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
@@ -568,7 +541,7 @@ function UserIdentityPanel({ id, visual }: { id: string; visual: ObjectVisual | 
   }, [id]);
   return <Section title="Identity">
     {error && <p className="form-error">{error}</p>}
-    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /><ObjectContext visual={visual} /></Property><Property label="User kind"><span className="user-kind-label">{user.user_kind === "agent" ? "Agent" : "Human"}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><SourceBadge provider={identity.provider} /><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={identity.user_object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
+    {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /><ObjectContext visual={visual} /></Property><Property label="User kind"><span className="user-kind-label">{user.user_kind === "agent" ? "Agent" : "Human"}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><SourceBadge provider={identity.provider} /><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={user.object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
   </Section>;
 }
 
@@ -595,8 +568,8 @@ function MessageRow({ item, visual }: { item: ChatMessage; visual: ObjectVisual 
   return <article className="chat-message"><ObjectContext visual={visual} /><strong>{item.sender_title}</strong><span className="message-kind">{item.sender_kind}</span><p title={item.content}>{item.content}</p><time>{relative(item.source_created_at)}</time></article>;
 }
 
-function ActivityTimeline({ events, visuals, includeThread = false }: { events: ObjectEvent[]; visuals: Map<string, ObjectVisual>; includeThread?: boolean }) {
-  return <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><strong>{event.action.replaceAll("_", " ")}</strong><span className="event-actor" title={`${event.actor_type}:${event.actor_id}${includeThread && event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}`}>{event.actor_type}:{event.actor_id}{includeThread && event.centaur_thread_key ? ` · ${event.centaur_thread_key}` : ""}</span><ObjectId id={event.object_id} linkPill /><ObjectContext visual={visuals.get(event.object_id)} />{event.entity_type === "connection" && <ConnectionId id={event.entity_id} label={false} compact />}<time>{relative(event.created_at)}</time></div>)}</div></Section>;
+function ActivityTimeline({ events, visuals }: { events: ObjectEvent[]; visuals: Map<string, ObjectVisual>; includeThread?: boolean }) {
+  return <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><strong>{event.action.replaceAll("_", " ")}</strong><span className="event-actor">{event.actor_type}:{event.actor_id}</span>{event.target_type === "object" ? <><ObjectId id={event.target_id} linkPill /><ObjectContext visual={visuals.get(event.target_id)} /></> : <ConnectionId id={event.target_id} label={false} compact />}<time>{relative(event.created_at)}</time></div>)}</div></Section>;
 }
 
 function Connections({ object, objects, visuals, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void> }) {
@@ -679,161 +652,50 @@ function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: 
   </div>;
 }
 
-function CuratorDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
-  const [detail, setDetail] = useState<CuratorRunDetail | null>(null);
+function RunDetailView({ id, onChanged }: { id: string; onChanged: () => Promise<void> }) {
+  const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
-    try { setDetail(await api.curatorRun(id)); setError(null); }
+    try { setDetail(await api.run(id)); setError(null); }
     catch (cause) { setError(message(cause)); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
   if (!detail) return <DetailLoading error={error} />;
-  const { run, messages, changes } = detail;
-  const chatTitle = objects.find((object) => object.id === run.chat_object_id)?.title ?? shortId(run.chat_object_id);
-  const undo = async () => {
-    if (!window.confirm("Undo every graph change made by this Curator Run? The source messages and audit history will be kept.")) return;
-    setBusy(true); setError(null);
-    try { await api.undoCuratorRun(id); await Promise.all([load(), onChanged()]); }
-    catch (cause) { setError(conflictMessage(cause)); }
-    finally { setBusy(false); }
-  };
-  return <div className="record-page"><div className="record-primary">
-    <h1 className="detail-title">{chatTitle}</h1>
-    <p className="detail-description">Context reconciliation for {run.message_count} message{run.message_count === 1 ? "" : "s"} in this interaction window.</p>
-    <section className="properties-block" aria-label="Curator Run properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Status"><StateBadge state={run.status} /></Property>
-      <Property label="Trigger">{run.trigger.replace("_", " ")}</Property>
-      <Property label="Chat"><span>{chatTitle}</span><ObjectId id={run.chat_object_id} /><ObjectContext visual={visuals.get(run.chat_object_id)} /></Property>
-      <Property label="Messages">{run.message_count}</Property>
-      <Property label="Attempts">{run.attempts}</Property>
-      <Property label="Model">{run.model ?? "Not assigned"}</Property>
-      <Property label="Prompt">{run.prompt_version ?? "Not assigned"}</Property>
-      <Property label="Queued">{new Date(run.queued_at).toLocaleString()}</Property>
-    </div></section>
-    {run.error_message && <p className="run-error">{run.error_message}</p>}
-    {error && <p className="form-error">{error}</p>}
-    {run.status === "completed" && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Undoing…" : "Undo whole run"}</button>}
-    {run.status === "reversed" && <p className="undo-note">This run was undone. Messages and audit history were preserved.</p>}
-    <Section title="Interaction window"><div className="chat-transcript">{messages.map((item) => <MessageRow item={item} visual={visuals.get(item.sender_user_object_id)} key={item.id} />)}</div></Section>
-    <Section title="Graph changes"><div className="change-list">{changes.map((change) => <article className="change" key={change.id}><span className="event-dot" /><div><strong>{change.action} {change.entity_type}</strong><p>{textValue(change.after_state.title, shortId(change.entity_id))} · revision {change.after_revision}</p>{change.entity_type === "object" ? <><ObjectId id={change.entity_id} compact /><ObjectContext visual={visuals.get(change.entity_id)} /></> : <ConnectionId id={change.entity_id} />}{stringList((change.after_state.provenance as Record<string, unknown> | undefined)?.supporting_message_ids).length > 0 && <small>Messages · {stringList((change.after_state.provenance as Record<string, unknown>).supporting_message_ids).map(shortId).join(", ")}</small>}</div><span className={change.undone_at ? "change-state undone" : "change-state"}>{change.undone_at ? "Undone" : "Applied"}</span></article>)}{changes.length === 0 && <p className="muted">No graph changes have been committed.</p>}</div></Section>
-  </div></div>;
-}
-
-function EvalsList() {
-  const [items, setItems] = useState<EvalSummary[]>([]);
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    void api.evals().then((data) => { if (active) { setItems(data); setError(null); } })
-      .catch((cause) => { if (active) setError(message(cause)); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, []);
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleItems = useMemo(() => normalizedQuery ? items.filter((item) => evalSearchText(item).includes(normalizedQuery)) : items, [items, normalizedQuery]);
-  return <section className="list-view eval-list" aria-label="eval records">
-    <header className="list-view-head"><h1>Evals</h1></header>
-    <div className="list-toolbar">
-      <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label="Search evals" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search evals" /></label>
-      <span>{visibleItems.length} {visibleItems.length === 1 ? "record" : "records"}</span>
-    </div>
-    {error && <div className="error-banner">{error}</div>}
-    <div className="list-group-head"><span className="status-ring" /><strong>All evals</strong><span>{visibleItems.length}</span></div>
-    <div className="record-list eval-records">
-      {visibleItems.map((item) => <div className="record eval-record" key={item.id}>
-        <button className="record-open" onClick={() => navigate(detailPath("evals", item.id))} aria-label={`Open eval ${item.summary}`} />
-        <span className="eval-row-mark" aria-hidden="true">≋</span>
-        <EvalId id={item.id} />
-        <span className="record-title"><strong>{item.summary}</strong><span className="record-badges"><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span><StateBadge state={item.status} /></span><DescriptionSnippet description={evalRowDescription(item)} /></span>
-        <time>{relative(item.created_at)}</time>
-      </div>)}
-      {!loading && visibleItems.length === 0 && <div className="empty-list">No evals match this search.</div>}
-      {loading && <div className="empty-list">Loading evals…</div>}
-    </div>
-  </section>;
-}
-
-function EvalId({ id }: { id: string }) {
-  const path = detailPath("evals", id);
-  return <span className="object-identity row-pill eval-id"><a className="object-id-pill" href={path} onClick={(event) => { event.preventDefault(); navigate(path); }} title={id} aria-label={`Open Eval ID ${id}`}>ID: {id.slice(0, 5)}</a></span>;
-}
-
-function evalSearchText(item: EvalSummary) {
-  return [item.id, item.summary, item.kind, item.status, item.verdict, item.actor_type, item.actor_id, item.chat_object_id, item.curator_run_id, ...item.usage_sources.flatMap((source) => [source.component, source.provider, source.model_id, source.display_tier, source.execution_type, source.auth_mode, source.billing_mode])].filter(Boolean).join(" ").toLocaleLowerCase();
-}
-
-function evalRowDescription(item: EvalSummary) {
-  return `${item.kind.replaceAll("_", " ")} · ${item.actor_type}:${item.actor_id} · ${item.total_tokens.toLocaleString()} tokens · ${item.affected_object_count} Objects · ${chargeLabel(item)}`;
-}
-
-function EvalDetailView({ id }: { id: string }) {
-  const [detail, setDetail] = useState<EvalDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try { setDetail(await api.eval(id)); setError(null); }
-    catch (cause) { setError(message(cause)); }
-  }, [id]);
-  useEffect(() => { void load(); }, [load]);
-  if (!detail) return <DetailLoading error={error} />;
-  const item = detail.eval;
+  const { run, objects, events } = detail;
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null);
     const data = new FormData(event.currentTarget);
-    try { await api.annotateEval(id, { verdict: String(data.get("verdict")) as EvalVerdict, notes: String(data.get("notes")).trim() || null, expected_revision: item.annotation_revision }); await load(); }
+    try {
+      const revision = Number((run.result.review_revision as number | undefined) ?? 0);
+      await api.reviewRun(id, { verdict: String(data.get("verdict")) as RunVerdict, notes: optional(data, "notes"), expected_revision: revision });
+      await load();
+    } catch (cause) { setError(conflictMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  const undo = async () => {
+    if (!window.confirm("Create a compensating run that reverses this run’s durable mutations?")) return;
+    setBusy(true); setError(null);
+    try { await api.undoRun(id); await Promise.all([load(), onChanged()]); }
     catch (cause) { setError(conflictMessage(cause)); }
     finally { setBusy(false); }
   };
   return <div className="record-page"><div className="record-primary eval-detail">
-    <h1 className="detail-title">{item.summary}</h1>
-    <p className="detail-description">{item.kind.replaceAll("_", " ")} · {item.actor_type}:{item.actor_id}</p>
-    <section className="properties-block" aria-label="Eval properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Status"><StateBadge state={item.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${item.verdict}`}>{item.verdict}</span></Property>
-      <Property label="Created">{new Date(item.created_at).toLocaleString()}</Property><Property label="Tokens">{item.total_tokens.toLocaleString()}</Property><Property label="Charge">{chargeLabel(item)}</Property><Property label="Affected Objects">{item.affected_object_count}</Property>
-      {item.chat_object_id && <Property label="Chat"><ObjectId id={item.chat_object_id} /></Property>}{item.curator_run_id && <Property label="Curator Run"><a href={detailPath("curator", item.curator_run_id)}>{item.curator_run_id}</a></Property>}
+    <h1 className="detail-title">{run.kind.replaceAll("_", " ")} run</h1>
+    <p className="detail-description">{run.actor_type}:{run.actor_id}</p>
+    <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
+      <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>
+      {run.chat_object_id && <Property label="Chat"><ObjectId id={run.chat_object_id} /></Property>}<Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
     </div></section>
-    {item.error_summary && <p className="run-error">{item.error_summary}</p>}{error && <p className="form-error">{error}</p>}
-    <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={item.verdict} key={`${item.id}-${item.annotation_revision}-verdict`}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={item.notes ?? ""} key={`${item.id}-${item.annotation_revision}-notes`} placeholder="Optional note" /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button>{item.annotated_by && <small>Reviewed by {item.annotated_by}</small>}</form>
-    <Section title="Usage and charge provenance"><div className="usage-detail">{item.usage_sources.map((source, index) => <span className="usage-badge" key={index}>{usageLabel(source)}</span>)}<p>{chargeLabel(item)}</p></div></Section>
-    <Section title="Ordered trace"><div className="trace-list">{detail.trace.map((entry) => <article className={entry.entry_type === "failure" ? "trace-entry failure" : "trace-entry"} key={entry.id}><span>{entry.sequence}</span><strong>{entry.entry_type.replaceAll("_", " ")}</strong><small title={traceDescription(entry)}>{traceDescription(entry)}</small><code title={JSON.stringify(entry.facts)}>{JSON.stringify(entry.facts)}</code></article>)}</div></Section>
-    <Section title="Related Objects"><div className="eval-objects">{detail.objects.map((object) => <ObjectId id={object.object_id} linkPill key={`${object.object_id}-${object.role}`} />)}</div></Section>
+    {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
+    <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={run.verdict}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={run.review_notes ?? ""} /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></form>
+    {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
+    <Section title="Trace"><div className="trace-list">{run.trace.map((entry, index) => <article className="trace-entry" key={index}><span>{index + 1}</span><strong>{textValue(entry.type, "step").replaceAll("_", " ")}</strong><code title={JSON.stringify(entry)}>{JSON.stringify(entry)}</code></article>)}</div></Section>
+    <Section title="Result"><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></Section>
+    <Section title="Related Objects"><div className="eval-objects">{objects.map((object) => <ObjectId id={object.object_id} linkPill key={`${object.object_id}-${object.role}`} />)}</div></Section>
+    <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><div><strong>{item.action} {item.target_type}</strong><p>revision {item.from_revision ?? "new"} → {item.to_revision}</p>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} />}</div></article>)}</div></Section>
   </div></div>;
-}
-
-function usageLabel(source: EvalUsageSource) {
-  const provider = source.provider === "openai" ? "OpenAI" : source.provider ?? "Unknown provider";
-  const model = source.display_tier ?? source.model_id ?? "Unknown model";
-  const execution = source.execution_type?.replaceAll("_", " ") ?? "Unknown execution";
-  const auth = source.auth_mode?.replaceAll("_", " ") ?? "Unknown auth";
-  return `${provider} · ${model} · ${execution} · ${auth}`;
-}
-
-function chargeLabel(item: EvalSummary) {
-  const labels: string[] = [];
-  if (item.chatgpt_credit_microunits !== null) labels.push(`${(item.chatgpt_credit_microunits / 1_000_000).toFixed(4)} ChatGPT credits; subscription per-trace USD unavailable`);
-  else if (item.usage_sources.some((source) => source.billing_mode === "subscription_allowance")) labels.push("Included subscription usage; per-trace USD unavailable");
-  if (item.estimated_micro_usd !== null) labels.push(`Metered API estimate $${(item.estimated_micro_usd / 1_000_000).toFixed(6)} USD`);
-  return labels.join(" · ") || (item.usage_sources.length === 0 ? "Not applicable" : "Charge unavailable");
-}
-
-function traceChargeLabel(entry: EvalTraceEntry) {
-  if (entry.chatgpt_credit_microunits !== null) return `${(entry.chatgpt_credit_microunits / 1_000_000).toFixed(4)} ChatGPT credits; per-trace USD unavailable`;
-  if (entry.billing_mode === "subscription_allowance") {
-    const equivalent = entry.api_equivalent_micro_usd === null ? "" : `; API-equivalent estimate $${(entry.api_equivalent_micro_usd / 1_000_000).toFixed(6)} USD`;
-    return `included subscription usage; per-trace USD unavailable${equivalent}`;
-  }
-  if (entry.estimated_micro_usd !== null) return `estimated $${(entry.estimated_micro_usd / 1_000_000).toFixed(6)} USD${entry.rate_card_version ? ` (${entry.rate_card_version})` : ""}`;
-  return "charge unavailable";
-}
-
-function traceDescription(entry: EvalTraceEntry) {
-  const model = entry.model_id ? `${entry.provider ?? "Unknown provider"} · ${entry.model_id} · ${entry.execution_type ?? "unknown execution"}` : null;
-  const usage = entry.usage_status === "not_applicable" ? null : `${entry.usage_status} · ${(entry.total_tokens ?? 0).toLocaleString()} tokens · ${traceChargeLabel(entry)}${entry.usage_missing_reason ? ` · ${entry.usage_missing_reason}` : ""}`;
-  return [model, usage].filter(Boolean).join(" · ") || "No model usage";
 }
 
 function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {

@@ -96,7 +96,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 12,
+                "schema_version": 18,
                 "format": "pg_dump-custom",
             }
         ),
@@ -152,7 +152,7 @@ def run_installer(tmp_path: Path, *extra: str, replicas: str = "1", ready: str =
             "bash",
             str(ROOT / "scripts/install-kubernetes.sh"),
             "--image",
-            "centaur-context:0.2.0",
+            "centaur-context:0.3.0",
             "--apply",
             *extra,
         ],
