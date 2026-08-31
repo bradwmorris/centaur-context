@@ -83,6 +83,18 @@ Score identity/content/linkage/idempotency/Run completeness as binary gates;
 score answer support, completeness, concision, and calibrated uncertainty on a
 reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gate.
 
+## Execution Evidence
+
+- **R2 video — pass 1 of 2, awaiting requester review (2026-09-01):** the
+  selected YouTube URL resolved to its canonical watch URL and reused the
+  existing Source, Ryan Greenblatt, Hugging Face, and Agents Objects. The
+  same-subject video decoy was absent. The Source reached lexical and semantic
+  readiness, and exact webhook replay reused the completed Run without changing
+  the Source revision, artifact count, or connection count. The redacted private
+  bundle records the Slack thread, deployed revisions, object IDs, hashes, and
+  verification results. The idempotent replay response labels the already
+  completed reused Run as `queued`; terminal Run readback remains `completed`.
+
 ## Checks
 
 - [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread
