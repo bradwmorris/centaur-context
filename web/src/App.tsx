@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api } from "./api";
 import { DescriptionSnippet } from "./DescriptionSnippet";
+import { ConnectionGraphWorkspace } from "./ConnectionGraph";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { SchemaWorkspace } from "./SchemaWorkspace";
@@ -10,7 +11,7 @@ import type { Artifact, ArtifactWindow, ChatMessage, Connection, ExternalIdentit
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", schema: "Schema" };
+const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
@@ -44,7 +45,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (section === "schema") {
+    if (section === "schema" || (section === "connections" && !connectionId)) {
       setLoading(false);
       setError(null);
       return;
@@ -66,7 +67,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [query, section]);
+  }, [query, section, connectionId]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute(window.location.pathname));
@@ -105,6 +106,7 @@ export default function App() {
         </div>
         <nav aria-label="Centaur Context">
           <NavButton active={section === "objects"} compact={collapsed} icon="◇" label="Objects" onClick={() => selectSection("objects")} />
+          <NavButton active={section === "connections"} compact={collapsed} icon="⌁" label="Connections" onClick={() => selectSection("connections")} />
           <NavButton active={section === "tasks"} compact={collapsed} icon="✓" label="Tasks" onClick={() => selectSection("tasks")} />
           <NavButton active={section === "chats"} compact={collapsed} icon="◌" label="Chats" onClick={() => selectSection("chats")} />
           <NavButton active={section === "users"} compact={collapsed} icon="♙" label="Users" onClick={() => selectSection("users")} />
@@ -129,7 +131,7 @@ export default function App() {
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
@@ -169,7 +171,7 @@ export default function App() {
 type ListItem = SharedObject | Task | Source | NoteSummary | Theme | Run;
 
 function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], runs: Run[], query: string): ListItem[] {
-  if (section === "schema") return [];
+  if (section === "schema" || section === "connections") return [];
   if (section === "tasks") return tasks;
   if (section === "sources") return sources;
   if (section === "notes") return notes;

@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, Run, RunDetail, RunVerdict, SchemaProfile, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourcePage, Task, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, ExternalIdentity, Note, NotePage, ObjectEvent, ObjectVisual, Run, RunDetail, RunVerdict, SchemaProfile, SchemaRowPage, SchemaSnapshot, SharedObject, Source, SourcePage, Task, Theme, User } from "./types";
 
 interface Envelope<T> {
   data: T;
@@ -96,6 +96,9 @@ export const api = {
   },
   connections(id: string) {
     return request<Connection[]>(`/api/v2/objects/${id}/connections`);
+  },
+  connectionGraph() {
+    return request<ConnectionGraphSnapshot>("/api/v2/connection-graph");
   },
   connection(id: string) {
     return request<Connection>(`/api/v2/connections/${id}`);

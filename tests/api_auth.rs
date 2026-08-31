@@ -153,6 +153,7 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(body.as_ref(), b"<main>Centaur Context</main>");
     let schema = router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/schema/objects/rows")
@@ -161,9 +162,30 @@ async fn human_ui_deep_links_serve_the_spa_with_ok_status() {
         )
         .await
         .unwrap();
+    let connections = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/connections")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let connection_detail = router
+        .oneshot(
+            Request::builder()
+                .uri("/connections/00000000-0000-4000-8000-000000000001")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     std::fs::remove_dir_all(static_dir).unwrap();
 
     assert_eq!(schema.status(), StatusCode::OK);
+    assert_eq!(connections.status(), StatusCode::OK);
+    assert_eq!(connection_detail.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -673,6 +695,41 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
             .unwrap();
             assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         }
+    }
+}
+
+#[tokio::test]
+async fn connection_graph_is_read_only_and_exists_only_on_the_human_listener() {
+    let agent = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/connection-graph")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent.status(), StatusCode::NOT_FOUND);
+
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        let response = human_router(
+            state(),
+            PathBuf::from("web/dist"),
+            PathBuf::from("identity-assets"),
+        )
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri("/api/v2/connection-graph")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
 

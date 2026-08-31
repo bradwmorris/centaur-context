@@ -4,6 +4,7 @@ import { connectionPath, detailPath, navigate, objectPath, parseRoute, schemaPat
 describe("durable application routes", () => {
   it.each([
     ["/objects", "objects", null],
+    ["/connections", "connections", null],
     ["/tasks/task-id", "tasks", "task-id"],
     ["/chats/chat-id", "chats", "chat-id"],
     ["/users/user-id", "users", "user-id"],
@@ -18,7 +19,7 @@ describe("durable application routes", () => {
   });
 
   it("distinguishes supporting Connection routes from canonical Object routes", () => {
-    expect(parseRoute("/connections/connection-id")).toEqual({ section: "objects", selectedId: null, connectionId: "connection-id" });
+    expect(parseRoute("/connections/connection-id")).toEqual({ section: "connections", selectedId: null, connectionId: "connection-id" });
     expect(objectPath("object id")).toBe("/objects/object%20id");
     expect(connectionPath("connection id")).toBe("/connections/connection%20id");
     expect(sectionPath("runs")).toBe("/runs");

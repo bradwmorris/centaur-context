@@ -121,6 +121,28 @@ export interface Connection {
   archived_at: string | null;
 }
 
+export interface ConnectionGraphNode {
+  id: string;
+  kind: ObjectKind;
+  title: string;
+}
+
+export interface ConnectionGraphEdge {
+  id: string;
+  source_object_id: string;
+  target_object_id: string;
+  kind: string;
+  description: string;
+}
+
+export interface ConnectionGraphSnapshot {
+  fingerprint: string;
+  node_count: number;
+  connection_count: number;
+  nodes: ConnectionGraphNode[];
+  edges: ConnectionGraphEdge[];
+}
+
 export interface Theme {
   object_id: string;
   title: string;
