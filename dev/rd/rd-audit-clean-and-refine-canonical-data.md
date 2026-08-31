@@ -28,8 +28,11 @@ pieces of work:
 
 Execute these as one compatible release rather than leaving code, database, and
 UI at different versions. The populated target is only the Enyu context database
-`centaur_context_test_enyu`. Do not query or modify the sparse legacy
-`centaur_os` installation, Centaur `ai_v2`, or Console databases. Before the
+`centaur_context_enyu`. The former `centaur_os` and
+`centaur_os_test_issue4_visual_20260829` databases were backed up and deleted,
+and `centaur_context_test_enyu` was renamed to `centaur_context_enyu` at the
+owner's explicit direction. Do not query or modify Centaur `ai_v2`, Console,
+or any other application database. Before the
 live cutover, create and verify a fresh backup, rehearse migration 16 and the
 bounded row manifest against a restored disposable clone, then deploy all
 first-party consumers, apply revision-guarded data writes through authenticated
@@ -271,7 +274,7 @@ synthetic acceptance/test Objects on 2026-08-31. Prefer reversible archival to
 hard deletion and retain immutable events. This does not authorize rewriting
 Note bodies, fabricating classifications or blocker reasons, changing immutable
 Source evidence, merging ambiguous identities or Sources, unprotecting retained
-imports, modifying any database other than `centaur_context_test_enyu`, or any
+imports, modifying any database other than `centaur_context_enyu`, or any
 publishing, sending, spending, public ingress, or new external integration.
 
 ### Bounded archival manifest — approved for fresh reconciliation and execution

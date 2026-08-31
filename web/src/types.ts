@@ -1,7 +1,7 @@
 export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme";
 export type TaskStatus = "backlog" | "todo" | "doing" | "review" | "done" | "blocked";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
-export type SchemaViewMode = "map" | "structure" | "rows";
+export type SchemaViewMode = "map" | "rows";
 
 export interface SchemaColumn {
   name: string;

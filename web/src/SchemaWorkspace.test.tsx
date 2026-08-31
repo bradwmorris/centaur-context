@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
@@ -40,21 +40,32 @@ const changed: SchemaSnapshot = { fingerprint: "second", tables: [objects], fore
 describe("dynamic schema refresh", () => {
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
-  it("preserves a valid selection and returns safely to the map when a migration removes it", async () => {
-    window.history.replaceState({}, "", "/schema/tasks/structure");
+  it("shows table rows and returns safely to the map when a migration removes the table", async () => {
+    window.history.replaceState({}, "", "/schema/tasks/rows");
     vi.mocked(api.schema).mockResolvedValueOnce(initial).mockResolvedValue(changed);
+    vi.mocked(api.schemaRows).mockResolvedValue({ schema_fingerprint: "first", table: "tasks", rows: [], next_cursor: null, page_size: 50 });
     render(<SchemaWorkspace selectedTable="tasks" />);
     expect(await screen.findByRole("heading", { name: "Tasks" })).toBeVisible();
-    expect(window.location.pathname).toBe("/schema/tasks/structure");
-    const catalog = within(screen.getByRole("navigation", { name: "Schema tables" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "Find a table" }), "tasks");
-    expect(catalog.getByRole("button", { name: "Tasks 1" })).toBeVisible();
-    expect(catalog.queryByRole("button", { name: "Objects 1" })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/schema/tasks/rows");
+    expect(screen.getByRole("link", { name: "← Schema map" })).toHaveAttribute("href", "/schema");
+    expect(screen.queryByRole("navigation", { name: "Schema tables" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Refresh schema" }));
+    window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(window.location.pathname).toBe("/schema"));
-    expect(await screen.findByRole("heading", { name: "Schema map" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Schema map" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Tasks subtype/ })).not.toBeInTheDocument();
+  });
+
+  it("opens a table's rows directly from the schema map", async () => {
+    window.history.replaceState({}, "", "/schema");
+    vi.mocked(api.schema).mockResolvedValue(initial);
+    render(<SchemaWorkspace selectedTable={null} />);
+
+    const taskNode = await screen.findByRole("button", { name: /Tasks subtype/ });
+    expect(screen.queryByRole("list", { name: "Schema relationships" })).not.toBeInTheDocument();
+    await userEvent.click(taskNode);
+
+    expect(window.location.pathname).toBe("/schema/tasks/rows");
   });
 
   it("loads an exact focused row from a foreign-key deep link and can return to all rows", async () => {
@@ -75,20 +86,4 @@ describe("dynamic schema refresh", () => {
     expect(`${window.location.pathname}${window.location.search}`).toBe("/schema/tasks/rows");
   });
 
-  it("shows indexes and triggers and runs an explicitly exact profile on demand", async () => {
-    window.history.replaceState({}, "", "/schema/tasks/structure");
-    vi.mocked(api.schema).mockResolvedValue(initial);
-    vi.mocked(api.schemaProfile).mockResolvedValue({
-      schema_fingerprint: "first", table: "tasks", exact: true, row_count: 1,
-      columns: [{ name: "object_id", null_count: 0, empty_count: null, distinct_count: 1, default_count: null }],
-      unavailable_reason: null,
-    });
-    render(<SchemaWorkspace selectedTable="tasks" />);
-    expect(await screen.findAllByText("tasks_pkey")).toHaveLength(2);
-    expect(screen.getByText("tasks_prevent_removal")).toBeVisible();
-    expect(api.schemaProfile).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "Run exact profile" }));
-    expect(await screen.findByRole("table", { name: "Exact profile for tasks" })).toBeVisible();
-    expect(screen.getByText("Exact row count: 1")).toBeVisible();
-  });
 });

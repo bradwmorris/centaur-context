@@ -210,23 +210,21 @@ describe("canonical Object identity across the application", () => {
     }
   });
 
-  it("opens the live visual schema from the existing navigation and deep-links its views", async () => {
+  it("opens the schema map and goes directly to table rows", async () => {
     window.history.replaceState({}, "", "/objects");
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Schema" }));
     expect(window.location.pathname).toBe("/schema");
-    expect(await screen.findByRole("heading", { name: "Schema map" })).toBeVisible();
     expect(within(screen.getByRole("navigation", { name: "Centaur Context" })).getByRole("button", { name: "Schema" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("button", { name: /Objects canonical/ })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /Objects canonical/ })).toBeVisible();
+    expect(screen.queryByRole("navigation", { name: "Schema tables" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Live structure of the Centaur Context database")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Objects canonical/ }));
-    expect(window.location.pathname).toBe("/schema/objects/structure");
-    expect(await screen.findByRole("heading", { name: "Columns" })).toBeVisible();
-    expect(screen.getByText("objects_pkey")).toBeVisible();
-
-    await userEvent.click(screen.getByRole("button", { name: "Rows" }));
     expect(window.location.pathname).toBe("/schema/objects/rows");
     expect(await screen.findByText("Canonical task")).toBeVisible();
+    expect(screen.getByRole("link", { name: "← Schema map" })).toHaveAttribute("href", "/schema");
+    expect(screen.queryByRole("button", { name: "Rows" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy title" })).toBeVisible();
   });
 

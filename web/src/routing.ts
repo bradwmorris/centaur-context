@@ -65,7 +65,7 @@ export function objectPath(id: string): string {
   return detailPath("objects", id);
 }
 
-export function schemaPath(table?: string, view: SchemaViewMode = table ? "structure" : "map"): string {
+export function schemaPath(table?: string, view: SchemaViewMode = table ? "rows" : "map"): string {
   if (!table || view === "map") return "/schema";
   return `/schema/${encodeURIComponent(table)}/${view}`;
 }
@@ -78,7 +78,7 @@ export function schemaRowPath(table: string, column: string, value: string): str
 export function schemaView(pathname: string): SchemaViewMode {
   const parts = pathname.split("/").filter(Boolean).map(safeDecode);
   if (parts[0] !== "schema" || !parts[1]) return "map";
-  return parts[2] === "rows" ? "rows" : "structure";
+  return "rows";
 }
 
 export function connectionPath(id: string): string {
