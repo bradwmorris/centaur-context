@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, agent_router, human_router, note_write_router, theme_proposal_router},
+    api::{AppState, agent_router, human_router, note_write_router},
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
     intake::router as intake_router,
@@ -23,38 +23,6 @@ fn state() -> AppState {
         embeddings: None,
         text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
     }
-}
-
-#[tokio::test]
-async fn theme_proposal_listener_uses_a_distinct_agent_credential() {
-    let router = theme_proposal_router(state(), "p".repeat(32));
-    let wrong = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/healthz")
-                .header("authorization", format!("Bearer {}", "a".repeat(32)))
-                .header("x-centaur-principal-id", "agent-researcher")
-                .header("x-centaur-thread-key", "codex:issue:39:test")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
-    let correct = router
-        .oneshot(
-            Request::builder()
-                .uri("/healthz")
-                .header("authorization", format!("Bearer {}", "p".repeat(32)))
-                .header("x-centaur-principal-id", "agent-researcher")
-                .header("x-centaur-thread-key", "codex:issue:39:test")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(correct.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -218,7 +186,7 @@ async fn identity_assets_are_content_addressed_same_origin_images() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/identity-assets/{digest}/avatar.png"))
+                .uri(format!("/api/v2/identity-assets/{digest}/avatar.png"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -233,10 +201,10 @@ async fn identity_assets_are_content_addressed_same_origin_images() {
     assert_eq!(response.headers()["etag"], format!("\"{digest}\""));
 
     for path in [
-        format!("/api/v1/identity-assets/{digest}/../avatar.png"),
-        format!("/api/v1/identity-assets/{}/avatar.png", "0".repeat(64)),
-        format!("/api/v1/identity-assets/{digest}/avatar.svg"),
-        format!("/api/v1/identity-assets/{wrong_mime_digest}/wrong.png"),
+        format!("/api/v2/identity-assets/{digest}/../avatar.png"),
+        format!("/api/v2/identity-assets/{}/avatar.png", "0".repeat(64)),
+        format!("/api/v2/identity-assets/{digest}/avatar.svg"),
+        format!("/api/v2/identity-assets/{wrong_mime_digest}/wrong.png"),
     ] {
         assert_eq!(
             router
@@ -281,7 +249,7 @@ async fn curator_listener_uses_its_own_credential_and_is_not_an_agent_surface() 
 }
 
 #[tokio::test]
-async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
+async fn human_api_declares_v2_and_unknown_versions_fail_closed() {
     let router = human_router(
         state(),
         PathBuf::from("web/dist"),
@@ -291,7 +259,7 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/meta")
+                .uri("/api/v2/meta")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -302,16 +270,16 @@ async fn human_api_declares_v1_and_unknown_versions_fail_closed() {
     let metadata: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let metadata = &metadata["data"];
     assert_eq!(metadata["product"], "centaur-context");
-    assert_eq!(metadata["product_version"], "0.2.0");
-    assert_eq!(metadata["api_version"], "v1");
-    assert_eq!(metadata["ontology_version"], "v2");
-    assert_eq!(metadata["database_schema_version"], 16);
-    assert_eq!(metadata["tool_version"], "0.2.0");
+    assert_eq!(metadata["product_version"], "0.3.0");
+    assert_eq!(metadata["api_version"], "v2");
+    assert_eq!(metadata["ontology_version"], "v3");
+    assert_eq!(metadata["database_schema_version"], 17);
+    assert_eq!(metadata["tool_version"], "0.3.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
         .oneshot(
             Request::builder()
-                .uri("/api/v2/objects")
+                .uri("/api/v1/objects")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -330,7 +298,7 @@ async fn human_api_rejects_a_weak_object_description_before_database_access() {
     .oneshot(
         Request::builder()
             .method("POST")
-            .uri("/api/v1/objects")
+            .uri("/api/v2/objects")
             .header("content-type", "application/json")
             .header("idempotency-key", "weak-object-description")
             .body(Body::from(
@@ -409,7 +377,7 @@ async fn agent_context_requires_a_canonical_chat_before_database_access() {
     let response = agent_router(state(), "a".repeat(32))
         .oneshot(
             Request::builder()
-                .uri("/api/v1/context?q=shared")
+                .uri("/api/v2/context?q=shared")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "prn_test")
                 .header("x-centaur-thread-key", "slack:T1:C1:thread-1")
@@ -430,7 +398,7 @@ async fn agent_listener_does_not_expose_write_routes() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/objects")
+                .uri("/api/v2/objects")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "prn_test")
                 .header("x-centaur-thread-key", "slack:test")
@@ -451,7 +419,7 @@ async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/sources")
+                .uri("/api/v2/sources")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "prn_test")
                 .header("x-centaur-thread-key", "slack:test:test:test")
@@ -464,9 +432,11 @@ async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
     assert_eq!(write.status(), StatusCode::NOT_FOUND);
 
     for uri in [
-        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?offset=-1",
-        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?version=0",
-        "/api/v1/sources/00000000-0000-0000-0000-000000000001/content?limit=20001",
+        "/api/v2/sources/00000000-0000-0000-0000-000000000001/content?offset=-1",
+        "/api/v2/sources/00000000-0000-0000-0000-000000000001/content?artifact_id=invalid",
+        "/api/v2/sources/00000000-0000-0000-0000-000000000001/content?limit=20001",
+        "/api/v2/artifacts/00000000-0000-0000-0000-000000000001/content?offset=-1",
+        "/api/v2/artifacts/00000000-0000-0000-0000-000000000001/content?limit=20001",
     ] {
         let response = router
             .clone()
@@ -493,7 +463,7 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/notes")
+                .uri("/api/v2/notes")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "researcher")
                 .header("x-centaur-thread-key", "slack:T:C:thread")
@@ -510,7 +480,7 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/notes")
+                .uri("/api/v2/notes")
                 .header("authorization", format!("Bearer {write_token}"))
                 .header("idempotency-key", "note-1")
                 .header("content-type", "application/json")
@@ -525,7 +495,7 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/notes")
+                .uri("/api/v2/notes")
                 .header("authorization", format!("Bearer {}", "w".repeat(32)))
                 .header("x-centaur-principal-id", "researcher")
                 .header("x-centaur-thread-key", "slack:T:C:thread")
@@ -541,7 +511,7 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/notes")
+                .uri("/api/v2/notes")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "researcher")
                 .header("x-centaur-thread-key", "slack:T:C:thread")
@@ -556,11 +526,11 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
 }
 
 #[tokio::test]
-async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
+async fn run_read_and_review_routes_exist_only_on_the_human_listener() {
     let agent = agent_router(state(), "a".repeat(32))
         .oneshot(
             Request::builder()
-                .uri("/api/v1/evals")
+                .uri("/api/v2/runs")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "prn_test")
                 .header("x-centaur-thread-key", "slack:test")
@@ -574,7 +544,7 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
     let curator = curator_router(state(), "c".repeat(32))
         .oneshot(
             Request::builder()
-                .uri("/api/v1/evals")
+                .uri("/api/v2/runs")
                 .header("authorization", format!("Bearer {}", "c".repeat(32)))
                 .body(Body::empty())
                 .unwrap(),
@@ -590,7 +560,7 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
     )
     .oneshot(
         Request::builder()
-            .uri("/api/v1/evals")
+            .uri("/api/v2/runs")
             .header("authorization", format!("Bearer {}", "i".repeat(32)))
             .body(Body::empty())
             .unwrap(),
@@ -606,16 +576,13 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
     )
     .oneshot(
         Request::builder()
-            .uri("/api/v1/evals?kind=automatic_score")
+            .uri("/api/v2/runs?object_id=not-a-uuid")
             .body(Body::empty())
             .unwrap(),
     )
     .await
     .unwrap();
-    assert_eq!(
-        invalid_human_filter.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(invalid_human_filter.status(), StatusCode::BAD_REQUEST);
 
     let invalid_human_annotation = human_router(
         state(),
@@ -625,7 +592,7 @@ async fn eval_read_and_annotation_routes_exist_only_on_the_human_listener() {
     .oneshot(
         Request::builder()
             .method("PATCH")
-            .uri("/api/v1/evals/00000000-0000-4000-8000-000000000001/annotation")
+            .uri("/api/v2/runs/00000000-0000-4000-8000-000000000001/review")
             .header("content-type", "application/json")
             .body(Body::from(
                 r#"{"verdict":"automatic_score","notes":null,"expected_revision":0}"#,
@@ -645,7 +612,7 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     let agent = agent_router(state(), "a".repeat(32))
         .oneshot(
             Request::builder()
-                .uri("/api/v1/schema")
+                .uri("/api/v2/schema")
                 .header("authorization", format!("Bearer {}", "a".repeat(32)))
                 .header("x-centaur-principal-id", "prn_test")
                 .header("x-centaur-thread-key", "slack:test")
@@ -659,7 +626,7 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     let curator = curator_router(state(), "c".repeat(32))
         .oneshot(
             Request::builder()
-                .uri("/api/v1/schema")
+                .uri("/api/v2/schema")
                 .header("authorization", format!("Bearer {}", "c".repeat(32)))
                 .body(Body::empty())
                 .unwrap(),
@@ -675,7 +642,7 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     )
     .oneshot(
         Request::builder()
-            .uri("/api/v1/schema")
+            .uri("/api/v2/schema")
             .header("authorization", format!("Bearer {}", "i".repeat(32)))
             .body(Body::empty())
             .unwrap(),
@@ -685,9 +652,9 @@ async fn schema_routes_are_read_only_and_exist_only_on_the_human_listener() {
     assert_eq!(ingestion.status(), StatusCode::NOT_FOUND);
 
     for uri in [
-        "/api/v1/schema",
-        "/api/v1/schema/tables/objects/rows",
-        "/api/v1/schema/tables/objects/profile",
+        "/api/v2/schema",
+        "/api/v2/schema/tables/objects/rows",
+        "/api/v2/schema/tables/objects/profile",
     ] {
         for method in ["POST", "PUT", "PATCH", "DELETE"] {
             let response = human_router(
@@ -758,7 +725,7 @@ async fn ingestion_listener_rejects_unapproved_slack_surfaces_before_database_ac
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/ingest/slack/interactions")
+                .uri("/api/v2/ingest/slack/interactions")
                 .header("authorization", format!("Bearer {}", "i".repeat(32)))
                 .header("content-type", "application/json")
                 .body(Body::from(

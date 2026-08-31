@@ -46,7 +46,7 @@ Centaur revision containing all three.
 ```yaml
 slackbotv2:
   interactionSink:
-    url: http://centaur-context:8082/api/v1/ingest/slack/interactions
+    url: http://centaur-context:8082/api/v2/ingest/slack/interactions
     timeoutMs: 5000
     secretName: centaur-context-env
     secretKey: CHAT_INGEST_API_TOKEN
@@ -57,7 +57,7 @@ slackbotv2:
       upstreamService: unknown
 
   contextBuilder:
-    url: http://centaur-context:8081/api/v1/context
+    url: http://centaur-context:8081/api/v2/context
     timeoutMs: 1500
     limit: 10
     secretName: centaur-context-env
@@ -71,7 +71,7 @@ Centaur Context checks the bearer token and the exact Slack workspace/channel pa
 Rejected surfaces are not stored.
 
 The completed snapshot may include normalized per-attempt agent usage. Centaur
-Context attaches it to the same Slack Eval and deduplicates it by component,
+Context attaches it to the same Slack interaction Run and deduplicates it by component,
 execution, and turn. Set `authMode`, `billingMode`, and `upstreamService` to the
 observed runtime facts; keep them `unknown` until the corresponding Centaur
 authentication mode is verified. Never infer authentication or billing from a
@@ -108,9 +108,9 @@ conflicting values fail closed. New installations use only the canonical names.
 
 1. Send a message on an approved Slack surface.
 2. Reply `done` or `finished`, or wait 10 minutes.
-3. Confirm the Curator Run completed in the UI.
+3. Confirm the curator Run completed in the UI.
 4. Ask a related question in a new interaction.
 5. Confirm the reply uses the saved context.
 
 If Slack does not reply, check Centaur's Slack transport first. If it replies
-without context, check the context URL, token, NetworkPolicy, and Curator Run.
+without context, check the context URL, token, NetworkPolicy, and curator Run.

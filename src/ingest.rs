@@ -81,10 +81,10 @@ pub fn router(state: AppState, token: String, approved_surfaces: ApprovedSlackSu
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route(
-            "/api/v1/ingest/slack/interactions",
+            "/api/v2/ingest/slack/interactions",
             post(ingest_slack_interaction),
         )
-        .route("/api/v1/ingest/evals/usage", post(ingest_eval_usage))
+        .route("/api/v2/ingest/runs/usage", post(ingest_run_usage))
         .with_state(IngestState {
             pool: state.pool,
             approved_surfaces,
@@ -372,12 +372,12 @@ async fn ingest_slack_interaction(
     Ok((StatusCode::ACCEPTED, Json(json!({"data": result}))))
 }
 
-async fn ingest_eval_usage(
+async fn ingest_run_usage(
     State(state): State<IngestState>,
-    Json(input): Json<crate::evals::NormalizedUsage>,
+    Json(input): Json<crate::runs::NormalizedUsage>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     input.validate().map_err(ApiError::BadRequest)?;
-    let id = crate::evals::record_usage(&state.pool, &input).await?;
+    let id = crate::runs::record_usage(&state.pool, &input).await?;
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"data":{"trace_entry_id":id}})),
@@ -398,26 +398,33 @@ pub async fn ingest(
         ),
     )
     .await?;
-    let (eval_id, eval_created) = crate::evals::open_slack_interaction(
+    let (run_id, run_created) = crate::runs::open_slack_interaction(
         &mut tx,
         &input.workspace_id,
         &input.channel_id,
         &input.thread_id,
     )
     .await?;
-    let chat_object_id = get_or_create_chat(&mut tx, &actor, &input).await?;
-    crate::evals::attach_slack_chat(&mut tx, eval_id, chat_object_id).await?;
+    let chat_object_id = get_or_create_chat(&mut tx, &actor, run_id, &input).await?;
+    crate::runs::attach_slack_chat(&mut tx, run_id, chat_object_id).await?;
     let mut participants = BTreeSet::new();
     let mut inserted_message_count = 0usize;
 
     for message in &input.messages {
-        let user_object_id =
-            get_or_create_user(&mut tx, &actor, &input.workspace_id, &message.sender).await?;
+        let user_object_id = get_or_create_user(
+            &mut tx,
+            &actor,
+            run_id,
+            &input.workspace_id,
+            &message.sender,
+        )
+        .await?;
         participants.insert(user_object_id);
-        crate::evals::link_object(&mut tx, eval_id, user_object_id, "participant").await?;
+        crate::runs::link_object(&mut tx, run_id, user_object_id, "participant").await?;
         ensure_participant_connection(
             &mut tx,
             &actor,
+            run_id,
             chat_object_id,
             user_object_id,
             &message.sender.display_name,
@@ -426,7 +433,7 @@ pub async fn ingest(
         if insert_message(
             &mut tx,
             &actor,
-            eval_id,
+            run_id,
             chat_object_id,
             user_object_id,
             message,
@@ -458,7 +465,7 @@ pub async fn ingest(
     .await?;
 
     let curator_run_id = if input.interaction_finished {
-        queue_next_window(&mut tx, &actor, eval_id, chat_object_id, "explicit_finish").await?
+        queue_next_window(&mut tx, &actor, run_id, chat_object_id, "explicit_finish").await?
     } else {
         None
     };
@@ -467,8 +474,8 @@ pub async fn ingest(
         value
             .as_object_mut()
             .expect("validated agent usage is an object")
-            .insert("eval_id".to_owned(), Value::String(eval_id.to_string()));
-        let usage: crate::evals::NormalizedUsage =
+            .insert("run_id".to_owned(), Value::String(run_id.to_string()));
+        let usage: crate::runs::NormalizedUsage =
             serde_json::from_value(value).map_err(|error| {
                 DbError::Validation(ValidationError::Unsupported {
                     field: "agent_usage",
@@ -481,11 +488,11 @@ pub async fn ingest(
                 value: error,
             })
         })?;
-        crate::evals::record_usage_in_tx(&mut tx, &usage).await?;
+        crate::runs::record_usage_in_tx(&mut tx, &usage).await?;
     }
-    if eval_created && inserted_message_count == 0 && curator_run_id.is_none() {
-        sqlx::query("DELETE FROM evals WHERE id=$1")
-            .bind(eval_id)
+    if run_created && inserted_message_count == 0 && curator_run_id.is_none() {
+        sqlx::query("UPDATE runs SET status='completed',result='{\"outcome\":\"duplicate_delivery\"}'::jsonb,completed_at=now(),updated_at=now() WHERE id=$1")
+            .bind(run_id)
             .execute(&mut *tx)
             .await?;
     }
@@ -516,6 +523,7 @@ async fn advisory_lock(tx: &mut Transaction<'_, Postgres>, key: &str) -> Result<
 async fn get_or_create_chat(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    run_id: Uuid,
     input: &ValidatedSlackInteraction,
 ) -> Result<Uuid, DbError> {
     if let Some(id) = sqlx::query_scalar(
@@ -580,6 +588,7 @@ async fn get_or_create_chat(
     insert_event(
         tx,
         actor,
+        run_id,
         "object",
         id,
         id,
@@ -597,6 +606,7 @@ async fn get_or_create_chat(
 async fn get_or_create_user(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    run_id: Uuid,
     workspace_id: &str,
     sender: &ValidatedSlackSender,
 ) -> Result<Uuid, DbError> {
@@ -606,9 +616,10 @@ async fn get_or_create_user(
     )
     .await?;
     if let Some((id, existing_kind)) = sqlx::query_as::<_, (Uuid, String)>(
-        r#"SELECT e.user_object_id,u.user_kind
-           FROM external_identities e JOIN users u ON u.object_id=e.user_object_id
-           WHERE e.provider='slack' AND e.workspace_id=$1 AND e.provider_user_id=$2"#,
+        r#"SELECT u.object_id,u.user_kind FROM users u
+           CROSS JOIN LATERAL jsonb_array_elements(u.identities) identity
+           WHERE identity->>'provider'='slack' AND identity->>'workspace_id'=$1
+             AND identity->>'provider_user_id'=$2"#,
     )
     .bind(workspace_id)
     .bind(&sender.provider_user_id)
@@ -621,31 +632,42 @@ async fn get_or_create_user(
                 value: sender.user_kind.clone(),
             }));
         }
-        sqlx::query(
-            r#"UPDATE external_identities
-               SET display_name=$2,
-                   avatar_url=COALESCE($3,avatar_url),
-                   avatar_asset_sha256=COALESCE($4,avatar_asset_sha256),
-                   avatar_asset_filename=COALESCE($5,avatar_asset_filename),
-                   avatar_provenance=CASE WHEN $4::text IS NULL THEN avatar_provenance ELSE $6 END,
-                   profile_refreshed_at=COALESCE($7,profile_refreshed_at),updated_at=now()
-               WHERE user_object_id=$1 AND provider='slack'"#,
-        )
-        .bind(id)
-        .bind(&sender.display_name)
-        .bind(&sender.avatar_url)
-        .bind(sender.avatar_asset.as_ref().map(|asset| &asset.sha256))
-        .bind(sender.avatar_asset.as_ref().map(|asset| &asset.filename))
-        .bind(
-            sender
-                .avatar_asset
-                .as_ref()
-                .map(|asset| asset.provenance.clone())
-                .unwrap_or_else(|| json!({})),
-        )
-        .bind(sender.profile_refreshed_at)
-        .execute(&mut **tx)
-        .await?;
+        let mut identities: Value =
+            sqlx::query_scalar("SELECT identities FROM users WHERE object_id=$1 FOR UPDATE")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?;
+        if let Some(identity) = identities.as_array_mut().and_then(|items| {
+            items.iter_mut().find(|identity| {
+                identity.get("provider").and_then(Value::as_str) == Some("slack")
+                    && identity.get("workspace_id").and_then(Value::as_str) == Some(workspace_id)
+                    && identity.get("provider_user_id").and_then(Value::as_str)
+                        == Some(sender.provider_user_id.as_str())
+            })
+        }) {
+            let object = identity.as_object_mut().expect("validated identity object");
+            object.insert("display_name".into(), json!(sender.display_name));
+            if let Some(value) = &sender.avatar_url {
+                object.insert("avatar_url".into(), json!(value));
+            }
+            if let Some(asset) = &sender.avatar_asset {
+                object.insert("avatar_asset_sha256".into(), json!(asset.sha256));
+                object.insert("avatar_asset_filename".into(), json!(asset.filename));
+                object.insert("avatar_provenance".into(), asset.provenance.clone());
+            }
+            if let Some(value) = sender.profile_refreshed_at {
+                object.insert("profile_refreshed_at".into(), json!(value));
+            }
+        }
+        sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+            .bind(id)
+            .bind(identities)
+            .execute(&mut **tx)
+            .await?;
+        let before: Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM objects o WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
         let revision: Option<i64> = sqlx::query_scalar(
             r#"UPDATE objects SET title=$2,
                description=CASE WHEN $3='human' THEN 'A human Slack user named ' || $2 || '.'
@@ -661,7 +683,7 @@ async fn get_or_create_user(
         .fetch_optional(&mut **tx)
         .await?;
         if let Some(revision) = revision {
-            insert_object_update_event(tx, actor, id, revision, &sender.display_name).await?;
+            insert_object_update_event(tx, actor, run_id, id, revision, before).await?;
         }
         return Ok(id);
     }
@@ -690,38 +712,22 @@ async fn get_or_create_user(
     }))
     .execute(&mut **tx)
     .await?;
-    sqlx::query("INSERT INTO users (object_id,user_kind) VALUES ($1,$2)")
+    let identity = json!({"id":Uuid::new_v4(),"provider":"slack","workspace_id":workspace_id,
+      "provider_user_id":sender.provider_user_id,"display_name":sender.display_name,
+      "avatar_url":sender.avatar_url,"avatar_asset_sha256":sender.avatar_asset.as_ref().map(|asset|&asset.sha256),
+      "avatar_asset_filename":sender.avatar_asset.as_ref().map(|asset|&asset.filename),
+      "avatar_provenance":sender.avatar_asset.as_ref().map(|asset|asset.provenance.clone()).unwrap_or_else(||json!({})),
+      "profile_refreshed_at":sender.profile_refreshed_at});
+    sqlx::query("INSERT INTO users (object_id,user_kind,identities) VALUES ($1,$2,jsonb_build_array($3::jsonb))")
         .bind(id)
         .bind(&sender.user_kind)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query(
-        r#"INSERT INTO external_identities
-           (id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url,
-            avatar_asset_sha256,avatar_asset_filename,avatar_provenance,profile_refreshed_at)
-           VALUES ($1,$2,'slack',$3,$4,$5,$6,$7,$8,$9,$10)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(id)
-    .bind(workspace_id)
-    .bind(&sender.provider_user_id)
-    .bind(&sender.display_name)
-    .bind(&sender.avatar_url)
-    .bind(sender.avatar_asset.as_ref().map(|asset| &asset.sha256))
-    .bind(sender.avatar_asset.as_ref().map(|asset| &asset.filename))
-    .bind(
-        sender
-            .avatar_asset
-            .as_ref()
-            .map(|asset| asset.provenance.clone())
-            .unwrap_or_else(|| json!({})),
-    )
-    .bind(sender.profile_refreshed_at)
+        .bind(identity)
     .execute(&mut **tx)
     .await?;
     insert_event(
         tx,
         actor,
+        run_id,
         "object",
         id,
         id,
@@ -739,6 +745,7 @@ async fn get_or_create_user(
 async fn ensure_participant_connection(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    run_id: Uuid,
     chat_object_id: Uuid,
     user_object_id: Uuid,
     display_name: &str,
@@ -766,6 +773,7 @@ async fn ensure_participant_connection(
         insert_event(
             tx,
             actor,
+            run_id,
             "connection",
             id,
             chat_object_id,
@@ -782,8 +790,8 @@ async fn ensure_participant_connection(
 
 async fn insert_message(
     tx: &mut Transaction<'_, Postgres>,
-    actor: &ActorContext,
-    eval_id: Uuid,
+    _actor: &ActorContext,
+    run_id: Uuid,
     chat_object_id: Uuid,
     user_object_id: Uuid,
     message: &ValidatedSlackMessage,
@@ -807,26 +815,9 @@ async fn insert_message(
     if inserted.is_none() {
         return Ok(None);
     }
-    insert_event(
+    crate::runs::append_trace(
         tx,
-        actor,
-        "chat_message",
-        id,
-        chat_object_id,
-        "message_ingested",
-        Some(&format!(
-            "slack-message:{chat_object_id}:{}",
-            message.provider_message_id
-        )),
-        json!({
-            "provider_message_id": message.provider_message_id,
-            "sender_user_object_id": user_object_id
-        }),
-    )
-    .await?;
-    crate::evals::append_trace(
-        tx,
-        eval_id,
+        run_id,
         "message_ingested",
         json!({
             "message_id": id,
@@ -841,8 +832,8 @@ async fn insert_message(
 
 async fn queue_next_window(
     tx: &mut Transaction<'_, Postgres>,
-    actor: &ActorContext,
-    eval_id: Uuid,
+    _actor: &ActorContext,
+    run_id: Uuid,
     chat_object_id: Uuid,
     trigger: &str,
 ) -> Result<Option<Uuid>, DbError> {
@@ -865,9 +856,9 @@ async fn queue_next_window(
     let (last_message_id,) = messages.last().copied().expect("non-empty message window");
     let id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO curator_runs
-           (id,chat_object_id,first_message_id,last_message_id,trigger,message_count,idempotency_key)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)"#,
+        r#"INSERT INTO runs
+           (id,parent_run_id,kind,status,actor_type,actor_id,chat_object_id,idempotency_key,input,result,available_at)
+           VALUES ($1,$8,'curator','queued','system','context-curator',$2,$7,$9,'{}',now())"#,
     )
     .bind(id)
     .bind(chat_object_id)
@@ -878,6 +869,8 @@ async fn queue_next_window(
     .bind(format!(
         "curator-window:{chat_object_id}:{last_message_id}"
     ))
+    .bind(run_id)
+    .bind(json!({"trigger":trigger,"first_message_id":first_message_id,"last_message_id":last_message_id,"message_count":messages.len()}))
     .execute(&mut **tx)
     .await?;
     sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
@@ -885,25 +878,8 @@ async fn queue_next_window(
         .bind(last_message_id)
         .execute(&mut **tx)
         .await?;
-    insert_event(
-        tx,
-        actor,
-        "curator_run",
-        id,
-        chat_object_id,
-        "curator_queued",
-        Some(&format!(
-            "curator-window:{chat_object_id}:{last_message_id}"
-        )),
-        json!({
-            "trigger": trigger,
-            "first_message_id": first_message_id,
-            "last_message_id": last_message_id,
-            "message_count": messages.len()
-        }),
-    )
-    .await?;
-    crate::evals::attach_curator_run(tx, eval_id, id).await?;
+    crate::runs::append_trace(tx, run_id, "curator_queued", json!({"curator_run_id":id})).await?;
+    crate::runs::attach_curator_run(tx, run_id, id).await?;
     Ok(Some(id))
 }
 
@@ -939,21 +915,21 @@ pub async fn queue_inactive_interactions(
     .await?;
     let mut queued = 0usize;
     for (chat_object_id, workspace_id, channel_id, thread_id) in chats {
-        let eval_id =
-            if let Some(id) = crate::evals::resume_slack_eval(&mut tx, chat_object_id).await? {
+        let run_id =
+            if let Some(id) = crate::runs::resume_slack_run(&mut tx, chat_object_id).await? {
                 id
             } else {
-                let (id, _) = crate::evals::open_slack_interaction(
+                let (id, _) = crate::runs::open_slack_interaction(
                     &mut tx,
                     &workspace_id,
                     &channel_id,
                     &thread_id,
                 )
                 .await?;
-                crate::evals::attach_slack_chat(&mut tx, id, chat_object_id).await?;
+                crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
                 id
             };
-        if queue_next_window(&mut tx, &actor, eval_id, chat_object_id, "inactivity")
+        if queue_next_window(&mut tx, &actor, run_id, chat_object_id, "inactivity")
             .await?
             .is_some()
         {
@@ -968,30 +944,44 @@ pub async fn queue_inactive_interactions(
 async fn insert_event(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    run_id: Uuid,
     entity_type: &str,
     entity_id: Uuid,
     object_id: Uuid,
     action: &str,
     idempotency_key: Option<&str>,
-    changes: Value,
+    _changes: Value,
 ) -> Result<(), DbError> {
+    let target_type = if entity_type == "connection" {
+        "connection"
+    } else {
+        "object"
+    };
+    let target_id = if target_type == "connection" {
+        entity_id
+    } else {
+        object_id
+    };
+    let sequence: i32 =
+        sqlx::query_scalar("SELECT COALESCE(max(sequence),0)+1 FROM object_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let after = crate::db::target_snapshot(tx, target_type, target_id).await?;
+    let revision = after.get("revision").and_then(Value::as_i64).unwrap_or(1);
     sqlx::query(
         r#"INSERT INTO object_events
-           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
-            centaur_thread_key,centaur_execution_id,idempotency_key,to_revision,changes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11)"#,
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            idempotency_key,from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,NULL,$11,true,now())"#,
     )
     .bind(Uuid::new_v4())
-    .bind(entity_type)
-    .bind(entity_id)
-    .bind(object_id)
-    .bind(action)
+    .bind(run_id).bind(sequence).bind(target_type).bind(target_id)
+    .bind(if action=="connected"{"created"}else{action})
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
-    .bind(&actor.centaur_thread_key)
-    .bind(&actor.centaur_execution_id)
     .bind(idempotency_key)
-    .bind(changes)
+    .bind(revision).bind(after)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -1000,25 +990,36 @@ async fn insert_event(
 async fn insert_object_update_event(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
+    run_id: Uuid,
     object_id: Uuid,
     revision: i64,
-    display_name: &str,
+    before: Value,
 ) -> Result<(), DbError> {
+    let sequence: i32 =
+        sqlx::query_scalar("SELECT COALESCE(max(sequence),0)+1 FROM object_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let after: Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM objects o WHERE id=$1")
+        .bind(object_id)
+        .fetch_one(&mut **tx)
+        .await?;
     sqlx::query(
         r#"INSERT INTO object_events
-           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
-            centaur_thread_key,centaur_execution_id,from_revision,to_revision,changes)
-           VALUES ($1,'object',$2,$2,'updated',$3,$4,$5,$6,$7,$8,$9)"#,
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,$3,'object',$4,'updated',$5,$6,$7,$8,$9,$10,true,now())"#,
     )
     .bind(Uuid::new_v4())
+    .bind(run_id)
+    .bind(sequence)
     .bind(object_id)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
-    .bind(&actor.centaur_thread_key)
-    .bind(&actor.centaur_execution_id)
     .bind(revision - 1)
     .bind(revision)
-    .bind(json!({"title": display_name, "source": "slack_profile_refresh"}))
+    .bind(before)
+    .bind(after)
     .execute(&mut **tx)
     .await?;
     Ok(())

@@ -1,25 +1,50 @@
 # 1 — RD: Consolidate the Canonical Schema
 
-**Status:** `scoped`
+**Status:** `complete`
 **Created:** 2026-08-31
+**GitHub Issue:** [#70](https://github.com/bradwmorris/centaur-context/issues/70)
 
-## Execution Plan
+## Final Schema and Purpose
 
-**Status:** `complete and ready`
+This is the complete application schema after this RD: 15 base tables. The
+SQLx migration ledger is framework-owned, and `schema_visualizer_tables` is a
+view over this list rather than a sixteenth maintenance table.
 
-**Basis checked:** Schema 16 migrations and live row profiles; every Rust reader,
+| Table | Columns | Purpose |
+| --- | --- | --- |
+| `objects` | `id`, `kind`, `title`, `description`, `revision`, creator/updater fields, `provenance`, timestamps, `archived_at`, `protected`, `search_document` | Canonical identity, shared metadata, revision, provenance, lifecycle, and lexical index for every domain Object. |
+| `connections` | `id`, `source_object_id`, `kind`, `target_object_id`, `description`, `revision`, creator/updater fields, `provenance`, timestamps, `archived_at`, `protected` | Explained, revisioned relationships between Objects. |
+| `tasks` | `object_id`, `object_kind`, `status`, `agent_suitable`, `due_at`, `priority`, `owner_object_id`, `blocked_reason`, `completed_at`, `github_issue_url`, `brief_markdown` | One-to-one Task-specific state for a Task Object. |
+| `chats` | `object_id`, `object_kind`, `processing_updated_at`, provider/workspace/channel/thread fields, `surface_kind`, `channel_name`, source/curation cursors | One-to-one Chat identity and ingestion/curation progress. |
+| `chat_messages` | `id`, `chat_object_id`, `provider_message_id`, `sender_user_object_id`, `content`, `source_created_at`, `ingestion_sequence`, `ingested_at` | The genuine one-Chat-to-many immutable message stream; it remains separate from `chats`. |
+| `users` | `object_id`, `object_kind`, `user_kind`, `identities` | One-to-one User subtype with all provider identities embedded in one validated JSON array. |
+| `entities` | `object_id`, `object_kind`, `image_url`, `entity_kind` | One-to-one metadata for a named Entity Object. |
+| `memories` | `object_id`, `object_kind`, `happened_at` | One-to-one event/insight timing for a Memory Object. |
+| `sources` | `object_id`, `object_kind`, `source_kind`, URI/publication/language/media fields, `original_artifact_reference`, `current_artifact_id` | One-to-one bibliographic/source metadata and pointer to the current supporting Artifact. |
+| `notes` | `object_id`, `object_kind`, `content`, `content_format` | One-to-one full Note body, kept out of the short shared Object description. |
+| `themes` | `object_id`, `object_kind`, `slug` | One-to-one human-approved Theme vocabulary. Membership remains an explained `themed` Connection. |
+| `artifacts` | `id`, `object_id`, `kind`, `title`, `content`, `uri`, `media_type`, `language`, `sha256`, `size_bytes`, `metadata`, `supersedes_artifact_id`, `captured_at`, `created_at` | Immutable supporting content or references for any Object: transcripts, captures, files, media, or datasets. |
+| `runs` | `id`, `parent_run_id`, `kind`, `status`, actor/chat/idempotency fields, `input`, `trace`, `result`, `consulted_object_ids`, error/review/lease/timestamp fields | One execution/orchestration record for Curator, intake, evaluation/usage, External Actions, and standalone mutations. |
+| `embeddings` | `object_id`, `model`, `dimensions`, `source_hash`, `format_version`, `input_mode`, `status`, retry/lease fields, `embedding`, timestamps | One row per Object/model carrying both embedding work state and the completed vector. |
+| `object_events` | `id`, `run_id`, `sequence`, target/action/actor/idempotency fields, revisions, `before_state`, `after_state`, `reversible`, `created_at` | Immutable authoritative history of every durable Object or Connection mutation and its reversal data. |
+
+## Implementation Result
+
+**Status:** `implemented and verified locally`
+
+**Basis checked:** Schema 16 migrations and representative populated migration fixtures; every Rust reader,
 writer, trigger, worker, API route, listener, web view, standard Python client
 method, test suite, deployment/configuration reference, active dependent RD, and
-the downstream Enyu checkout.
+the downstream Enyu overlay.
 
-**Missing:** none for planning. Brad must approve this final target and separately
-authorize execution, destructive migration, deployment, and merge.
-
-1. Implement the exact target schema and migration mapping below.
-2. Move every first-party reader and writer to that schema in the same release.
-3. Rehearse migration and rollback on a restored disposable database.
-4. Stop old writers, back up live data, migrate, deploy the coordinated release,
-   reconcile every migrated row, and run all checks.
+1. Implemented the exact target schema and fail-closed migration below.
+2. Moved every first-party reader and writer to API v2 and the consolidated schema.
+3. Rehearsed fresh installation and populated schema-16 migration in disposable
+   PostgreSQL/pgvector databases, including retained IDs, hashes, payloads,
+   External Action history/idempotency, Curator reversal state, and vectors.
+4. Updated the Enyu overlay contract in its own review branch. Live backup,
+   maintenance cutover, deployment, canaries, and rollback remain operator actions
+   after both pull requests are reviewed and merged.
 
 ## Target
 
@@ -144,11 +169,11 @@ when any guard fails.
 2. Aggregate all `external_identities` into deterministic `users.identities`
    arrays, preserving identity IDs and avatar metadata. Prove every old identity
    appears exactly once and every provider key remains globally unique.
-3. Copy all 44 `source_contents` rows to `artifacts` without changing IDs, text,
+3. Copy every `source_contents` row to `artifacts` without changing IDs, text,
    hashes, byte sizes, timestamps, capture metadata, or current Source pointers.
    Map extraction, coverage, and locators into bounded `metadata`. Verify hashes
-   from stored bytes and preserve the two existing replacement histories.
-4. Create one Run for every Eval. For the 16 Evals linked to Curator Runs, use the
+   from stored bytes and preserve replacement histories.
+4. Create one Run for every Eval. For Evals linked to Curator Runs, use the
    Curator Run ID as the new Run ID and retain the former Eval ID in migration
    metadata; other Runs keep their Eval IDs. Fold ordered trace entries into
    `trace`; map `consulted`/`participant` links to `consulted_object_ids`; map
@@ -171,10 +196,9 @@ when any guard fails.
    one exists; abort ambiguous matches rather than creating duplicate Runs. Then
    remove the three obsolete External Action Objects only after proving they have
    no retained Connection or subtype dependency.
-8. Merge every embedding job/result pair into one `embeddings` row. Current input
-   is 407 pending jobs and zero vectors. The three removed External Action Objects
-   lose their jobs, so the current expected final state is 404 pending rows and
-   zero completed vectors. Refresh and guard all counts if live state changes.
+8. Merge every embedding job/result pair into one `embeddings` row. Embedding jobs
+   for removed External Action Objects are intentionally discarded. Reconcile the
+   dynamic pre-cutover counts and preserve every retained completed vector exactly.
 9. Remove Eval mutation triggers/functions, old foreign keys, indexes, registry
    entries, Object kind `external_action`, and the 12 old tables only after all
    count, key, hash, and payload comparisons pass inside the rehearsal.
@@ -239,7 +263,7 @@ when any guard fails.
   package checks. Remove obsolete Theme listener material; retain required model,
   embedding, Curator, intake, and External Action configuration.
 - **Downstream and planning:** Update the pinned standard client, manifests,
-  prompts, URLs, and workflow payloads in `/Users/bradleymorris/Desktop/dev/enyu-os`
+  prompts, URLs, and workflow payloads in the Centaur Enyu overlay
   in the coordinated release. Reconcile active embedding RD 3 and Eval/golden-
   scenario RD 4 so they target `embeddings` and `runs`, not deleted tables.
 
@@ -250,7 +274,7 @@ when any guard fails.
 | `/api/v1/evals*` and `/api/v1/curator-runs*` | `/api/v2/runs*` |
 | `/api/v1/ingest/evals/usage` | `/api/v2/ingest/runs/usage` |
 | `/api/v1/sources/{id}/contents` | `/api/v2/objects/{id}/artifacts` |
-| `/api/v1/sources/{id}/content` | Keep as a v2 convenience read of `current_artifact_id` |
+| `/api/v1/sources/{id}/content` | Keep as a v2 Source convenience read; add `/api/v2/artifacts/{id}/content` for any Object's Artifact |
 | `/api/v1/users/{id}/identities` | Keep the array response, now read from `users.identities` |
 | `/api/v1/theme-proposals*` | Remove; unknown route fails closed |
 | Theme assignment using Theme-proposal token | `/api/v2/theme-assignments*` using normal agent auth |
@@ -275,11 +299,11 @@ do not attempt a lossy reverse migration.
 
 ## What We Are Doing
 
-- [ ] Land the 15-table target with no competing histories or obsolete writers.
-- [ ] Preserve every approved identity, Artifact byte/hash, Run/evaluation fact,
+- [x] Implement the 15-table target with no competing histories or obsolete writers.
+- [x] Preserve every approved identity, Artifact byte/hash, Run/evaluation fact,
       usage/cost record, mutation, reversal, idempotency key, and stable ID defined
       above; report intentionally removed speculative/duplicate structure.
-- [ ] Prove every retained workflow through the coordinated API rather than direct
+- [x] Prove every retained workflow through the coordinated API rather than direct
       database access.
 
 ## Contract
@@ -302,28 +326,29 @@ do not attempt a lossy reverse migration.
 
 ## Checks
 
-- [ ] Fresh schema and populated schema-16 migration tests pass, including a second
-      idempotence/reconciliation pass and exact row/key/hash/payload comparisons.
-- [ ] Multi-provider identity uniqueness and concurrent Slack replay pass.
-- [ ] Artifact ownership, immutability, replacement, bounded reads, and search pass.
-- [ ] Run queue, hierarchy, trace ordering, review, usage/cost, External Action
+- [x] Fresh schema and populated schema-16 migration rehearsals pass with exact
+      row/key/hash/payload comparisons and fail-closed reconciliation guards.
+- [x] Multi-provider identity uniqueness and repeated Slack/intake replay pass.
+- [x] Artifact ownership, immutability, replacement, bounded reads, and search pass.
+- [x] Run queue, hierarchy, trace ordering, review, usage/cost, External Action
       idempotency, Curator commit, and event-only undo pass.
-- [ ] Embedding queue/lease/retry/completion/staleness and hybrid retrieval pass.
-- [ ] Auth tests prove removed Theme permissions/routes are gone and retained write
+- [x] Embedding queue/lease/retry/completion/staleness and hybrid retrieval pass.
+- [x] Auth tests prove removed Theme permissions/routes are gone and retained write
       surfaces still require the correct distinct credential.
-- [ ] Web and standard-client contract tests pass; Enyu golden workflows pass.
-- [ ] Schema registry contains exactly the 15 application tables and no old name.
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] `cargo test`
-- [ ] `npm --prefix web run type-check`
-- [ ] `npm --prefix web run build`
-- [ ] `python3 -m pytest tools/centaur_context/test_client.py`
-- [ ] `python3 -m compileall -q tools/centaur_context`
-- [ ] `git diff --check` passes.
+- [x] Web and standard-client contract tests pass; Enyu overlay tests pass.
+- [x] Schema registry contains exactly the 15 application tables and no old name.
+- [x] `cargo fmt --check`
+- [x] `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] `cargo test`
+- [x] `npm --prefix web run type-check`
+- [x] `npm --prefix web run build`
+- [x] `python3 -m pytest tools/centaur_context/test_client.py`
+- [x] `python3 -m compileall -q tools/centaur_context`
+- [x] `git diff --check` passes.
 
 ## Approval Boundary
 
-Planning only. Do not implement, migrate, deploy, delete, write hosted data, or
-change the Enyu overlay until Brad approves this target and separately starts RD
-execution. Never access or modify `ai_v2` or Console databases.
+Implementation and disposable migration rehearsal are complete. No live database,
+deployment, `ai_v2`, or Console database was accessed or changed. Merge, backup,
+maintenance cutover, deployment, production reconciliation, canaries, and any
+rollback remain separately authorized operator actions.

@@ -4,7 +4,7 @@ metadata:
   name: centaur-context
   labels:
     app.kubernetes.io/name: centaur-context
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.3.0"
 spec:
   type: ClusterIP
   selector:
@@ -23,7 +23,7 @@ metadata:
   name: centaur-context-note-write
   labels:
     app.kubernetes.io/name: centaur-context
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.3.0"
 spec:
   type: ClusterIP
   selector:

@@ -9,7 +9,7 @@
 
 **Basis checked:** Migrations through `0016`; current search,
 embedding, Context Builder, eval, configuration, database, and API code; completed
-Context Builder/embedding and eval-dashboard RDs; the recent POC-import RD; and
+Context Builder/embedding and Runs-dashboard RDs; the recent POC-import RD; and
 the completed canonical-data cleanup and its reconciled live row profiles.
 Today, Object title/description use configurable PostgreSQL full-text search;
 optional versioned pgvector embeddings cover Object kind/title/description;
@@ -17,7 +17,7 @@ reciprocal-rank fusion combines lexical and semantic candidates; Context Builder
 adds canonical Chat, participant, direct-Connection, recency, and bounded subtype
 signals. Note bodies and Source content have separate `simple` full-text indexes
 but are not part of Object embeddings or unified Context retrieval. Existing
-eval traces provide operational observability, not a judged retrieval benchmark.
+Run traces provide operational observability, not a judged retrieval benchmark.
 The live review found 407 unattempted `centaur-object-v1`/`shared` embedding jobs
 and no stored embeddings, so current retrieval is effectively lexical plus graph
 context. Source content remains one immutable whole capture per version, not
@@ -64,9 +64,9 @@ and approval before enabling a paid provider or writing hosted derived indexes.
   compared on quality, latency, cost, and failure behavior; the chosen minimal
   design beats or matches baseline gates across every query slice; indexes and
   embeddings reconcile fully; fallback works; and end-to-end Context canaries pass.
-- **Files:** Search/embedding/context/eval Rust code; forward-only migrations only
+- **Files:** Search/embedding/context/Run Rust code; forward-only migrations only
   if measurements justify them; configuration; API and standard agent client;
-  eval fixtures/report tooling; database/API tests; operations and architecture
+  Run fixtures/report tooling; database/API tests; operations and architecture
   docs; this RD. Private corpus text and judgments remain outside Git where needed.
 - **Agent owns:** Audit, benchmark design proposal, instrumentation, experiments,
   implementation, derived-data rebuild, reports, and local verification.

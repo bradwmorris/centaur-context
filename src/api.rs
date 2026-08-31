@@ -23,14 +23,13 @@ use uuid::Uuid;
 
 use crate::{
     db::{
-        self, ConnectionChanges, DbError, NewConnection, NewNote, NewObject, NewSource,
-        NewSourceContent, NewTask, NewTheme, NewThemeProposal, ObjectChanges, SourceChanges,
-        TaskChanges,
+        self, ConnectionChanges, DbError, NewArtifact, NewConnection, NewNote, NewObject,
+        NewSource, NewTask, NewTheme, ObjectChanges, SourceChanges, TaskChanges,
     },
     domain::{
-        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, OBJECT_KINDS, SOURCE_CONTENT_KINDS,
-        SOURCE_KINDS, TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_text,
-        provenance, required_preserved_text, required_text,
+        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, OBJECT_KINDS, SOURCE_KINDS,
+        TASK_PRIORITIES, TASK_STATUSES, ValidationError, allowed, optional_text, provenance,
+        required_preserved_text, required_text,
     },
     embeddings::EmbeddingClient,
     schema, search,
@@ -55,7 +54,7 @@ pub fn human_router(state: AppState, static_dir: PathBuf, identity_assets_dir: P
     let index = static_dir.join("index.html");
     Router::new()
         .route(
-            "/api/v1/identity-assets/{sha256}/{filename}",
+            "/api/v2/identity-assets/{sha256}/{filename}",
             get(identity_asset),
         )
         .merge(service_router(state))
@@ -127,39 +126,21 @@ pub fn agent_router(state: AppState, token: String) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .nest(
-            "/api/v1",
+            "/api/v2",
             Router::new()
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}", get(read_context_object))
+                .route("/objects/{id}/artifacts", get(list_artifacts))
+                .route("/artifacts/{id}/content", get(read_artifact_by_id))
                 .route("/search/sources", get(search_sources))
                 .route("/sources/{id}", get(read_source))
-                .route("/sources/{id}/content", get(read_source_content))
+                .route("/sources/{id}/content", get(read_artifact))
                 .route("/search/notes", get(search_notes))
                 .route("/notes/{id}", get(read_note))
                 .route("/themes", get(list_themes))
                 .route("/themes/{id}", get(read_theme))
-                .route("/themes/{id}/objects", get(list_theme_objects)),
-        )
-        .with_state(state)
-        .layer(middleware::from_fn_with_state(
-            AgentAuth {
-                token: Arc::new(token),
-            },
-            agent_auth,
-        ))
-        .layer(TraceLayer::new_for_http())
-}
-
-pub fn theme_proposal_router(state: AppState, token: String) -> Router {
-    Router::new()
-        .route("/healthz", get(health))
-        .route("/readyz", get(ready))
-        .nest(
-            "/api/v1",
-            Router::new()
-                .route("/theme-proposals", post(create_theme_proposal))
-                .route("/theme-proposals/{id}", get(read_theme_proposal))
+                .route("/themes/{id}/objects", get(list_theme_objects))
                 .route("/theme-assignments", post(create_theme_assignment))
                 .route(
                     "/theme-assignments/{id}/archive",
@@ -180,7 +161,7 @@ pub fn note_write_router(state: AppState, token: String) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .nest("/api/v1", Router::new().route("/notes", post(create_note)))
+        .nest("/api/v2", Router::new().route("/notes", post(create_note)))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             AgentAuth {
@@ -196,7 +177,7 @@ fn service_router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .nest(
-            "/api/v1",
+            "/api/v2",
             Router::new()
                 .route("/meta", get(api_meta))
                 .route("/objects", get(list_objects).post(create_object))
@@ -205,21 +186,16 @@ fn service_router(state: AppState) -> Router {
                 .route("/sources", get(list_sources).post(create_source))
                 .route("/sources/{id}", get(read_source).patch(update_source))
                 .route(
-                    "/sources/{id}/contents",
-                    get(list_source_contents).post(create_source_content),
+                    "/objects/{id}/artifacts",
+                    get(list_artifacts).post(create_artifact),
                 )
-                .route("/sources/{id}/content", get(read_source_content))
+                .route("/artifacts/{id}/content", get(read_artifact_by_id))
+                .route("/sources/{id}/content", get(read_artifact))
                 .route("/notes", get(list_notes).post(create_note))
                 .route("/notes/{id}", get(read_note).patch(update_note))
                 .route("/themes", get(list_themes).post(create_theme))
                 .route("/themes/{id}", get(read_theme))
                 .route("/themes/{id}/objects", get(list_theme_objects))
-                .route("/theme-proposals", get(list_theme_proposals))
-                .route(
-                    "/theme-proposals/{id}/approve",
-                    post(approve_theme_proposal),
-                )
-                .route("/theme-proposals/{id}/reject", post(reject_theme_proposal))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}/connections", get(list_connections))
@@ -236,18 +212,13 @@ fn service_router(state: AppState) -> Router {
                 .route("/users", get(list_users))
                 .route("/users/{id}", get(read_user))
                 .route("/users/{id}/identities", get(list_user_identities))
-                .route("/curator-runs", get(list_curator_runs))
-                .route("/curator-runs/{id}", get(read_curator_run))
-                .route("/curator-runs/{id}/undo", post(undo_curator_run))
-                .route("/evals", get(list_evals))
-                .route("/evals/{id}", get(read_eval))
+                .route("/runs", get(list_runs))
+                .route("/runs/{id}", get(read_run))
+                .route("/runs/{id}/undo", post(undo_curator_run))
                 .route("/schema", get(read_schema))
                 .route("/schema/tables/{table}/rows", get(read_schema_rows))
                 .route("/schema/tables/{table}/profile", get(read_schema_profile))
-                .route(
-                    "/evals/{id}/annotation",
-                    axum::routing::patch(annotate_eval),
-                ),
+                .route("/runs/{id}/review", axum::routing::patch(review_run)),
         )
         .with_state(state)
 }
@@ -324,7 +295,7 @@ async fn api_meta() -> Json<Value> {
             "database_schema_version": crate::version::DATABASE_SCHEMA_VERSION,
             "tool_version": crate::version::TOOL_VERSION,
             "compatibility_policy": "fail_closed",
-            "compatibility": "Only documented /api/v1 routes are supported; unknown versions fail closed."
+            "compatibility": "Only documented /api/v2 routes are supported; unknown versions fail closed."
         }
     }))
 }
@@ -566,25 +537,15 @@ fn default_true() -> bool {
     true
 }
 
-async fn require_theme_approval_permission(
-    state: &AppState,
-    actor: &ActorContext,
-) -> Result<(), ApiError> {
-    if actor.is_agent || !db::has_permission(&state.pool, actor, "approve_themes").await? {
-        return Err(ApiError::Forbidden(
-            "approve_themes permission is required".into(),
-        ));
-    }
-    Ok(())
-}
-
 async fn create_theme(
     State(state): State<AppState>,
     Extension(actor): Extension<ActorContext>,
     headers: HeaderMap,
     Json(input): Json<CreateThemeRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    require_theme_approval_permission(&state, &actor).await?;
+    if actor.is_agent {
+        return Err(ApiError::Forbidden("Theme creation is human-only".into()));
+    }
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let title = required_text(input.title, "title", 300)?;
     let theme = db::create_theme(
@@ -601,89 +562,6 @@ async fn create_theme(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(json!({"data":theme}))))
-}
-
-#[derive(Debug, Deserialize)]
-struct ThemeProposalListQuery {
-    status: Option<String>,
-}
-
-async fn list_theme_proposals(
-    State(state): State<AppState>,
-    Extension(actor): Extension<ActorContext>,
-    Query(query): Query<ThemeProposalListQuery>,
-) -> Result<Json<Value>, ApiError> {
-    require_theme_approval_permission(&state, &actor).await?;
-    let status = query
-        .status
-        .map(|value| allowed(value, "status", &["pending", "approved", "rejected"]))
-        .transpose()?;
-    Ok(Json(json!({
-        "data":db::list_theme_proposals(&state.pool,status.as_deref()).await?
-    })))
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateThemeProposalRequest {
-    title: String,
-    slug: String,
-    description: String,
-    rationale: String,
-    evidence: Option<Value>,
-    provenance: Option<Value>,
-}
-
-async fn create_theme_proposal(
-    State(state): State<AppState>,
-    Extension(actor): Extension<ActorContext>,
-    headers: HeaderMap,
-    Json(input): Json<CreateThemeProposalRequest>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
-    let title = required_text(input.title, "title", 300)?;
-    let proposal = db::create_theme_proposal(
-        &state.pool,
-        &actor,
-        NewThemeProposal {
-            description: crate::domain::object_description(&title, input.description)?,
-            title,
-            slug: crate::domain::theme_slug(input.slug)?,
-            rationale: required_text(input.rationale, "rationale", 2000)?,
-            evidence: theme_evidence(input.evidence)?,
-            provenance: provenance(input.provenance)?,
-        },
-        &key,
-    )
-    .await?;
-    Ok((StatusCode::CREATED, Json(json!({"data":proposal}))))
-}
-
-fn theme_evidence(value: Option<Value>) -> Result<Value, ApiError> {
-    let value = value.unwrap_or_else(|| json!({}));
-    if !value.is_object() {
-        return Err(ApiError::BadRequest(
-            "evidence must be a JSON object".into(),
-        ));
-    }
-    if serde_json::to_vec(&value)
-        .map_err(|_| ApiError::BadRequest("evidence must be valid JSON".into()))?
-        .len()
-        > 32_768
-    {
-        return Err(ApiError::BadRequest(
-            "evidence must be at most 32768 encoded bytes".into(),
-        ));
-    }
-    Ok(value)
-}
-
-async fn read_theme_proposal(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!({
-        "data":db::get_theme_proposal(&state.pool,id).await?
-    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -741,48 +619,6 @@ async fn archive_theme_assignment(
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let data = db::archive_connection(&state.pool, &actor, id, input.expected_revision, Some(&key))
         .await?;
-    Ok(Json(json!({"data":data})))
-}
-
-#[derive(Debug, Deserialize)]
-struct ThemeDecisionRequest {
-    decision_reason: String,
-}
-
-async fn approve_theme_proposal(
-    State(state): State<AppState>,
-    Extension(actor): Extension<ActorContext>,
-    Path(id): Path<Uuid>,
-    headers: HeaderMap,
-    Json(input): Json<ThemeDecisionRequest>,
-) -> Result<Json<Value>, ApiError> {
-    require_theme_approval_permission(&state, &actor).await?;
-    let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
-    let data = db::approve_theme_proposal(
-        &state.pool,
-        &actor,
-        id,
-        &required_text(input.decision_reason, "decision_reason", 1000)?,
-        &key,
-    )
-    .await?;
-    Ok(Json(json!({"data":data})))
-}
-
-async fn reject_theme_proposal(
-    State(state): State<AppState>,
-    Extension(actor): Extension<ActorContext>,
-    Path(id): Path<Uuid>,
-    Json(input): Json<ThemeDecisionRequest>,
-) -> Result<Json<Value>, ApiError> {
-    require_theme_approval_permission(&state, &actor).await?;
-    let data = db::reject_theme_proposal(
-        &state.pool,
-        &actor,
-        id,
-        &required_text(input.decision_reason, "decision_reason", 1000)?,
-    )
-    .await?;
     Ok(Json(json!({"data":data})))
 }
 
@@ -1126,30 +962,27 @@ async fn update_source(
     Ok(Json(json!({"data":source})))
 }
 
-async fn list_source_contents(
+async fn list_artifacts(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        json!({"data":db::list_source_contents(&state.pool,id).await?}),
+        json!({"data":db::list_artifacts(&state.pool,id).await?}),
     ))
 }
 
 #[derive(Debug, Deserialize)]
-struct SourceContentQuery {
-    version: Option<i64>,
+struct ArtifactQuery {
+    artifact_id: Option<Uuid>,
     offset: Option<i64>,
     limit: Option<i64>,
 }
 
-async fn read_source_content(
+async fn read_artifact(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Query(query): Query<SourceContentQuery>,
+    Query(query): Query<ArtifactQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    if query.version.is_some_and(|v| v < 1) {
-        return Err(ApiError::BadRequest("version must be positive".into()));
-    }
     let offset = query.offset.unwrap_or(0);
     if offset < 0 {
         return Err(ApiError::BadRequest("offset must not be negative".into()));
@@ -1161,66 +994,76 @@ async fn read_source_content(
         ));
     }
     Ok(Json(
-        json!({"data":db::get_source_content_window(&state.pool,id,query.version,offset,limit).await?}),
+        json!({"data":db::get_artifact_window(&state.pool,id,query.artifact_id,offset,limit).await?}),
+    ))
+}
+
+async fn read_artifact_by_id(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<ArtifactQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let offset = query.offset.unwrap_or(0);
+    if offset < 0 {
+        return Err(ApiError::BadRequest("offset must not be negative".into()));
+    }
+    let limit = query.limit.unwrap_or(8000);
+    if !(1..=20_000).contains(&limit) {
+        return Err(ApiError::BadRequest(
+            "limit must be between 1 and 20000".into(),
+        ));
+    }
+    Ok(Json(
+        json!({"data":db::get_artifact_window_by_id(&state.pool,id,offset,limit).await?}),
     ))
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateSourceContentRequest {
-    expected_revision: i64,
-    content_kind: String,
-    normalized_text: String,
+struct CreateArtifactRequest {
+    expected_revision: Option<i64>,
+    kind: String,
+    title: Option<String>,
+    content: Option<String>,
+    uri: Option<String>,
+    media_type: Option<String>,
     language: Option<String>,
-    extraction_method: Option<String>,
-    extraction_version: Option<String>,
-    #[serde(alias = "artifact_reference")]
-    capture_artifact_reference: Option<String>,
-    coverage: Option<String>,
     captured_at: Option<String>,
-    locators: Option<Value>,
+    metadata: Option<Value>,
+    supersedes_artifact_id: Option<Uuid>,
 }
 
-async fn create_source_content(
+async fn create_artifact(
     State(state): State<AppState>,
     Extension(actor): Extension<ActorContext>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    Json(input): Json<CreateSourceContentRequest>,
+    Json(input): Json<CreateArtifactRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
-    let locators = input.locators.unwrap_or_else(|| json!({}));
-    if !locators.is_object() {
+    let metadata = input.metadata.unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
         return Err(ApiError::BadRequest(
-            "locators must be a JSON object".into(),
+            "metadata must be a JSON object".into(),
         ));
     }
-    let content = db::append_source_content(
+    let content = db::append_artifact(
         &state.pool,
         &actor,
         id,
-        NewSourceContent {
+        NewArtifact {
             expected_revision: input.expected_revision,
-            content_kind: allowed(input.content_kind, "content_kind", SOURCE_CONTENT_KINDS)?,
-            normalized_text: required_preserved_text(
-                input.normalized_text,
-                "normalized_text",
-                10_000_000,
-            )?,
+            kind: required_text(input.kind, "kind", 100)?,
+            title: optional_text(input.title, "title", 500)?,
+            content: input
+                .content
+                .map(|value| required_preserved_text(value, "content", 10_000_000))
+                .transpose()?,
+            uri: optional_text(input.uri, "uri", 2000)?,
+            media_type: optional_text(input.media_type, "media_type", 255)?,
             language: optional_text(input.language, "language", 35)?,
-            extraction_method: optional_text(input.extraction_method, "extraction_method", 200)?,
-            extraction_version: optional_text(input.extraction_version, "extraction_version", 100)?,
-            capture_artifact_reference: optional_text(
-                input.capture_artifact_reference,
-                "capture_artifact_reference",
-                1000,
-            )?,
-            coverage: allowed(
-                input.coverage.unwrap_or_else(|| "unknown".to_owned()),
-                "coverage",
-                &["complete", "partial", "unknown"],
-            )?,
             captured_at: parse_optional_timestamp(input.captured_at, "captured_at")?,
-            locators,
+            metadata,
+            supersedes_artifact_id: input.supersedes_artifact_id,
         },
         &key,
     )
@@ -1918,33 +1761,8 @@ async fn list_user_identities(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        json!({"data": db::list_external_identities(&state.pool, id).await?}),
+        json!({"data": db::list_user_identities(&state.pool, id).await?}),
     ))
-}
-
-#[derive(Debug, Deserialize)]
-struct CuratorRunListQuery {
-    limit: Option<i64>,
-}
-
-async fn list_curator_runs(
-    State(state): State<AppState>,
-    Query(query): Query<CuratorRunListQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let runs = crate::curator::list_runs(&state.pool, bounded_limit(query.limit))
-        .await
-        .map_err(map_curator_error)?;
-    Ok(Json(json!({"data": runs})))
-}
-
-async fn read_curator_run(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Value>, ApiError> {
-    let detail = crate::curator::run_detail(&state.pool, id)
-        .await
-        .map_err(map_curator_error)?;
-    Ok(Json(json!({"data": detail})))
 }
 
 async fn undo_curator_run(
@@ -1976,13 +1794,13 @@ struct EvalListQuery {
     limit: Option<i64>,
 }
 
-async fn list_evals(
+async fn list_runs(
     State(state): State<AppState>,
     Query(query): Query<EvalListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let data = crate::evals::list(
+    let data = crate::runs::list(
         &state.pool,
-        crate::evals::EvalFilter {
+        crate::runs::RunFilter {
             kind: query
                 .kind
                 .map(|value| {
@@ -2010,7 +1828,7 @@ async fn list_evals(
                 .transpose()?,
             verdict: query
                 .verdict
-                .map(|value| allowed(value, "verdict", crate::evals::VERDICTS))
+                .map(|value| allowed(value, "verdict", crate::runs::VERDICTS))
                 .transpose()?,
             component: optional_text(query.component, "component", 100)?,
             provider: optional_text(query.provider, "provider", 100)?,
@@ -2076,31 +1894,31 @@ async fn list_evals(
     Ok(Json(json!({"data": data})))
 }
 
-async fn read_eval(
+async fn read_run(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        json!({"data": crate::evals::detail(&state.pool, id).await?}),
+        json!({"data": crate::runs::detail(&state.pool, id).await?}),
     ))
 }
 
 #[derive(Debug, Deserialize)]
-struct EvalAnnotationRequest {
+struct RunReviewRequest {
     verdict: String,
     notes: Option<String>,
     expected_revision: i64,
 }
 
-async fn annotate_eval(
+async fn review_run(
     State(state): State<AppState>,
     Extension(actor): Extension<ActorContext>,
     Path(id): Path<Uuid>,
-    Json(input): Json<EvalAnnotationRequest>,
+    Json(input): Json<RunReviewRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let verdict = allowed(input.verdict, "verdict", crate::evals::VERDICTS)?;
+    let verdict = allowed(input.verdict, "verdict", crate::runs::VERDICTS)?;
     let notes = optional_text(input.notes, "notes", 4000)?;
-    let eval = crate::evals::annotate(
+    let run = crate::runs::review(
         &state.pool,
         id,
         &verdict,
@@ -2109,7 +1927,7 @@ async fn annotate_eval(
         input.expected_revision,
     )
     .await?;
-    Ok(Json(json!({"data": eval})))
+    Ok(Json(json!({"data": run})))
 }
 
 fn parse_timestamp(value: String, field: &'static str) -> Result<OffsetDateTime, ApiError> {

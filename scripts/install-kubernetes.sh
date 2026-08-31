@@ -46,7 +46,7 @@ done
 root="$(repository_root)"
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/centaur-context-install.XXXXXX")"
 trap 'rm -rf "$temporary"' EXIT
-sed "s|image: centaur-context:0.2.0|image: $image|" "$root/deploy/deployment.yaml" \
+sed "s|image: centaur-context:0.3.0|image: $image|" "$root/deploy/deployment.yaml" \
   >"$temporary/deployment.yaml"
 
 kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" --namespace "$CENTAUR_CONTEXT_NAMESPACE" \

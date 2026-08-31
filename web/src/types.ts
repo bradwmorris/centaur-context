@@ -1,4 +1,4 @@
-export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme" | "external_action";
+export type ObjectKind = "task" | "chat" | "user" | "entity" | "memory" | "source" | "note" | "theme";
 export type TaskStatus = "backlog" | "todo" | "doing" | "review" | "done" | "blocked";
 export type SchemaClassification = "canonical" | "subtype" | "supporting";
 export type SchemaViewMode = "map" | "rows";
@@ -134,25 +134,6 @@ export interface Theme {
   updated_at: string;
 }
 
-export interface ThemeProposal {
-  id: string;
-  title: string;
-  slug: string;
-  description: string;
-  rationale: string;
-  evidence: Record<string, unknown>;
-  provenance: Record<string, unknown>;
-  status: "pending" | "approved" | "rejected";
-  proposed_by_type: "centaur_agent";
-  proposed_by_id: string;
-  centaur_thread_key: string;
-  centaur_execution_id: string | null;
-  decision_reason: string | null;
-  resulting_theme_object_id: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface Task {
   object_id: string;
   title: string;
@@ -194,7 +175,7 @@ export interface Source {
   original_language: string | null;
   original_media_type: string | null;
   original_artifact_reference: string | null;
-  current_content_id: string | null;
+  current_artifact_id: string | null;
   created_at: string;
   updated_at: string;
   excerpt?: string | null;
@@ -236,24 +217,23 @@ export interface NotePage {
   next_cursor: string | null;
 }
 
-export interface SourceContentVersion {
+export interface Artifact {
   id: string;
-  source_object_id: string;
-  version: number;
-  content_kind: string;
+  object_id: string;
+  kind: string;
+  title: string | null;
+  uri: string | null;
+  media_type: string | null;
   language: string | null;
-  extraction_method: string | null;
-  extraction_version: string | null;
-  content_sha256: string;
+  sha256: string;
   size_bytes: number;
-  capture_artifact_reference: string | null;
-  coverage: "complete" | "partial" | "unknown";
+  metadata: Record<string, unknown>;
+  supersedes_artifact_id: string | null;
   captured_at: string | null;
-  locators: Record<string, unknown>;
-  recorded_at: string;
+  created_at: string;
 }
 
-export interface SourceContentWindow extends SourceContentVersion {
+export interface ArtifactWindow extends Artifact {
   text: string;
   offset: number;
   next_offset: number | null;
@@ -261,15 +241,19 @@ export interface SourceContentWindow extends SourceContentVersion {
 
 export interface ObjectEvent {
   id: string;
-  entity_type: string;
-  entity_id: string;
-  object_id: string;
+  run_id: string;
+  sequence: number;
+  target_type: "object" | "connection";
+  target_id: string;
   action: string;
   actor_type: string;
   actor_id: string;
-  centaur_thread_key: string | null;
-  centaur_execution_id: string | null;
-  changes: Record<string, unknown>;
+  idempotency_key: string | null;
+  from_revision: number | null;
+  to_revision: number;
+  before_state: Record<string, unknown> | null;
+  after_state: Record<string, unknown>;
+  reversible: boolean;
   created_at: string;
 }
 
@@ -294,13 +278,13 @@ export interface User {
   revision: number;
   provenance: Record<string, unknown>;
   user_kind: "human" | "agent";
+  identities: ExternalIdentity[];
   created_at: string;
   updated_at: string;
 }
 
 export interface ExternalIdentity {
   id: string;
-  user_object_id: string;
   provider: string;
   workspace_id: string;
   provider_user_id: string;
@@ -310,8 +294,6 @@ export interface ExternalIdentity {
   avatar_asset_filename: string | null;
   avatar_provenance: Record<string, unknown>;
   profile_refreshed_at: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
 export interface UserAttribution {
@@ -330,121 +312,34 @@ export interface ObjectVisual {
   users: UserAttribution[];
 }
 
-export interface CuratorRun {
+export type RunVerdict = "unreviewed" | "pass" | "mixed" | "fail";
+
+export interface Run {
   id: string;
-  chat_object_id: string;
-  first_message_id: string;
-  last_message_id: string;
-  trigger: "explicit_finish" | "inactivity";
-  status: "queued" | "running" | "completed" | "failed" | "reversed";
-  message_count: number;
-  idempotency_key: string;
-  attempts: number;
-  worker_id: string | null;
-  model: string | null;
-  prompt_version: string | null;
-  proposed_plan: Record<string, unknown> | null;
-  committed_plan: Record<string, unknown> | null;
-  result: Record<string, unknown> | null;
-  queued_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  reversed_at: string | null;
-  error_message: string | null;
-}
-
-export interface CuratorRunChange {
-  id: string;
-  sequence: number;
-  entity_type: "object" | "connection";
-  entity_id: string;
-  action: "created" | "updated";
-  before_state: Record<string, unknown> | null;
-  after_state: Record<string, unknown>;
-  after_revision: number;
-  created_at: string;
-  undone_at: string | null;
-}
-
-export interface CuratorRunDetail {
-  run: CuratorRun;
-  messages: ChatMessage[];
-  changes: CuratorRunChange[];
-}
-
-export type EvalVerdict = "unreviewed" | "pass" | "mixed" | "fail";
-
-export interface EvalUsageSource {
-  component: string | null;
-  provider: string | null;
-  model_id: string | null;
-  display_tier: string | null;
-  execution_type: string | null;
-  auth_mode: string | null;
-  billing_mode: string | null;
-  usage_status: string;
-}
-
-export interface EvalSummary {
-  id: string;
-  kind: "slack_interaction" | "human_mutation" | "system_mutation" | "legacy_import";
-  status: "open" | "running" | "completed" | "failed" | "reversed";
+  parent_run_id: string | null;
+  kind: string;
+  status: string;
   actor_type: string;
   actor_id: string;
   chat_object_id: string | null;
-  curator_run_id: string | null;
-  summary: string;
-  error_summary: string | null;
-  verdict: EvalVerdict;
-  notes: string | null;
-  annotated_by: string | null;
-  annotation_revision: number;
-  affected_object_count: number;
-  total_tokens: number;
-  estimated_micro_usd: number | null;
-  chatgpt_credit_microunits: number | null;
-  usage_sources: EvalUsageSource[];
+  idempotency_key: string;
+  input: Record<string, unknown>;
+  trace: Array<Record<string, unknown>>;
+  result: Record<string, unknown>;
+  consulted_object_ids: string[];
+  error: string | null;
+  verdict: RunVerdict;
+  review_notes: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  available_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
-  completed_at: string | null;
 }
 
-export interface EvalTraceEntry {
-  id: string;
-  eval_id: string;
-  sequence: number;
-  entry_type: string;
-  component: string | null;
-  provider: string | null;
-  model_id: string | null;
-  display_tier: string | null;
-  execution_type: string | null;
-  auth_mode: string | null;
-  upstream_service: string | null;
-  billing_mode: string | null;
-  reasoning_effort: string | null;
-  service_tier: string | null;
-  source_thread_id: string | null;
-  source_execution_id: string | null;
-  source_turn_id: string | null;
-  usage_status: "reported" | "partial" | "unavailable" | "not_applicable";
-  usage_missing_reason: string | null;
-  input_tokens: number | null;
-  output_tokens: number | null;
-  cache_creation_tokens: number | null;
-  cache_read_tokens: number | null;
-  reasoning_tokens: number | null;
-  total_tokens: number | null;
-  estimated_micro_usd: number | null;
-  chatgpt_credit_microunits: number | null;
-  api_equivalent_micro_usd: number | null;
-  rate_card_version: string | null;
-  pricing_snapshot: Record<string, unknown> | null;
-  facts: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface EvalObject {
+export interface RunObject {
   object_id: string;
   role: string;
   kind: ObjectKind;
@@ -452,8 +347,8 @@ export interface EvalObject {
   lifecycle: string;
 }
 
-export interface EvalDetail {
-  eval: EvalSummary;
-  trace: EvalTraceEntry[];
-  objects: EvalObject[];
+export interface RunDetail {
+  run: Run;
+  objects: RunObject[];
+  events: ObjectEvent[];
 }

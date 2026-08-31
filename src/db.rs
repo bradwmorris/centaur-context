@@ -95,18 +95,19 @@ pub struct Task {
 #[derive(Clone, Debug, FromRow, Serialize)]
 pub struct ObjectEvent {
     pub id: Uuid,
-    pub entity_type: String,
-    pub entity_id: Uuid,
-    pub object_id: Uuid,
+    pub run_id: Uuid,
+    pub sequence: i32,
+    pub target_type: String,
+    pub target_id: Uuid,
     pub action: String,
     pub actor_type: String,
     pub actor_id: String,
-    pub centaur_thread_key: Option<String>,
-    pub centaur_execution_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub from_revision: Option<i64>,
     pub to_revision: i64,
-    pub changes: Value,
+    pub before_state: Option<Value>,
+    pub after_state: Value,
+    pub reversible: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -136,6 +137,7 @@ pub struct User {
     pub revision: i64,
     pub provenance: Value,
     pub user_kind: String,
+    pub identities: Value,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -163,7 +165,7 @@ pub struct Source {
     pub original_language: Option<String>,
     pub original_media_type: Option<String>,
     pub original_artifact_reference: Option<String>,
-    pub current_content_id: Option<Uuid>,
+    pub current_artifact_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -171,25 +173,24 @@ pub struct Source {
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
-pub struct SourceContent {
+pub struct Artifact {
     pub id: Uuid,
-    pub source_object_id: Uuid,
-    pub version: i64,
-    pub content_kind: String,
+    pub object_id: Uuid,
+    pub kind: String,
+    pub title: Option<String>,
     #[serde(skip_serializing)]
-    pub normalized_text: String,
+    pub content: Option<String>,
+    pub uri: Option<String>,
+    pub media_type: Option<String>,
     pub language: Option<String>,
-    pub extraction_method: Option<String>,
-    pub extraction_version: Option<String>,
-    pub content_sha256: String,
+    pub sha256: String,
     pub size_bytes: i64,
-    pub capture_artifact_reference: Option<String>,
-    pub coverage: String,
+    pub metadata: Value,
+    pub supersedes_artifact_id: Option<Uuid>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub captured_at: Option<OffsetDateTime>,
-    pub locators: Value,
     #[serde(with = "time::serde::rfc3339")]
-    pub recorded_at: OffsetDateTime,
+    pub created_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -201,9 +202,9 @@ pub struct SourceSearchResult {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct SourceContentWindow {
+pub struct ArtifactWindow {
     #[serde(flatten)]
-    pub content: SourceContent,
+    pub content: Artifact,
     pub text: String,
     pub offset: i64,
     pub next_offset: Option<i64>,
@@ -255,37 +256,9 @@ pub struct Theme {
     pub updated_at: OffsetDateTime,
 }
 
-#[derive(Clone, Debug, FromRow, Serialize)]
-pub struct ThemeProposal {
-    pub id: Uuid,
-    pub title: String,
-    pub slug: String,
-    pub description: String,
-    pub rationale: String,
-    pub evidence: Value,
-    pub provenance: Value,
-    pub status: String,
-    pub proposed_by_type: String,
-    pub proposed_by_id: String,
-    pub centaur_thread_key: String,
-    pub centaur_execution_id: Option<String>,
-    pub idempotency_key: String,
-    pub decided_by_type: Option<String>,
-    pub decided_by_id: Option<String>,
-    pub decision_reason: Option<String>,
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub decided_at: Option<OffsetDateTime>,
-    pub resulting_theme_object_id: Option<Uuid>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: OffsetDateTime,
-}
-
-#[derive(Clone, Debug, FromRow, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ExternalIdentity {
     pub id: Uuid,
-    pub user_object_id: Uuid,
     pub provider: String,
     pub workspace_id: String,
     pub provider_user_id: String,
@@ -296,10 +269,6 @@ pub struct ExternalIdentity {
     pub avatar_provenance: Value,
     #[serde(with = "time::serde::rfc3339::option")]
     pub profile_refreshed_at: Option<OffsetDateTime>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -515,6 +484,8 @@ pub struct ContextConnection {
 #[derive(Clone, Debug, FromRow)]
 pub struct EmbeddingJob {
     pub object_id: Uuid,
+    pub model: String,
+    pub dimensions: i32,
     pub source_hash: String,
     pub format_version: String,
     pub input_mode: String,
@@ -593,16 +564,6 @@ pub struct NewTheme {
     pub protected: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct NewThemeProposal {
-    pub title: String,
-    pub description: String,
-    pub slug: String,
-    pub rationale: String,
-    pub evidence: Value,
-    pub provenance: Value,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct NoteChanges {
     pub title: Option<String>,
@@ -632,17 +593,17 @@ pub struct SourceChanges {
 }
 
 #[derive(Clone, Debug)]
-pub struct NewSourceContent {
-    pub expected_revision: i64,
-    pub content_kind: String,
-    pub normalized_text: String,
+pub struct NewArtifact {
+    pub expected_revision: Option<i64>,
+    pub kind: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub uri: Option<String>,
+    pub media_type: Option<String>,
     pub language: Option<String>,
-    pub extraction_method: Option<String>,
-    pub extraction_version: Option<String>,
-    pub capture_artifact_reference: Option<String>,
-    pub coverage: String,
     pub captured_at: Option<OffsetDateTime>,
-    pub locators: Value,
+    pub metadata: Value,
+    pub supersedes_artifact_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -814,7 +775,7 @@ pub async fn get_object(pool: &PgPool, id: Uuid) -> Result<Object, DbError> {
 const SOURCE_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
        o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
        s.published_at,s.published_at_precision,s.last_accessed_at,s.original_language,
-       s.original_media_type,s.original_artifact_reference,s.current_content_id,
+       s.original_media_type,s.original_artifact_reference,s.current_artifact_id,
        o.created_at,o.updated_at
 FROM sources s JOIN objects o ON o.id=s.object_id"#;
 
@@ -939,250 +900,6 @@ pub async fn list_theme_objects(
         .push(" ORDER BY o.updated_at DESC,o.id LIMIT ")
         .push_bind(limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
-}
-
-pub async fn has_permission(
-    pool: &PgPool,
-    actor: &ActorContext,
-    permission: &str,
-) -> Result<bool, DbError> {
-    Ok(sqlx::query_scalar(
-        r#"SELECT EXISTS(SELECT 1 FROM principal_permissions
-           WHERE principal_type=$1 AND principal_id=$2 AND permission=$3)"#,
-    )
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(permission)
-    .fetch_one(pool)
-    .await?)
-}
-
-pub async fn list_theme_proposals(
-    pool: &PgPool,
-    status: Option<&str>,
-) -> Result<Vec<ThemeProposal>, DbError> {
-    let mut query = QueryBuilder::<Postgres>::new("SELECT * FROM theme_proposals WHERE true");
-    if let Some(status) = status {
-        query.push(" AND status=").push_bind(status);
-    }
-    query.push(" ORDER BY created_at DESC,id");
-    Ok(query.build_query_as().fetch_all(pool).await?)
-}
-
-pub async fn get_theme_proposal(pool: &PgPool, id: Uuid) -> Result<ThemeProposal, DbError> {
-    sqlx::query_as("SELECT * FROM theme_proposals WHERE id=$1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(DbError::NotFound)
-}
-
-pub async fn create_theme_proposal(
-    pool: &PgPool,
-    actor: &ActorContext,
-    mut input: NewThemeProposal,
-    idempotency_key: &str,
-) -> Result<ThemeProposal, DbError> {
-    if !actor.is_agent {
-        return Err(DbError::Invalid(
-            "Theme proposals require an authenticated agent".into(),
-        ));
-    }
-    input.slug = theme_slug(input.slug)?;
-    validate_object_description(&input.title, &input.description)?;
-    if !input.evidence.is_object() || !input.provenance.is_object() {
-        return Err(DbError::Invalid(
-            "evidence and provenance must be JSON objects".into(),
-        ));
-    }
-    if let Some(existing) = sqlx::query_as::<_, ThemeProposal>(
-        r#"SELECT * FROM theme_proposals
-           WHERE proposed_by_type=$1 AND proposed_by_id=$2 AND idempotency_key=$3"#,
-    )
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(idempotency_key)
-    .fetch_optional(pool)
-    .await?
-    {
-        if existing.title == input.title
-            && existing.slug == input.slug
-            && existing.description == input.description
-            && existing.rationale == input.rationale
-            && existing.evidence == input.evidence
-            && existing.provenance == input.provenance
-        {
-            return Ok(existing);
-        }
-        return Err(DbError::Conflict);
-    }
-    let duplicate: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS(
-            SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
-            WHERE o.archived_at IS NULL AND (t.slug=$1 OR lower(o.title)=lower($2))
-        ) OR EXISTS(
-            SELECT 1 FROM theme_proposals
-            WHERE status='pending' AND (slug=$1 OR lower(title)=lower($2))
-        )"#,
-    )
-    .bind(&input.slug)
-    .bind(&input.title)
-    .fetch_one(pool)
-    .await?;
-    if duplicate {
-        return Err(DbError::Invalid(
-            "an active Theme or pending proposal already has this slug or title".into(),
-        ));
-    }
-    let proposal: ThemeProposal = sqlx::query_as(
-        r#"INSERT INTO theme_proposals
-        (id,title,slug,description,rationale,evidence,provenance,proposed_by_type,
-         proposed_by_id,centaur_thread_key,centaur_execution_id,idempotency_key)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(input.title)
-    .bind(input.slug)
-    .bind(input.description)
-    .bind(input.rationale)
-    .bind(input.evidence)
-    .bind(input.provenance)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(
-        actor
-            .centaur_thread_key
-            .as_deref()
-            .ok_or_else(|| DbError::Invalid("agent thread identity is required".into()))?,
-    )
-    .bind(&actor.centaur_execution_id)
-    .bind(idempotency_key)
-    .fetch_one(pool)
-    .await?;
-    Ok(proposal)
-}
-
-pub async fn approve_theme_proposal(
-    pool: &PgPool,
-    actor: &ActorContext,
-    proposal_id: Uuid,
-    decision_reason: &str,
-    idempotency_key: &str,
-) -> Result<Theme, DbError> {
-    if actor.is_agent || !has_permission(pool, actor, "approve_themes").await? {
-        return Err(DbError::Invalid(
-            "approve_themes permission is required".into(),
-        ));
-    }
-    let mut tx = pool.begin().await?;
-    let proposal: ThemeProposal =
-        sqlx::query_as("SELECT * FROM theme_proposals WHERE id=$1 FOR UPDATE")
-            .bind(proposal_id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(DbError::NotFound)?;
-    if proposal.status == "approved" {
-        let theme_id = proposal
-            .resulting_theme_object_id
-            .ok_or_else(|| DbError::Invalid("approved proposal has no Theme".into()))?;
-        tx.commit().await?;
-        return get_theme(pool, theme_id).await;
-    }
-    if proposal.status != "pending" {
-        return Err(DbError::Conflict);
-    }
-    let duplicate: bool = sqlx::query_scalar(
-        r#"SELECT EXISTS(
-            SELECT 1 FROM themes t JOIN objects o ON o.id=t.object_id
-            WHERE o.archived_at IS NULL AND (t.slug=$1 OR lower(o.title)=lower($2))
-        )"#,
-    )
-    .bind(&proposal.slug)
-    .bind(&proposal.title)
-    .fetch_one(&mut *tx)
-    .await?;
-    if duplicate {
-        return Err(DbError::Invalid(
-            "an active Theme already has this slug or title".into(),
-        ));
-    }
-    let theme_id = Uuid::new_v4();
-    let object_provenance = json!({
-        "source_type":"theme_proposal",
-        "source_ref":proposal.id.to_string(),
-        "note":proposal.rationale
-    });
-    sqlx::query(
-        r#"INSERT INTO objects
-        (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
-        VALUES ($1,'theme',$2,$3,true,$4,$5,$4,$5,$6)"#,
-    )
-    .bind(theme_id)
-    .bind(&proposal.title)
-    .bind(&proposal.description)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(object_provenance)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("INSERT INTO themes (object_id,slug) VALUES ($1,$2)")
-        .bind(theme_id)
-        .bind(&proposal.slug)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        r#"UPDATE theme_proposals SET status='approved',decided_by_type=$2,
-        decided_by_id=$3,decision_reason=$4,decided_at=now(),resulting_theme_object_id=$5,
-        updated_at=now() WHERE id=$1"#,
-    )
-    .bind(proposal_id)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(decision_reason)
-    .bind(theme_id)
-    .execute(&mut *tx)
-    .await?;
-    insert_event(
-        &mut tx,
-        actor,
-        "object",
-        theme_id,
-        theme_id,
-        "created",
-        Some(idempotency_key),
-        None,
-        1,
-        json!({"kind":"theme","title":proposal.title,"slug":proposal.slug,"theme_proposal_id":proposal.id,"protected":true}),
-    )
-    .await?;
-    tx.commit().await?;
-    get_theme(pool, theme_id).await
-}
-
-pub async fn reject_theme_proposal(
-    pool: &PgPool,
-    actor: &ActorContext,
-    proposal_id: Uuid,
-    decision_reason: &str,
-) -> Result<ThemeProposal, DbError> {
-    if actor.is_agent || !has_permission(pool, actor, "approve_themes").await? {
-        return Err(DbError::Invalid(
-            "approve_themes permission is required".into(),
-        ));
-    }
-    let proposal: ThemeProposal = sqlx::query_as(
-        r#"UPDATE theme_proposals SET status='rejected',decided_by_type=$2,
-        decided_by_id=$3,decision_reason=$4,decided_at=now(),updated_at=now()
-        WHERE id=$1 AND status='pending' RETURNING *"#,
-    )
-    .bind(proposal_id)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(decision_reason)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(DbError::Conflict)?;
-    Ok(proposal)
 }
 
 pub async fn list_notes(
@@ -1313,11 +1030,11 @@ pub async fn list_sources(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
            o.provenance,o.protected,s.source_kind,s.canonical_uri,s.byline,s.publisher,
            s.published_at,s.published_at_precision,s.last_accessed_at,s.original_language,
-           s.original_media_type,s.original_artifact_reference,s.current_content_id,
+           s.original_media_type,s.original_artifact_reference,s.current_artifact_id,
            o.created_at,o.updated_at,
-           CASE WHEN sc.id IS NULL THEN NULL ELSE substring(sc.normalized_text FROM 1 FOR 400) END AS excerpt
+           CASE WHEN sc.id IS NULL THEN NULL ELSE substring(sc.content FROM 1 FOR 400) END AS excerpt
            FROM sources s JOIN objects o ON o.id=s.object_id
-           LEFT JOIN source_contents sc ON sc.id=s.current_content_id
+           LEFT JOIN artifacts sc ON sc.id=s.current_artifact_id
            WHERE o.archived_at IS NULL"#,
     );
     if let Some(kind) = filter.source_kind {
@@ -1328,7 +1045,7 @@ pub async fn list_sources(
     }
     if let Some(search) = filter.query {
         query.push(
-            " AND to_tsvector('simple',concat_ws(' ',o.title,o.description,s.byline,s.publisher,sc.normalized_text)) @@ websearch_to_tsquery('simple',",
+            " AND to_tsvector('simple',concat_ws(' ',o.title,o.description,s.byline,s.publisher,sc.content)) @@ websearch_to_tsquery('simple',",
         )
         .push_bind(search)
         .push(")");
@@ -1506,138 +1223,181 @@ pub async fn update_source(
     get_source(pool, id).await
 }
 
-pub async fn list_source_contents(
-    pool: &PgPool,
-    source_id: Uuid,
-) -> Result<Vec<SourceContent>, DbError> {
-    get_source(pool, source_id).await?;
+pub async fn list_artifacts(pool: &PgPool, object_id: Uuid) -> Result<Vec<Artifact>, DbError> {
+    get_object(pool, object_id).await?;
     Ok(sqlx::query_as(
-        "SELECT * FROM source_contents WHERE source_object_id=$1 ORDER BY version DESC",
+        "SELECT * FROM artifacts WHERE object_id=$1 ORDER BY created_at DESC,id DESC",
     )
-    .bind(source_id)
+    .bind(object_id)
     .fetch_all(pool)
     .await?)
 }
 
-pub async fn get_source_content_window(
+pub async fn get_artifact_window(
     pool: &PgPool,
-    source_id: Uuid,
-    version: Option<i64>,
+    object_id: Uuid,
+    artifact_id: Option<Uuid>,
     offset: i64,
     limit: i64,
-) -> Result<SourceContentWindow, DbError> {
-    let content: SourceContent = if let Some(version) = version {
-        sqlx::query_as("SELECT * FROM source_contents WHERE source_object_id=$1 AND version=$2")
-            .bind(source_id).bind(version).fetch_optional(pool).await?
+) -> Result<ArtifactWindow, DbError> {
+    let artifact: Artifact = if let Some(artifact_id) = artifact_id {
+        sqlx::query_as("SELECT * FROM artifacts WHERE object_id=$1 AND id=$2")
+            .bind(object_id).bind(artifact_id).fetch_optional(pool).await?
     } else {
-        sqlx::query_as("SELECT sc.* FROM sources s JOIN source_contents sc ON sc.id=s.current_content_id WHERE s.object_id=$1")
-            .bind(source_id).fetch_optional(pool).await?
+        sqlx::query_as("SELECT sc.* FROM sources s JOIN artifacts sc ON sc.id=s.current_artifact_id WHERE s.object_id=$1")
+            .bind(object_id).fetch_optional(pool).await?
     }.ok_or(DbError::NotFound)?;
-    let total = content.normalized_text.chars().count() as i64;
+    artifact_window(artifact, offset, limit)
+}
+
+pub async fn get_artifact_window_by_id(
+    pool: &PgPool,
+    artifact_id: Uuid,
+    offset: i64,
+    limit: i64,
+) -> Result<ArtifactWindow, DbError> {
+    let artifact = sqlx::query_as("SELECT * FROM artifacts WHERE id=$1")
+        .bind(artifact_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(DbError::NotFound)?;
+    artifact_window(artifact, offset, limit)
+}
+
+fn artifact_window(artifact: Artifact, offset: i64, limit: i64) -> Result<ArtifactWindow, DbError> {
+    let body = artifact.content.as_deref().ok_or(DbError::NotFound)?;
+    let total = body.chars().count() as i64;
     if offset > total {
         return Err(DbError::Validation(ValidationError::Unsupported {
             field: "offset",
             value: offset.to_string(),
         }));
     }
-    let text: String = content
-        .normalized_text
+    let text: String = body
         .chars()
         .skip(offset as usize)
         .take(limit as usize)
         .collect();
     let end = offset + text.chars().count() as i64;
-    Ok(SourceContentWindow {
-        content,
+    Ok(ArtifactWindow {
+        content: artifact,
         text,
         offset,
         next_offset: (end < total).then_some(end),
     })
 }
 
-pub async fn append_source_content(
+pub async fn append_artifact(
     pool: &PgPool,
     actor: &ActorContext,
-    source_id: Uuid,
-    input: NewSourceContent,
+    object_id: Uuid,
+    input: NewArtifact,
     idempotency_key: &str,
-) -> Result<SourceContent, DbError> {
+) -> Result<Artifact, DbError> {
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
-        return sqlx::query_as("SELECT * FROM source_contents WHERE id=$1")
+        return sqlx::query_as("SELECT * FROM artifacts WHERE id=$1")
             .bind(id)
             .fetch_optional(pool)
             .await?
             .ok_or(DbError::NotFound);
     }
-    if input.normalized_text.is_empty() {
+    if input.content.as_deref().is_none_or(str::is_empty)
+        && input.uri.as_deref().is_none_or(str::is_empty)
+    {
         return Err(DbError::Validation(ValidationError::Required(
-            "normalized_text",
+            "content_or_uri",
         )));
     }
     let id = Uuid::new_v4();
-    let content_sha256 = format!("{:x}", Sha256::digest(input.normalized_text.as_bytes()));
-    let size_bytes = input.normalized_text.len() as i64;
+    let bytes = input
+        .content
+        .as_deref()
+        .unwrap_or_else(|| input.uri.as_deref().unwrap())
+        .as_bytes();
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let size_bytes = bytes.len() as i64;
     let mut tx = pool.begin().await?;
     let current_revision: Option<i64> = sqlx::query_scalar(
-        "SELECT revision FROM objects WHERE id=$1 AND kind='source' AND archived_at IS NULL FOR UPDATE",
-    ).bind(source_id).fetch_optional(&mut *tx).await?;
-    if let Some(existing) = sqlx::query_as(
-        "SELECT * FROM source_contents WHERE source_object_id=$1 AND content_sha256=$2",
+        "SELECT revision FROM objects WHERE id=$1 AND archived_at IS NULL FOR UPDATE",
     )
-    .bind(source_id)
-    .bind(&content_sha256)
+    .bind(object_id)
     .fetch_optional(&mut *tx)
-    .await?
+    .await?;
+    if let Some(existing) =
+        sqlx::query_as("SELECT * FROM artifacts WHERE object_id=$1 AND sha256=$2")
+            .bind(object_id)
+            .bind(&sha256)
+            .fetch_optional(&mut *tx)
+            .await?
     {
         tx.commit().await?;
         return Ok(existing);
     }
-    if current_revision != Some(input.expected_revision) {
+    if current_revision.is_none()
+        || input
+            .expected_revision
+            .is_some_and(|revision| Some(revision) != current_revision)
+    {
         return Err(DbError::Conflict);
     }
-    let version: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(max(version),0)+1 FROM source_contents WHERE source_object_id=$1",
-    )
-    .bind(source_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    let content: SourceContent = sqlx::query_as(
-        r#"INSERT INTO source_contents
-           (id,source_object_id,version,content_kind,normalized_text,language,extraction_method,
-            extraction_version,content_sha256,size_bytes,capture_artifact_reference,
-            coverage,captured_at,locators)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *"#,
+    if let Some(superseded) = input.supersedes_artifact_id {
+        let owns_superseded: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=$1 AND object_id=$2)",
+        )
+        .bind(superseded)
+        .bind(object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !owns_superseded {
+            return Err(DbError::Invalid(
+                "superseded Artifact belongs to another Object".into(),
+            ));
+        }
+    }
+    let artifact: Artifact = sqlx::query_as(
+        r#"INSERT INTO artifacts
+           (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
+            metadata,supersedes_artifact_id,captured_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *"#,
     )
     .bind(id)
-    .bind(source_id)
-    .bind(version)
-    .bind(&input.content_kind)
-    .bind(&input.normalized_text)
+    .bind(object_id)
+    .bind(&input.kind)
+    .bind(&input.title)
+    .bind(&input.content)
+    .bind(&input.uri)
+    .bind(&input.media_type)
     .bind(&input.language)
-    .bind(&input.extraction_method)
-    .bind(&input.extraction_version)
-    .bind(&content_sha256)
+    .bind(&sha256)
     .bind(size_bytes)
-    .bind(&input.capture_artifact_reference)
-    .bind(&input.coverage)
+    .bind(&input.metadata)
+    .bind(input.supersedes_artifact_id)
     .bind(input.captured_at)
-    .bind(&input.locators)
     .fetch_one(&mut *tx)
     .await?;
-    sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
-        .bind(source_id)
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(object_id)
         .bind(id)
         .execute(&mut *tx)
         .await?;
     let revision: i64 = sqlx::query_scalar(
         "UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1 RETURNING revision",
-    ).bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;
-    insert_event(&mut tx,actor,"source_content",id,source_id,"content_version_created",
-        Some(idempotency_key),Some(input.expected_revision),revision,
-        json!({"version":version,"content_kind":input.content_kind,"content_sha256":content_sha256,"size_bytes":size_bytes})
-    ).await?;
+    ).bind(object_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        object_id,
+        object_id,
+        "artifact_attached",
+        Some(idempotency_key),
+        current_revision,
+        revision,
+        json!({"artifact_id":id,"kind":input.kind,"sha256":sha256,"size_bytes":size_bytes}),
+    )
+    .await?;
     tx.commit().await?;
-    Ok(content)
+    Ok(artifact)
 }
 
 pub async fn create_object(
@@ -2242,7 +2002,7 @@ pub async fn update_task(
 
 pub async fn list_events(pool: &PgPool, object_id: Uuid) -> Result<Vec<ObjectEvent>, DbError> {
     Ok(sqlx::query_as(
-        "SELECT * FROM object_events WHERE object_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100",
+        "SELECT * FROM object_events WHERE target_type='object' AND target_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100",
     )
     .bind(object_id)
     .fetch_all(pool)
@@ -2278,7 +2038,7 @@ pub async fn list_chat_messages(
 pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError> {
     Ok(sqlx::query_as(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,
-                  u.user_kind,o.created_at,o.updated_at
+                  u.user_kind,u.identities,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id
            WHERE o.archived_at IS NULL ORDER BY o.updated_at DESC,o.id LIMIT $1"#,
     )
@@ -2290,7 +2050,7 @@ pub async fn list_users(pool: &PgPool, limit: i64) -> Result<Vec<User>, DbError>
 pub async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, DbError> {
     sqlx::query_as(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,
-                  u.user_kind,o.created_at,o.updated_at
+                  u.user_kind,u.identities,o.created_at,o.updated_at
            FROM users u JOIN objects o ON o.id=u.object_id WHERE o.id=$1"#,
     )
     .bind(id)
@@ -2299,21 +2059,13 @@ pub async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, DbError> {
     .ok_or(DbError::NotFound)
 }
 
-pub async fn list_external_identities(
+pub async fn list_user_identities(
     pool: &PgPool,
     user_object_id: Uuid,
 ) -> Result<Vec<ExternalIdentity>, DbError> {
-    get_user(pool, user_object_id).await?;
-    Ok(sqlx::query_as(
-        r#"SELECT id,user_object_id,provider,workspace_id,provider_user_id,display_name,avatar_url,
-                  avatar_asset_sha256,avatar_asset_filename,avatar_provenance,
-                  profile_refreshed_at,created_at,updated_at
-           FROM external_identities WHERE user_object_id=$1
-           ORDER BY provider,workspace_id,provider_user_id"#,
-    )
-    .bind(user_object_id)
-    .fetch_all(pool)
-    .await?)
+    let user = get_user(pool, user_object_id).await?;
+    serde_json::from_value(user.identities)
+        .map_err(|error| DbError::Invalid(format!("invalid embedded User identities: {error}")))
 }
 
 pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbError> {
@@ -2381,18 +2133,21 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
            SELECT a.object_id,a.user_object_id,uo.title,u.user_kind,a.role,
                   avatar.avatar_url,
                   CASE WHEN avatar.avatar_asset_sha256 IS NOT NULL THEN
-                    '/api/v1/identity-assets/' || avatar.avatar_asset_sha256 || '/' || avatar.avatar_asset_filename
+                    '/api/v2/identity-assets/' || avatar.avatar_asset_sha256 || '/' || avatar.avatar_asset_filename
                   ELSE NULL END AS avatar_asset_url
            FROM attribution a
            JOIN users u ON u.object_id=a.user_object_id
            JOIN objects uo ON uo.id=u.object_id
            LEFT JOIN LATERAL (
-             SELECT e.avatar_url,e.avatar_asset_sha256,e.avatar_asset_filename
-             FROM external_identities e
-             WHERE e.user_object_id=u.object_id
-               AND (e.avatar_url IS NOT NULL OR e.avatar_asset_sha256 IS NOT NULL)
-             ORDER BY (e.avatar_asset_sha256 IS NOT NULL) DESC,
-                      (e.provider='slack') DESC,e.updated_at DESC LIMIT 1
+             SELECT e.value->>'avatar_url' AS avatar_url,
+                    e.value->>'avatar_asset_sha256' AS avatar_asset_sha256,
+                    e.value->>'avatar_asset_filename' AS avatar_asset_filename
+             FROM jsonb_array_elements(u.identities) e(value)
+             WHERE e.value->>'avatar_url' IS NOT NULL
+                OR e.value->>'avatar_asset_sha256' IS NOT NULL
+             ORDER BY (e.value->>'avatar_asset_sha256' IS NOT NULL) DESC,
+                      (e.value->>'provider'='slack') DESC,
+                      (e.value->>'profile_refreshed_at') DESC NULLS LAST LIMIT 1
            ) avatar ON true
            ORDER BY a.object_id,
              CASE a.role WHEN 'owner' THEN 1 WHEN 'source author' THEN 2
@@ -2516,7 +2271,7 @@ pub async fn context_subtypes(
                         'published_at_precision',s.published_at_precision,
                         'original_language',s.original_language,
                         'original_media_type',s.original_media_type,
-                        'current_content_id',s.current_content_id))
+                        'current_artifact_id',s.current_artifact_id))
                     WHEN 'note' THEN jsonb_build_object(
                         'kind','note','content_format',n.content_format,
                         'content_excerpt',substring(n.content FROM 1 FOR 400))
@@ -2531,9 +2286,10 @@ pub async fn context_subtypes(
            LEFT JOIN sources s ON s.object_id=o.id
            LEFT JOIN notes n ON n.object_id=o.id
            LEFT JOIN LATERAL (
-               SELECT e.display_name FROM external_identities e
-               WHERE e.user_object_id=o.id AND e.display_name IS NOT NULL
-               ORDER BY e.updated_at DESC,e.id LIMIT 1
+               SELECT identity->>'display_name' display_name
+               FROM jsonb_array_elements(u.identities) identity
+               WHERE identity->>'display_name' IS NOT NULL
+               ORDER BY identity->>'profile_refreshed_at' DESC NULLS LAST LIMIT 1
            ) identity ON true
            WHERE o.id=ANY($1::uuid[])"#,
     )
@@ -2649,9 +2405,10 @@ pub async fn semantic_candidates(
     query
         .push(
             r#"
-           FROM object_embeddings e
+           FROM embeddings e
            JOIN objects o ON o.id=e.object_id
            WHERE o.archived_at IS NULL
+             AND e.status='completed'
              AND e.source_hash=object_embedding_source_hash(e.format_version,o.kind,o.title,o.description)
              AND e.model="#,
         )
@@ -2790,9 +2547,9 @@ pub async fn ensure_embedding_index(pool: &PgPool, dimensions: i32) -> Result<()
         )));
     }
     let statement = format!(
-        "CREATE INDEX IF NOT EXISTS object_embeddings_hnsw_{dimensions}_idx \
-         ON object_embeddings USING hnsw ((embedding::vector({dimensions})) vector_cosine_ops) \
-         WHERE dimensions={dimensions}"
+        "CREATE INDEX IF NOT EXISTS embeddings_hnsw_{dimensions}_idx \
+         ON embeddings USING hnsw ((embedding::vector({dimensions})) vector_cosine_ops) \
+         WHERE status='completed' AND dimensions={dimensions}"
     );
     sqlx::query(&statement).execute(pool).await?;
     Ok(())
@@ -2806,20 +2563,25 @@ pub async fn queue_missing_embeddings(
     input_mode: &str,
 ) -> Result<u64, DbError> {
     Ok(sqlx::query(
-        r#"INSERT INTO object_embedding_jobs
-             (object_id,source_hash,format_version,input_mode)
-           SELECT o.id, object_embedding_source_hash($2,o.kind,o.title,o.description),$2,$3
+        r#"INSERT INTO embeddings
+             (object_id,model,dimensions,source_hash,format_version,input_mode,status)
+           SELECT o.id,$1,$4,object_embedding_source_hash($2,o.kind,o.title,o.description),$2,$3,'pending'
            FROM objects o
-           LEFT JOIN object_embeddings e
+           LEFT JOIN embeddings e
              ON e.object_id=o.id AND e.model=$1
             AND e.dimensions=$4
             AND e.format_version=$2 AND e.input_mode=$3
             AND e.source_hash=object_embedding_source_hash($2,o.kind,o.title,o.description)
            WHERE e.object_id IS NULL
-           ON CONFLICT (object_id) DO UPDATE
+           ON CONFLICT (object_id,model) DO UPDATE
            SET source_hash=EXCLUDED.source_hash,format_version=EXCLUDED.format_version,
-               input_mode=EXCLUDED.input_mode,status='pending', attempts=0,
-               available_at=now(), started_at=NULL, last_error=NULL, updated_at=now()"#,
+               dimensions=EXCLUDED.dimensions,input_mode=EXCLUDED.input_mode,
+               status='pending',attempts=0,available_at=now(),started_at=NULL,
+               completed_at=NULL,last_error=NULL,embedding=NULL,updated_at=now()
+           WHERE embeddings.source_hash IS DISTINCT FROM EXCLUDED.source_hash
+              OR embeddings.dimensions IS DISTINCT FROM EXCLUDED.dimensions
+              OR embeddings.format_version IS DISTINCT FROM EXCLUDED.format_version
+              OR embeddings.input_mode IS DISTINCT FROM EXCLUDED.input_mode"#,
     )
     .bind(model)
     .bind(format_version)
@@ -2833,22 +2595,22 @@ pub async fn queue_missing_embeddings(
 pub async fn claim_embedding_job(pool: &PgPool) -> Result<Option<EmbeddingJob>, DbError> {
     Ok(sqlx::query_as(
         r#"WITH recovered AS (
-               UPDATE object_embedding_jobs
+               UPDATE embeddings
                SET status='failed', started_at=NULL, available_at=now(),
                    last_error='worker lease expired', updated_at=now()
                WHERE status='running' AND started_at < now() - interval '5 minutes'
            ), claimed AS (
-               UPDATE object_embedding_jobs j
+               UPDATE embeddings j
                SET status='running', attempts=attempts+1, started_at=now(), updated_at=now()
                WHERE j.object_id=(
-                   SELECT object_id FROM object_embedding_jobs
+                   SELECT object_id FROM embeddings
                    WHERE status IN ('pending','failed') AND attempts < 5 AND available_at <= now()
                    ORDER BY available_at, updated_at, object_id
                    LIMIT 1 FOR UPDATE SKIP LOCKED
                )
-               RETURNING j.object_id,j.source_hash,j.format_version,j.input_mode
+               RETURNING j.object_id,j.model,j.dimensions,j.source_hash,j.format_version,j.input_mode
            )
-           SELECT claimed.object_id,claimed.source_hash,claimed.format_version,
+           SELECT claimed.object_id,claimed.model,claimed.dimensions,claimed.source_hash,claimed.format_version,
                   claimed.input_mode,o.kind,o.title,o.description
            FROM claimed JOIN objects o ON o.id=claimed.object_id"#,
     )
@@ -2865,15 +2627,11 @@ pub async fn complete_embedding_job(
     input_mode: &str,
     vector: &[f32],
 ) -> Result<(), DbError> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        r#"INSERT INTO object_embeddings
-           (object_id,model,dimensions,format_version,input_mode,source_hash,embedding,embedded_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7::vector,now())
-           ON CONFLICT (object_id,model) DO UPDATE
-           SET dimensions=EXCLUDED.dimensions,format_version=EXCLUDED.format_version,
-               input_mode=EXCLUDED.input_mode,source_hash=EXCLUDED.source_hash,
-               embedding=EXCLUDED.embedding,embedded_at=now()"#,
+    let updated = sqlx::query(
+        r#"UPDATE embeddings SET status='completed',embedding=$7::vector,
+           completed_at=now(),started_at=NULL,last_error=NULL,updated_at=now()
+           WHERE object_id=$1 AND model=$2 AND dimensions=$3 AND format_version=$4
+             AND input_mode=$5 AND source_hash=$6 AND status='running'"#,
     )
     .bind(job.object_id)
     .bind(model)
@@ -2882,16 +2640,11 @@ pub async fn complete_embedding_job(
     .bind(input_mode)
     .bind(&job.source_hash)
     .bind(vector_literal(vector))
-    .execute(&mut *tx)
+    .execute(pool)
     .await?;
-    sqlx::query(
-        "DELETE FROM object_embedding_jobs WHERE object_id=$1 AND source_hash=$2 AND status='running'",
-    )
-    .bind(job.object_id)
-    .bind(&job.source_hash)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
+    if updated.rows_affected() != 1 {
+        return Err(DbError::Conflict);
+    }
     Ok(())
 }
 
@@ -2901,7 +2654,7 @@ pub async fn fail_embedding_job(
     error: &str,
 ) -> Result<(), DbError> {
     sqlx::query(
-        r#"UPDATE object_embedding_jobs
+        r#"UPDATE embeddings
            SET status='failed', started_at=NULL,
                available_at=now() + make_interval(secs => LEAST(3600, 30 * (2 ^ LEAST(attempts, 7)))),
                last_error=left($2,1000), updated_at=now()
@@ -2929,7 +2682,7 @@ async fn idempotent_entity(
     key: &str,
 ) -> Result<Option<Uuid>, DbError> {
     Ok(sqlx::query_scalar(
-        "SELECT entity_id FROM object_events WHERE actor_type=$1 AND actor_id=$2 AND idempotency_key=$3",
+        "SELECT target_id FROM object_events WHERE actor_type=$1 AND actor_id=$2 AND idempotency_key=$3",
     )
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
@@ -2951,28 +2704,112 @@ async fn insert_event(
     to_revision: i64,
     changes: Value,
 ) -> Result<(), DbError> {
+    let target_type = if entity_type == "connection" {
+        "connection"
+    } else {
+        "object"
+    };
+    let target_id = if target_type == "connection" {
+        entity_id
+    } else {
+        object_id
+    };
+    let run_id = Uuid::new_v4();
+    let run_key = idempotency_key
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| run_id.to_string());
+    let input = json!({
+        "centaur_thread_key": actor.centaur_thread_key,
+        "centaur_execution_id": actor.centaur_execution_id,
+        "target_type": target_type,
+        "target_id": target_id,
+        "action": action
+    });
+    sqlx::query(
+        r#"INSERT INTO runs
+           (id,kind,status,actor_type,actor_id,idempotency_key,input,result,completed_at)
+           VALUES ($1,'mutation','completed',$2,$3,$4,$5,$6,now())"#,
+    )
+    .bind(run_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(format!(
+        "{}:{}:{}",
+        actor.actor_type, actor.actor_id, run_key
+    ))
+    .bind(input)
+    .bind(json!({"affected_object_ids":[object_id],"summary":changes}))
+    .execute(&mut **tx)
+    .await?;
+    let before_state: Option<Value> = if from_revision.is_some() {
+        sqlx::query_scalar(
+            "SELECT after_state FROM object_events WHERE target_type=$1 AND target_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1",
+        )
+        .bind(target_type)
+        .bind(target_id)
+        .fetch_optional(&mut **tx)
+        .await?
+    } else {
+        None
+    };
+    let after_state = target_snapshot(tx, target_type, target_id).await?;
     sqlx::query(
         r#"INSERT INTO object_events
-           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
-            centaur_thread_key,centaur_execution_id,idempotency_key,from_revision,to_revision,changes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            idempotency_key,from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,now())"#,
     )
     .bind(Uuid::new_v4())
-    .bind(entity_type)
-    .bind(entity_id)
-    .bind(object_id)
+    .bind(run_id)
+    .bind(target_type)
+    .bind(target_id)
     .bind(action)
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
-    .bind(&actor.centaur_thread_key)
-    .bind(&actor.centaur_execution_id)
     .bind(idempotency_key)
     .bind(from_revision)
     .bind(to_revision)
-    .bind(changes)
+    .bind(before_state)
+    .bind(after_state)
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+pub(crate) async fn target_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    target_type: &str,
+    target_id: Uuid,
+) -> Result<Value, DbError> {
+    if target_type == "connection" {
+        return Ok(
+            sqlx::query_scalar("SELECT to_jsonb(c) FROM connections c WHERE id=$1")
+                .bind(target_id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .unwrap_or_else(|| json!({"id":target_id,"archived":true})),
+        );
+    }
+    Ok(sqlx::query_scalar(
+        r#"SELECT to_jsonb(o)
+          || jsonb_build_object('subtype', CASE o.kind
+            WHEN 'task' THEN (SELECT to_jsonb(t)-'object_id' FROM tasks t WHERE t.object_id=o.id)
+            WHEN 'chat' THEN (SELECT to_jsonb(c)-'object_id' FROM chats c WHERE c.object_id=o.id)
+            WHEN 'user' THEN (SELECT to_jsonb(u)-'object_id' FROM users u WHERE u.object_id=o.id)
+            WHEN 'entity' THEN (SELECT to_jsonb(e)-'object_id' FROM entities e WHERE e.object_id=o.id)
+            WHEN 'memory' THEN (SELECT to_jsonb(m)-'object_id' FROM memories m WHERE m.object_id=o.id)
+            WHEN 'source' THEN (SELECT to_jsonb(s)-'object_id' FROM sources s WHERE s.object_id=o.id)
+            WHEN 'note' THEN (SELECT to_jsonb(n)-'object_id' FROM notes n WHERE n.object_id=o.id)
+            WHEN 'theme' THEN (SELECT to_jsonb(t)-'object_id' FROM themes t WHERE t.object_id=o.id)
+          END)
+          || jsonb_build_object('artifacts',COALESCE(
+            (SELECT jsonb_agg(to_jsonb(a)-'content' ORDER BY a.created_at,a.id) FROM artifacts a WHERE a.object_id=o.id),'[]'::jsonb))
+          FROM objects o WHERE o.id=$1"#,
+    )
+    .bind(target_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .unwrap_or_else(|| json!({"id":target_id,"archived":true})))
 }
 
 #[cfg(test)]

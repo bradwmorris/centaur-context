@@ -43,7 +43,7 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     let token = "s".repeat(32);
     let key = format!("enyu-source-contract-{}", uuid::Uuid::new_v4());
     let payload = json!({
-        "version":"centaur-context-source-intake-v1",
+        "version":"centaur-context-source-intake-v2",
         "idempotency_key":key,
         "source":{
             "title":"A durable Enyu research source",
@@ -79,7 +79,7 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
 
     let validated = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/validate", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/validate", &token, &payload))
         .await
         .unwrap();
     assert_eq!(validated.status(), StatusCode::OK);
@@ -96,7 +96,7 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
 
     let committed = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/commit", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/commit", &token, &payload))
         .await
         .unwrap();
     assert_eq!(committed.status(), StatusCode::CREATED);
@@ -106,14 +106,14 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
 
     let replayed = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/commit", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/commit", &token, &payload))
         .await
         .unwrap();
     assert_eq!(replayed.status(), StatusCode::OK);
 
     let status = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/status", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/status", &token, &payload))
         .await
         .unwrap();
     assert_eq!(status.status(), StatusCode::OK);
@@ -123,8 +123,8 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     assert_eq!(status_body["data"]["lexical_ready"], true);
 
     let stored: (String, String, bool) = sqlx::query_as(
-        r#"SELECT o.title,c.normalized_text,o.protected
-           FROM objects o JOIN source_contents c ON c.source_object_id=o.id
+        r#"SELECT o.title,c.content,o.protected
+           FROM objects o JOIN artifacts c ON c.object_id=o.id
            WHERE o.id=$1::uuid"#,
     )
     .bind(object_id)
@@ -140,7 +140,7 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     let conflict = app
         .clone()
         .oneshot(request(
-            "/api/v1/source-intake/commit",
+            "/api/v2/source-intake/commit",
             &token,
             &conflicting,
         ))
@@ -152,7 +152,7 @@ async fn validates_commits_replays_conflicts_and_reports_retrieval_readiness() {
     duplicate_identity["idempotency_key"] = json!(format!("{key}-duplicate"));
     let duplicate = app
         .oneshot(request(
-            "/api/v1/source-intake/validate",
+            "/api/v2/source-intake/validate",
             &token,
             &duplicate_identity,
         ))
@@ -196,7 +196,7 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
     tx.commit().await.unwrap();
 
     let payload = json!({
-        "version":"centaur-context-source-intake-v1",
+        "version":"centaur-context-source-intake-v2",
         "idempotency_key":key,
         "source":{
             "title":"A captured Enyu research source",
@@ -234,7 +234,7 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
 
     let validated = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/validate", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/validate", &token, &payload))
         .await
         .unwrap();
     assert_eq!(validated.status(), StatusCode::OK);
@@ -247,12 +247,12 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
 
     let committed = app
         .clone()
-        .oneshot(request("/api/v1/source-intake/commit", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/commit", &token, &payload))
         .await
         .unwrap();
     assert_eq!(committed.status(), StatusCode::CREATED);
     let replayed = app
-        .oneshot(request("/api/v1/source-intake/commit", &token, &payload))
+        .oneshot(request("/api/v2/source-intake/commit", &token, &payload))
         .await
         .unwrap();
     assert_eq!(replayed.status(), StatusCode::OK);
@@ -261,7 +261,7 @@ async fn adopts_only_an_incomplete_unprotected_curator_source() {
         r#"SELECT o.title,o.protected,count(c.id),o.provenance->>'source_type',
                   o.provenance->'adopted_curator_provenance'->>'source_type'
            FROM objects o JOIN sources s ON s.object_id=o.id
-           JOIN source_contents c ON c.source_object_id=o.id
+           JOIN artifacts c ON c.object_id=o.id
            WHERE o.id=$1 GROUP BY o.id"#,
     )
     .bind(placeholder_id)

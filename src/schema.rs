@@ -758,12 +758,12 @@ mod tests {
     #[test]
     fn cursor_round_trip_is_opaque_and_lossless() {
         let cursor = RowCursor {
-            table: "eval_objects".to_owned(),
+            table: "object_events".to_owned(),
             fingerprint: "abc123".to_owned(),
             keys: vec!["first".to_owned(), "second".to_owned()],
         };
         let encoded = encode_cursor(&cursor).unwrap();
-        assert!(!encoded.contains("eval_objects"));
+        assert!(!encoded.contains("object_events"));
         let decoded = decode_cursor(&encoded).unwrap();
         assert_eq!(decoded.table, cursor.table);
         assert_eq!(decoded.fingerprint, cursor.fingerprint);

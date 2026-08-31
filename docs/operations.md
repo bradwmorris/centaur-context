@@ -1,4 +1,4 @@
-# Operate Centaur Context 0.2.0
+# Operate Centaur Context 0.3.0
 
 All database scripts refuse databases other than `centaur_context`, the legacy
 `centaur_os`, or explicitly confirmed test names containing
@@ -51,7 +51,7 @@ legacy dump that predates the JSON sidecar, add
 
 ## Upgrade
 
-1. Record `/api/v1/meta`, image identity, Object count, and current migration
+1. Record `/api/v2/meta`, image identity, Object count, and current migration
    version.
 2. Create and verify a backup.
 3. Build or obtain the reviewed new image by immutable identity.
@@ -80,22 +80,22 @@ The standard Python client exposes `validate_intake_batch`,
 `commit_intake_batch`, and `intake_batch_status`. Requests require the intake
 bearer token plus `X-Centaur-Principal-Id` and `X-Centaur-Thread-Key`. A batch
 may contain at most 500 total resources and 12 MiB of JSON across canonical
-Objects and their User, Entity, Source, or Note subtypes, external identities,
-immutable Source content versions, and explained Connections. The server
+Objects and their User, Entity, Source, or Note subtypes, embedded User
+identities, immutable Artifacts, and explained Connections. The server
 validates all references and limits before writing anything.
 
 Use the three endpoints in this order:
 
-1. `POST /api/v1/intake/batches/validate` checks the entire batch and returns
+1. `POST /api/v2/intake/batches/validate` checks the entire batch and returns
    its deterministic ID map, payload hash, expected counts, and `writes: 0`.
-2. `POST /api/v1/intake/batches/commit` writes the whole batch in one database
+2. `POST /api/v2/intake/batches/commit` writes the whole batch in one database
    transaction. Stable UUIDv5 IDs and Object Event idempotency keys make an
    exact retry a replay; a changed payload under the same batch ID fails.
-3. `GET /api/v1/intake/batches/{batch_id}` reads the immutable Object Event
+3. `GET /api/v2/intake/batches/{batch_id}` reads the immutable Object Event
    ledger checkpoint. It does not depend on a new migration-ledger table.
 
 For a destructive replacement, stop every destination writer, verify a backup,
-reset only the explicitly confirmed Context database, and compare `/api/v1/schema`
+reset only the explicitly confirmed Context database, and compare `/api/v2/schema`
 before and after bootstrap. Validate first, commit once, replay once, and
 reconcile Objects, subtypes, identities, Source hashes and current-content
 pointers, Connections, protection flags, and Object Events against the private
@@ -107,19 +107,19 @@ After reconciliation, remove `INTAKE_API_TOKEN`,
 `INTAKE_APPROVED_MANIFEST_SHA256`, and `INTAKE_ADDR`, restart the workload, and
 prove port 8085 no longer accepts connections before normal writers resume.
 
-## Evals and trace accounting
+## Runs, trace accounting, and mutation history
 
-The trusted human listener exposes `/api/v1/evals` and the **Evals** UI. Agent,
-Curator, and Slack-ingestion listeners do not expose eval reads or annotation.
+The trusted human listener exposes `/api/v2/runs` and the single **Runs** UI.
+Agent, Curator, and Slack-ingestion listeners do not expose review reads or annotation.
 Slack ingestion accepts bounded normalized `agent_usage` alongside the
 interaction snapshot and associates it with the current interaction window;
 retries are deduplicated by component, source execution, and source turn.
 
-Object and Connection triggers attach every runtime mutation to the active Eval.
-When a writer does not set an explicit transaction context, the database creates
-an explicitly classified standalone human or system Eval rather than leaving an
-untraced mutation. Migration 9 groups pre-existing Objects under one legacy
-import Eval and does not fabricate historical usage or cost.
+Every runtime Object and Connection mutation writes exactly one authoritative
+`object_events` entry owned by a Run. Standalone human/system mutations create a
+small `mutation` Run. Execution steps and usage live in `runs.trace`; inputs in
+`runs.input`; terminal output and scores in `runs.result`. Undo writes a
+compensating child Run and never duplicates or rewrites history.
 
 Treat prices as deployment-owned configuration. Metered estimates must carry a
 versioned rate-card snapshot and are stored in integer micro-USD. ChatGPT

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CENTAUR_CONTEXT_VERSION="0.2.0"
+CENTAUR_CONTEXT_VERSION="0.3.0"
 
 die() {
   printf 'centaur-context: %s\n' "$*" >&2

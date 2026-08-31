@@ -145,22 +145,21 @@ pub struct SourceFields {
     pub original_language: Option<String>,
     pub original_media_type: Option<String>,
     pub original_artifact_reference: Option<String>,
-    pub content: Option<SourceContentFields>,
+    pub content: Option<ArtifactFields>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SourceContentFields {
-    pub content_kind: String,
-    pub normalized_text: String,
+pub struct ArtifactFields {
+    pub kind: String,
+    pub title: Option<String>,
+    pub content: String,
+    pub uri: Option<String>,
+    pub media_type: Option<String>,
     pub language: Option<String>,
-    pub extraction_method: Option<String>,
-    pub extraction_version: Option<String>,
-    pub capture_artifact_reference: Option<String>,
-    pub coverage: String,
     #[serde(with = "time::serde::rfc3339::option", default)]
     pub captured_at: Option<OffsetDateTime>,
     #[serde(default = "empty_object")]
-    pub locators: Value,
+    pub metadata: Value,
 }
 
 fn empty_object() -> Value {
@@ -296,7 +295,7 @@ pub fn router(state: AppState, token: String) -> Router {
         .route("/healthz", get(|| async { Json(json!({"ok": true})) }))
         .route("/readyz", get(ready))
         .nest(
-            "/api/v1/curator",
+            "/api/v2/curator",
             Router::new()
                 .route("/runs/{id}", get(read_run))
                 .route("/runs/{id}/reconcile", post(reconcile_run))
@@ -372,10 +371,15 @@ async fn undo_run(
 
 pub async fn get_run(pool: &PgPool, id: Uuid) -> Result<CuratorRun, CuratorError> {
     sqlx::query_as(
-        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
-                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  queued_at,started_at,completed_at,reversed_at,error_message
-           FROM curator_runs WHERE id=$1"#,
+        r#"SELECT id,chat_object_id,(input->>'first_message_id')::uuid first_message_id,
+          (input->>'last_message_id')::uuid last_message_id,input->>'trigger' trigger,status,
+          (input->>'message_count')::integer message_count,idempotency_key,
+          COALESCE((result->>'attempts')::integer,0) attempts,result->>'worker_id' worker_id,
+          result->>'model' model,result->>'prompt_version' prompt_version,
+          result->'proposed_plan' proposed_plan,result->'committed_plan' committed_plan,
+          NULLIF(result,'{}'::jsonb) result,created_at queued_at,started_at,completed_at,
+          CASE WHEN status='reversed' THEN completed_at END reversed_at,error error_message
+          FROM runs WHERE id=$1 AND kind='curator'"#,
     )
     .bind(id)
     .fetch_optional(pool)
@@ -385,10 +389,15 @@ pub async fn get_run(pool: &PgPool, id: Uuid) -> Result<CuratorRun, CuratorError
 
 pub async fn list_runs(pool: &PgPool, limit: i64) -> Result<Vec<CuratorRun>, CuratorError> {
     Ok(sqlx::query_as(
-        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
-                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  queued_at,started_at,completed_at,reversed_at,error_message
-           FROM curator_runs ORDER BY queued_at DESC,id DESC LIMIT $1"#,
+        r#"SELECT id,chat_object_id,(input->>'first_message_id')::uuid first_message_id,
+          (input->>'last_message_id')::uuid last_message_id,input->>'trigger' trigger,status,
+          (input->>'message_count')::integer message_count,idempotency_key,
+          COALESCE((result->>'attempts')::integer,0) attempts,result->>'worker_id' worker_id,
+          result->>'model' model,result->>'prompt_version' prompt_version,
+          result->'proposed_plan' proposed_plan,result->'committed_plan' committed_plan,
+          NULLIF(result,'{}'::jsonb) result,created_at queued_at,started_at,completed_at,
+          CASE WHEN status='reversed' THEN completed_at END reversed_at,error error_message
+          FROM runs WHERE kind='curator' ORDER BY created_at DESC,id DESC LIMIT $1"#,
     )
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
@@ -415,9 +424,9 @@ pub async fn run_detail(pool: &PgPool, id: Uuid) -> Result<CuratorRunDetail, Cur
     .fetch_all(pool)
     .await?;
     let changes = sqlx::query_as(
-        r#"SELECT id,sequence,entity_type,entity_id,action,before_state,after_state,
-                  after_revision,created_at,undone_at
-           FROM curator_run_changes WHERE curator_run_id=$1 ORDER BY sequence"#,
+        r#"SELECT id,sequence,target_type entity_type,target_id entity_id,action,before_state,
+                  after_state,to_revision after_revision,created_at,NULL::timestamptz undone_at
+           FROM object_events WHERE run_id=$1 ORDER BY sequence"#,
     )
     .bind(id)
     .fetch_all(pool)
@@ -459,9 +468,6 @@ async fn reconcile_owned(
         .execute(&mut *tx)
         .await?;
     let run = lock_run(&mut tx, run_id).await?;
-    crate::evals::set_curator_context(&mut tx, run_id)
-        .await
-        .map_err(|error| CuratorError::Invalid(format!("eval context failed: {error}")))?;
     if run.status == "completed" {
         if run.proposed_plan.as_ref() == Some(&plan_json) {
             return Ok(run
@@ -477,12 +483,14 @@ async fn reconcile_owned(
     }
     if run.status != "running" {
         sqlx::query(
-            r#"UPDATE curator_runs SET status='running',started_at=COALESCE(started_at,now()),
-                  completed_at=NULL,lease_started_at=now(),worker_id='curator-api',attempts=attempts+1,
-                  model=$2,prompt_version=$3,proposed_plan=$4,error_message=NULL WHERE id=$1"#,
+            r#"UPDATE runs SET status='running',started_at=COALESCE(started_at,now()),
+                  completed_at=NULL,result=result || jsonb_build_object(
+                    'worker_id','curator-api','attempts',COALESCE((result->>'attempts')::integer,0)+1,
+                    'model',$2::text,'prompt_version',$3::text,'proposed_plan',$4::jsonb),
+                  error=NULL,updated_at=now() WHERE id=$1 AND kind='curator'"#,
         ).bind(run_id).bind(model).bind(prompt_version).bind(&plan_json).execute(&mut *tx).await?;
     } else {
-        sqlx::query("UPDATE curator_runs SET proposed_plan=$2,error_message=NULL WHERE id=$1")
+        sqlx::query("UPDATE runs SET result=result || jsonb_build_object('proposed_plan',$2::jsonb),error=NULL,updated_at=now() WHERE id=$1")
             .bind(run_id)
             .bind(&plan_json)
             .execute(&mut *tx)
@@ -708,8 +716,9 @@ async fn reconcile_owned(
         "created_objects": created, "change_count": sequence,
     });
     sqlx::query(
-        r#"UPDATE curator_runs SET status='completed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
-                  committed_plan=$2,result=$3,error_message=NULL WHERE id=$1"#,
+        r#"UPDATE runs SET status='completed',completed_at=now(),
+                  result=$3 || jsonb_build_object('committed_plan',$2::jsonb),error=NULL,updated_at=now()
+           WHERE id=$1 AND kind='curator'"#,
     ).bind(run_id).bind(&plan_json).bind(&result).execute(&mut *tx).await?;
     sqlx::query("UPDATE chats SET curated_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
         .bind(run.chat_object_id)
@@ -728,9 +737,9 @@ async fn reconcile_owned(
         json!({"change_count": sequence, "model": model, "prompt_version": prompt_version}),
     )
     .await?;
-    crate::evals::finish_curator_eval(&mut tx, run_id, sequence)
+    crate::runs::finish_curator_run(&mut tx, run_id, sequence)
         .await
-        .map_err(|error| CuratorError::Invalid(format!("eval completion failed: {error}")))?;
+        .map_err(|error| CuratorError::Invalid(format!("Run completion failed: {error}")))?;
     tx.commit().await?;
     Ok(result)
 }
@@ -754,9 +763,6 @@ pub async fn undo_as(
         .execute(&mut *tx)
         .await?;
     let run = lock_run(&mut tx, run_id).await?;
-    crate::evals::set_curator_context(&mut tx, run_id)
-        .await
-        .map_err(|error| CuratorError::Invalid(format!("eval context failed: {error}")))?;
     if run.status == "reversed" {
         return Ok(run
             .result
@@ -766,9 +772,31 @@ pub async fn undo_as(
         return Err(CuratorError::Conflict);
     }
     let changes: Vec<CuratorRunChange> = sqlx::query_as(
-        "SELECT id,sequence,entity_type,entity_id,action,before_state,after_state,after_revision,created_at,undone_at FROM curator_run_changes WHERE curator_run_id=$1 AND undone_at IS NULL ORDER BY sequence DESC FOR UPDATE",
-    ).bind(run_id).fetch_all(&mut *tx).await?;
-    for change in &changes {
+        r#"SELECT id,sequence,target_type entity_type,target_id entity_id,action,before_state,
+          after_state,to_revision after_revision,created_at,NULL::timestamptz undone_at
+          FROM object_events WHERE run_id=$1 AND reversible ORDER BY sequence DESC"#,
+    )
+    .bind(run_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let reversal_run_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO runs
+      (id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at)
+      VALUES($1,$2,'curator_undo','running',$3,$4,$5,$6,'{}',now())"#,
+    )
+    .bind(reversal_run_id)
+    .bind(run_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(format!(
+        "undo:{run_id}:{}:{}",
+        actor.actor_type, actor.actor_id
+    ))
+    .bind(json!({"reverses_run_id":run_id}))
+    .execute(&mut *tx)
+    .await?;
+    for (index, change) in changes.iter().enumerate() {
         match (change.entity_type.as_str(), change.action.as_str()) {
             ("connection", "created") => archive_created_connection(&mut tx, change, actor).await?,
             ("connection", "updated") => restore_connection(&mut tx, change, actor).await?,
@@ -780,24 +808,42 @@ pub async fn undo_as(
                 ));
             }
         }
-        sqlx::query("UPDATE curator_run_changes SET undone_at=now() WHERE id=$1")
-            .bind(change.id)
-            .execute(&mut *tx)
-            .await?;
+        let after = if change.entity_type == "connection" {
+            connection_snapshot(&mut tx, change.entity_id).await?
+        } else {
+            object_snapshot(&mut tx, change.entity_id).await?
+        };
+        insert_change(
+            &mut tx,
+            reversal_run_id,
+            index as i32 + 1,
+            &change.entity_type,
+            change.entity_id,
+            if change.action == "created" {
+                "archived"
+            } else {
+                "restored"
+            },
+            Some(&change.after_state),
+            &after,
+            change.after_revision + 1,
+        )
+        .await?;
     }
     let result =
         json!({"run_id": run_id, "status": "reversed", "reversed_change_count": changes.len()});
     sqlx::query(
-        "UPDATE curator_runs SET status='reversed',reversed_at=now(),result=$2 WHERE id=$1",
+        "UPDATE runs SET status='reversed',result=result || $2::jsonb,updated_at=now() WHERE id=$1",
     )
     .bind(run_id)
     .bind(&result)
     .execute(&mut *tx)
     .await?;
-    insert_undo_event(&mut tx, run_id, run.chat_object_id, actor, changes.len()).await?;
-    crate::evals::reverse_curator_eval(&mut tx, run_id, changes.len())
+    sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now(),updated_at=now() WHERE id=$1")
+      .bind(reversal_run_id).bind(&result).execute(&mut *tx).await?;
+    crate::runs::reverse_curator_run(&mut tx, run_id, reversal_run_id, changes.len())
         .await
-        .map_err(|error| CuratorError::Invalid(format!("eval reversal failed: {error}")))?;
+        .map_err(|error| CuratorError::Invalid(format!("Run reversal failed: {error}")))?;
     tx.commit().await?;
     Ok(result)
 }
@@ -1082,41 +1128,24 @@ fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError>
     )
     .map_err(invalid)?;
     if let Some(content) = &mut source.content {
-        content.content_kind = allowed(
-            std::mem::take(&mut content.content_kind),
-            "content_kind",
-            crate::domain::SOURCE_CONTENT_KINDS,
-        )
-        .map_err(invalid)?;
-        content.normalized_text = crate::domain::required_preserved_text(
-            std::mem::take(&mut content.normalized_text),
-            "normalized_text",
+        content.kind = required_text(std::mem::take(&mut content.kind), "artifact kind", 100)
+            .map_err(invalid)?;
+        content.title =
+            optional_text(content.title.take(), "artifact title", 500).map_err(invalid)?;
+        content.content = crate::domain::required_preserved_text(
+            std::mem::take(&mut content.content),
+            "artifact content",
             10_000_000,
         )
         .map_err(invalid)?;
+        content.uri = optional_text(content.uri.take(), "artifact uri", 2000).map_err(invalid)?;
+        content.media_type = optional_text(content.media_type.take(), "artifact media_type", 255)
+            .map_err(invalid)?;
         content.language =
             optional_text(content.language.take(), "language", 35).map_err(invalid)?;
-        content.extraction_method =
-            optional_text(content.extraction_method.take(), "extraction_method", 200)
-                .map_err(invalid)?;
-        content.extraction_version =
-            optional_text(content.extraction_version.take(), "extraction_version", 100)
-                .map_err(invalid)?;
-        content.capture_artifact_reference = optional_text(
-            content.capture_artifact_reference.take(),
-            "capture_artifact_reference",
-            1000,
-        )
-        .map_err(invalid)?;
-        content.coverage = allowed(
-            std::mem::take(&mut content.coverage),
-            "coverage",
-            &["complete", "partial", "unknown"],
-        )
-        .map_err(invalid)?;
-        if !content.locators.is_object() {
+        if !content.metadata.is_object() {
             return Err(CuratorError::Invalid(
-                "locators must be a JSON object".into(),
+                "Artifact metadata must be a JSON object".into(),
             ));
         }
     }
@@ -1196,10 +1225,15 @@ async fn lock_run(
     id: Uuid,
 ) -> Result<CuratorRun, CuratorError> {
     sqlx::query_as(
-        r#"SELECT id,chat_object_id,first_message_id,last_message_id,trigger,status,message_count,
-                  idempotency_key,attempts,worker_id,model,prompt_version,proposed_plan,committed_plan,result,
-                  queued_at,started_at,completed_at,reversed_at,error_message
-           FROM curator_runs WHERE id=$1 FOR UPDATE"#,
+        r#"SELECT id,chat_object_id,(input->>'first_message_id')::uuid first_message_id,
+          (input->>'last_message_id')::uuid last_message_id,input->>'trigger' trigger,status,
+          (input->>'message_count')::integer message_count,idempotency_key,
+          COALESCE((result->>'attempts')::integer,0) attempts,result->>'worker_id' worker_id,
+          result->>'model' model,result->>'prompt_version' prompt_version,
+          result->'proposed_plan' proposed_plan,result->'committed_plan' committed_plan,
+          NULLIF(result,'{}'::jsonb) result,created_at queued_at,started_at,completed_at,
+          CASE WHEN status='reversed' THEN completed_at END reversed_at,error error_message
+          FROM runs WHERE id=$1 AND kind='curator' FOR UPDATE"#,
     )
     .bind(id)
     .fetch_optional(&mut **tx)
@@ -1391,30 +1425,28 @@ async fn insert_object(
             .await?;
             if let Some(content) = &source.content {
                 let content_id = Uuid::new_v4();
-                let hash = format!("{:x}", Sha256::digest(content.normalized_text.as_bytes()));
+                let hash = format!("{:x}", Sha256::digest(content.content.as_bytes()));
                 sqlx::query(
-                    r#"INSERT INTO source_contents
-                    (id,source_object_id,version,content_kind,normalized_text,language,
-                     extraction_method,extraction_version,content_sha256,size_bytes,
-                     capture_artifact_reference,coverage,captured_at,locators)
-                    VALUES ($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+                    r#"INSERT INTO artifacts
+                    (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
+                     metadata,captured_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#,
                 )
                 .bind(content_id)
                 .bind(id)
-                .bind(&content.content_kind)
-                .bind(&content.normalized_text)
+                .bind(&content.kind)
+                .bind(&content.title)
+                .bind(&content.content)
+                .bind(&content.uri)
+                .bind(&content.media_type)
                 .bind(&content.language)
-                .bind(&content.extraction_method)
-                .bind(&content.extraction_version)
                 .bind(hash)
-                .bind(content.normalized_text.len() as i64)
-                .bind(&content.capture_artifact_reference)
-                .bind(&content.coverage)
+                .bind(content.content.len() as i64)
+                .bind(&content.metadata)
                 .bind(content.captured_at)
-                .bind(&content.locators)
                 .execute(&mut **tx)
                 .await?;
-                sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
+                sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
                     .bind(id)
                     .bind(content_id)
                     .execute(&mut **tx)
@@ -1601,70 +1633,49 @@ async fn insert_change(
     after: &Value,
     after_revision: i64,
 ) -> Result<(), CuratorError> {
-    sqlx::query("INSERT INTO curator_run_changes (id,curator_run_id,sequence,entity_type,entity_id,action,before_state,after_state,after_revision) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
-        .bind(Uuid::new_v4()).bind(run_id).bind(sequence).bind(entity_type).bind(entity_id).bind(action).bind(before).bind(after).bind(after_revision).execute(&mut **tx).await?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn insert_event(
-    tx: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    entity_type: &str,
-    entity_id: Uuid,
-    object_id: Uuid,
-    action: &str,
-    from_revision: Option<i64>,
-    to_revision: i64,
-    changes: Value,
-) -> Result<(), CuratorError> {
-    sqlx::query(
-        r#"INSERT INTO object_events (id,entity_type,entity_id,object_id,action,actor_type,actor_id,idempotency_key,from_revision,to_revision,changes)
-           VALUES ($1,$2,$3,$4,$5,'system','context-curator',$6,$7,$8,$9)"#,
-    ).bind(Uuid::new_v4()).bind(entity_type).bind(entity_id).bind(object_id).bind(action)
-        .bind(format!("curator:{run_id}:{action}:{entity_type}:{entity_id}"))
-        .bind(from_revision).bind(to_revision).bind(changes).execute(&mut **tx).await?;
-    Ok(())
-}
-
-async fn insert_undo_event(
-    tx: &mut Transaction<'_, Postgres>,
-    run_id: Uuid,
-    chat_object_id: Uuid,
-    actor: &crate::domain::ActorContext,
-    reversed_change_count: usize,
-) -> Result<(), CuratorError> {
     sqlx::query(
         r#"INSERT INTO object_events
-           (id,entity_type,entity_id,object_id,action,actor_type,actor_id,
-            centaur_thread_key,centaur_execution_id,idempotency_key,to_revision,changes)
-           VALUES ($1,'curator_run',$2,$3,'curator_undone',$4,$5,$6,$7,$8,1,$9)"#,
+      (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,idempotency_key,
+       from_revision,to_revision,before_state,after_state,reversible,created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,'system','context-curator',$7,$8,$9,$10,$11,true,now())"#,
     )
     .bind(Uuid::new_v4())
     .bind(run_id)
-    .bind(chat_object_id)
-    .bind(actor.actor_type)
-    .bind(&actor.actor_id)
-    .bind(&actor.centaur_thread_key)
-    .bind(&actor.centaur_execution_id)
+    .bind(sequence)
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(action)
     .bind(format!(
-        "curator:{run_id}:undo:{}:{}",
-        actor.actor_type, actor.actor_id
+        "curator:{run_id}:{sequence}:{entity_type}:{entity_id}"
     ))
-    .bind(json!({"reversed_change_count": reversed_change_count}))
+    .bind(before.map(|_| after_revision - 1))
+    .bind(after_revision)
+    .bind(before)
+    .bind(after)
     .execute(&mut **tx)
     .await?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn insert_event(
+    _tx: &mut Transaction<'_, Postgres>,
+    _run_id: Uuid,
+    _entity_type: &str,
+    _entity_id: Uuid,
+    _object_id: Uuid,
+    _action: &str,
+    _from_revision: Option<i64>,
+    _to_revision: i64,
+    _changes: Value,
+) -> Result<(), CuratorError> {
+    Ok(())
+}
+
 async fn record_failure(pool: &PgPool, run_id: Uuid, message: &str) -> Result<(), CuratorError> {
-    sqlx::query(
-        r#"UPDATE curator_runs SET status='failed',completed_at=now(),lease_started_at=NULL,worker_id=NULL,
-                  available_at=now()+LEAST(attempts,10)*interval '30 seconds',error_message=$2 WHERE id=$1 AND status <> 'completed' AND status <> 'reversed'"#,
-    ).bind(run_id).bind(message.chars().take(2000).collect::<String>()).execute(pool).await?;
-    crate::evals::fail_curator_eval(pool, run_id, message)
+    crate::runs::fail_curator_run(pool, run_id, message)
         .await
-        .map_err(|error| CuratorError::Invalid(format!("eval failure trace failed: {error}")))?;
+        .map_err(|error| CuratorError::Invalid(format!("Run failure trace failed: {error}")))?;
     Ok(())
 }
 
@@ -1893,7 +1904,7 @@ pub async fn run_worker(
             let mut plan =
                 request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
             if let Err(error) = validate_plan(&mut plan) {
-                crate::evals::append_curator_trace(
+                crate::runs::append_curator_trace(
                     &pool,
                     run.id,
                     "validation_repair",
@@ -1945,25 +1956,31 @@ async fn claim_run(
     let mut tx = pool.begin().await?;
     let run: Option<CuratorRun> = sqlx::query_as(
         r#"WITH candidate AS (
-               SELECT id FROM curator_runs
-               WHERE attempts < 3
+               SELECT id FROM runs
+               WHERE kind='curator' AND COALESCE((result->>'attempts')::integer,0) < 3
                  AND (
                    (status IN ('queued','failed') AND available_at <= now())
-                   OR (status='running' AND lease_started_at < now() - interval '10 minutes')
+                   OR (status='running' AND started_at < now() - interval '10 minutes')
                  )
-               ORDER BY available_at,queued_at,id
+               ORDER BY available_at,created_at,id
                FOR UPDATE SKIP LOCKED
                LIMIT 1
            )
-           UPDATE curator_runs r
+           UPDATE runs r
            SET status='running',started_at=COALESCE(r.started_at,now()),completed_at=NULL,
-               lease_started_at=now(),worker_id=$1,attempts=r.attempts+1,
-               model=$2,prompt_version=$3,error_message=NULL
+               result=r.result || jsonb_build_object('worker_id',$1::text,
+                 'attempts',COALESCE((r.result->>'attempts')::integer,0)+1,
+                 'model',$2::text,'prompt_version',$3::text),error=NULL,updated_at=now()
            FROM candidate c WHERE r.id=c.id
-           RETURNING r.id,r.chat_object_id,r.first_message_id,r.last_message_id,r.trigger,r.status,
-                     r.message_count,r.idempotency_key,r.attempts,r.worker_id,r.model,r.prompt_version,
-                     r.proposed_plan,r.committed_plan,r.result,r.queued_at,r.started_at,r.completed_at,
-                     r.reversed_at,r.error_message"#,
+           RETURNING r.id,r.chat_object_id,(r.input->>'first_message_id')::uuid first_message_id,
+             (r.input->>'last_message_id')::uuid last_message_id,r.input->>'trigger' trigger,r.status,
+             (r.input->>'message_count')::integer message_count,r.idempotency_key,
+             COALESCE((r.result->>'attempts')::integer,0) attempts,r.result->>'worker_id' worker_id,
+             r.result->>'model' model,r.result->>'prompt_version' prompt_version,
+             r.result->'proposed_plan' proposed_plan,r.result->'committed_plan' committed_plan,
+             NULLIF(r.result,'{}'::jsonb) result,r.created_at queued_at,r.started_at,
+             r.completed_at,CASE WHEN r.status='reversed' THEN r.completed_at END reversed_at,
+             r.error error_message"#,
     )
     .bind(worker_id)
     .bind(&config.model)
@@ -2020,7 +2037,7 @@ async fn worker_context(
         .iter()
         .map(|object| object.id)
         .collect::<Vec<_>>();
-    crate::evals::link_curator_candidates(pool, run.id, &candidate_ids)
+    crate::runs::link_curator_candidates(pool, run.id, &candidate_ids)
         .await
         .map_err(|error| {
             CuratorError::Invalid(format!("candidate eval linkage failed: {error}"))
@@ -2052,7 +2069,7 @@ async fn request_plan(
 Every create_objects entry MUST contain all of these fields:
 {"client_id":"unique-local-name","kind":"memory|task|entity|source","title":"...","description":"...","supporting_message_ids":["UUID"],"entity_kind":null,"task":null,"memory":null,"source":null}.
 client_id is a short unique name used only to reference that new Object from create_connections. For an Entity, set entity_kind to person|organization|product|project|publication|place|concept|other. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"backlog|todo|doing|review|done|blocked","priority":"low|medium|high","owner_object_id":null,"agent_suitable":false,"blocked_reason":null,"due_at":null,"github_issue_url":null,"brief_markdown":null}; blocked_reason is required exactly for blocked Tasks.
-For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast_episode|video|book|report|document|dataset|web_page|social_post|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":null,"original_media_type":null,"original_artifact_reference":null,"content":null}. Optional content is {"content_kind":"article_text|transcript|paper_text|document_text|dataset_description|other","normalized_text":"...","language":null,"extraction_method":null,"extraction_version":null,"capture_artifact_reference":null,"coverage":"unknown","captured_at":null,"locators":{}}. Use only text explicitly present in the evidence; never fetch or invent source content.
+For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast_episode|video|book|report|document|dataset|web_page|social_post|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":null,"original_media_type":null,"original_artifact_reference":null,"content":null}. Optional content is a generic Artifact: {"kind":"transcript","title":null,"content":"...","uri":null,"media_type":"text/plain","language":null,"captured_at":null,"metadata":{}}. Use only content explicitly present in the evidence; never fetch or invent Artifact content.
 
 Every update_objects entry MUST contain all of these fields:
 {"object_id":"UUID","expected_revision":1,"title":null,"description":null,"supporting_message_ids":["UUID"],"task":null}.
@@ -2320,15 +2337,16 @@ fn reconciliation_plan_schema() -> Value {
                 "required": ["primary_event", "happened_at"],
                 "properties": {"primary_event": {"type": "boolean"}, "happened_at": {"type": "string"}}
             },
-            "source_content": {
+            "artifact": {
                 "type": "object", "additionalProperties": false,
-                "required": ["content_kind", "normalized_text", "language", "extraction_method", "extraction_version", "capture_artifact_reference", "coverage", "captured_at", "locators"],
+                "required": ["kind", "title", "content", "uri", "media_type", "language", "captured_at", "metadata"],
                 "properties": {
-                    "content_kind": {"type": "string"}, "normalized_text": {"type": "string"},
-                    "language": {"$ref": "#/$defs/nullable_string"}, "extraction_method": {"$ref": "#/$defs/nullable_string"},
-                    "extraction_version": {"$ref": "#/$defs/nullable_string"}, "capture_artifact_reference": {"$ref": "#/$defs/nullable_string"},
-                    "coverage": {"type": "string"}, "captured_at": {"$ref": "#/$defs/nullable_string"},
-                    "locators": {"type": "object", "additionalProperties": false, "properties": {}}
+                    "kind": {"type": "string"}, "title": {"$ref": "#/$defs/nullable_string"},
+                    "content": {"type": "string"}, "uri": {"$ref": "#/$defs/nullable_string"},
+                    "media_type": {"$ref": "#/$defs/nullable_string"},
+                    "language": {"$ref": "#/$defs/nullable_string"},
+                    "captured_at": {"$ref": "#/$defs/nullable_string"},
+                    "metadata": {"type": "object", "additionalProperties": true}
                 }
             },
             "source_fields": {
@@ -2341,7 +2359,7 @@ fn reconciliation_plan_schema() -> Value {
                     "last_accessed_at": {"$ref": "#/$defs/nullable_string"},
                     "original_language": {"$ref": "#/$defs/nullable_string"}, "original_media_type": {"$ref": "#/$defs/nullable_string"},
                     "original_artifact_reference": {"$ref": "#/$defs/nullable_string"},
-                    "content": {"anyOf": [{"$ref": "#/$defs/source_content"}, {"type": "null"}]}
+                    "content": {"anyOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]}
                 }
             },
             "object_ref": {
@@ -2428,23 +2446,8 @@ async fn record_curator_usage(
     usage: Option<&ModelUsage>,
     missing_reason: Option<&str>,
 ) {
-    let eval_id: Option<Uuid> =
-        match sqlx::query_scalar("SELECT id FROM evals WHERE curator_run_id=$1")
-            .bind(run.id)
-            .fetch_optional(pool)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::error!(run_id=%run.id,%error,"failed to resolve eval for Curator usage");
-                return;
-            }
-        };
-    let Some(eval_id) = eval_id else {
-        return;
-    };
-    let input = crate::evals::NormalizedUsage {
-        eval_id,
+    let input = crate::runs::NormalizedUsage {
+        run_id: run.id,
         component: "context_curator".into(),
         provider: attribution.provider.into(),
         model_id: model_id.to_owned(),
@@ -2491,7 +2494,7 @@ async fn record_curator_usage(
         rate_card_version: None,
         pricing_snapshot: None,
     };
-    if let Err(error) = crate::evals::record_usage(pool, &input).await {
+    if let Err(error) = crate::runs::record_usage(pool, &input).await {
         tracing::error!(run_id=%run.id,%error,"failed to record Curator usage");
     }
 }
@@ -2607,7 +2610,7 @@ mod tests {
             "task_fields",
             "task_patch",
             "memory_fields",
-            "source_content",
+            "artifact",
             "source_fields",
             "create_object",
             "update_object",
@@ -2640,7 +2643,7 @@ mod tests {
     }
 
     #[test]
-    fn subscription_attribution_uses_canonical_eval_values() {
+    fn subscription_attribution_uses_canonical_run_values() {
         let config = CuratorModelConfig {
             transport: CuratorModelTransport::CentaurSubscription,
             endpoint: "http://centaur-api-rs/api/internal/context-curator/infer".to_owned(),

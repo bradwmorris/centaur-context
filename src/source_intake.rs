@@ -19,13 +19,13 @@ use crate::{
     api::AppState,
     domain::ActorContext,
     intake::{
-        IntakeBatchRequest, IntakeConnection, IntakeError, IntakeObject, IntakeObjectRef,
-        IntakeSource, IntakeSourceContent, PreparedBatch,
+        IntakeArtifact, IntakeBatchRequest, IntakeConnection, IntakeError, IntakeObject,
+        IntakeObjectRef, IntakeSource, PreparedBatch,
     },
 };
 
 const MAX_SOURCE_INTAKE_BODY_BYTES: usize = 1024 * 1024;
-const CONTRACT_VERSION: &str = "centaur-context-source-intake-v1";
+const CONTRACT_VERSION: &str = "centaur-context-source-intake-v2";
 
 fn default_coverage() -> String {
     "unknown".to_owned()
@@ -45,9 +45,9 @@ pub fn router(app: AppState, token: String) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .route("/api/v1/source-intake/validate", post(validate_source))
-        .route("/api/v1/source-intake/commit", post(commit_source))
-        .route("/api/v1/source-intake/status", post(source_status))
+        .route("/api/v2/source-intake/validate", post(validate_source))
+        .route("/api/v2/source-intake/commit", post(commit_source))
+        .route("/api/v2/source-intake/status", post(source_status))
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_SOURCE_INTAKE_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, source_intake_auth))
@@ -188,25 +188,24 @@ async fn prepared(
     struct Conflict {
         object_id: Uuid,
         protected: bool,
-        current_content_id: Option<Uuid>,
-        content_sha256: Option<String>,
+        current_artifact_id: Option<Uuid>,
+        sha256: Option<String>,
         provenance: Value,
         canonical_uri: Option<String>,
         same_batch: bool,
     }
     let conflicts: Vec<Conflict> = sqlx::query_as(
-        r#"SELECT s.object_id,o.protected,s.current_content_id,sc.content_sha256,o.provenance,
+        r#"SELECT s.object_id,o.protected,s.current_artifact_id,sc.sha256,o.provenance,
                   s.canonical_uri,EXISTS(
-                    SELECT 1 FROM object_events e
-                    WHERE e.object_id=s.object_id AND e.changes->>'intake_batch_id'=$3
+                    SELECT 1 FROM runs r WHERE r.kind='intake' AND r.input->>'batch_id'=$3
                   ) AS same_batch
            FROM sources s JOIN objects o ON o.id=s.object_id
-           LEFT JOIN source_contents sc ON sc.id=s.current_content_id
+           LEFT JOIN artifacts sc ON sc.id=s.current_artifact_id
            WHERE o.archived_at IS NULL
-             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR sc.content_sha256=$2)"#,
+             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR sc.sha256=$2)"#,
     )
     .bind(&source.canonical_uri)
-    .bind(&prepared.request.source_contents[0].content_sha256)
+    .bind(&prepared.request.artifacts[0].sha256)
     .bind(&prepared.request.batch_id)
     .fetch_all(&state.app.pool)
     .await?;
@@ -221,8 +220,8 @@ async fn prepared(
             ));
         }
         let curator_placeholder = !conflict.protected
-            && conflict.current_content_id.is_none()
-            && conflict.content_sha256.is_none()
+            && conflict.current_artifact_id.is_none()
+            && conflict.sha256.is_none()
             && conflict.canonical_uri == source.canonical_uri
             && conflict
                 .provenance
@@ -253,7 +252,7 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
     }
     if request.source.content.len() > 750_000 {
         return Err(IntakeError::BadRequest(
-            "Source content exceeds the 750000-byte intake limit".into(),
+            "Artifact content exceeds the 750000-byte intake limit".into(),
         ));
     }
     request.source.canonical_uri = request
@@ -338,6 +337,7 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
             protected: true,
             provenance: source.provenance.clone(),
             user_kind: None,
+            identities: Vec::new(),
             entity_kind: None,
             source: Some(IntakeSource {
                 source_kind: source.source_kind,
@@ -348,29 +348,31 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
                 published_at_precision: source.published_at_precision,
                 last_accessed_at: source.last_accessed_at,
                 original_language: source.original_language.clone(),
-                original_media_type: source.original_media_type,
+                original_media_type: source.original_media_type.clone(),
                 original_artifact_reference: source.original_artifact_reference,
             }),
             note: None,
             theme: None,
         }],
-        external_identities: Vec::new(),
-        source_contents: vec![IntakeSourceContent {
+        artifacts: vec![IntakeArtifact {
             client_key: "source-content".into(),
-            source: IntakeObjectRef {
+            object: IntakeObjectRef {
                 client_key: Some("source".into()),
                 object_id: None,
             },
-            content_kind: source.content_kind,
-            normalized_text: source.content,
-            content_sha256,
+            kind: source.content_kind,
+            title: None,
+            content: Some(source.content),
+            uri: source.capture_artifact_reference,
+            media_type: source.original_media_type.clone(),
+            sha256: content_sha256,
             language: source.original_language,
-            extraction_method: source.extraction_method,
-            extraction_version: source.extraction_version,
-            capture_artifact_reference: source.capture_artifact_reference,
-            coverage: source.coverage,
             captured_at: source.captured_at,
-            locators: Some(json!({"canonical_uri":canonical_uri})),
+            metadata: Some(
+                json!({"canonical_uri":canonical_uri,"extraction_method":source.extraction_method,
+              "extraction_version":source.extraction_version,"coverage":source.coverage}),
+            ),
+            supersedes_artifact_id: None,
         }],
         connections,
     })
@@ -477,8 +479,8 @@ async fn source_status(
     let lexical_ready: bool = sqlx::query_scalar(
         r#"SELECT EXISTS(
             SELECT 1 FROM sources s
-            JOIN source_contents c ON c.source_object_id=s.object_id AND c.id=s.current_content_id
-            WHERE s.object_id=$1 AND c.normalized_text<>''
+            JOIN artifacts c ON c.object_id=s.object_id AND c.id=s.current_artifact_id
+            WHERE s.object_id=$1 AND COALESCE(c.content,'')<>''
         )"#,
     )
     .bind(object_id)
@@ -489,8 +491,8 @@ async fn source_status(
     } else {
         sqlx::query_scalar(
             r#"SELECT EXISTS(
-                SELECT 1 FROM object_embeddings e JOIN objects o ON o.id=e.object_id
-                WHERE o.id=$1 AND e.source_hash=object_embedding_source_hash(
+                SELECT 1 FROM embeddings e JOIN objects o ON o.id=e.object_id
+                WHERE o.id=$1 AND e.status='completed' AND e.source_hash=object_embedding_source_hash(
                     e.format_version,o.kind,o.title,o.description
                 )
             )"#,
@@ -550,8 +552,8 @@ mod tests {
         assert_eq!(batch.objects.len(), 1);
         assert_eq!(batch.objects[0].kind, "source");
         assert!(batch.objects[0].protected);
-        assert_eq!(batch.source_contents.len(), 1);
-        assert_eq!(batch.source_contents[0].content_sha256.len(), 64);
+        assert_eq!(batch.artifacts.len(), 1);
+        assert_eq!(batch.artifacts[0].sha256.len(), 64);
     }
 
     #[test]
@@ -583,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_manifest_accepts_explicit_legacy_field_aliases() {
+    fn v2_manifest_accepts_explicit_legacy_field_aliases() {
         let parsed: SourceIntakeRequest = serde_json::from_value(json!({
             "version": CONTRACT_VERSION,
             "idempotency_key": "legacy-run",

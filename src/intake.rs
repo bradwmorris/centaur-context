@@ -23,18 +23,14 @@ use uuid::Uuid;
 use crate::{
     api::AppState,
     domain::{
-        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, SOURCE_CONTENT_KINDS, SOURCE_KINDS,
-        USER_KINDS, allowed, object_description, optional_text, provenance, required_text,
+        ActorContext, CONNECTION_KINDS, NOTE_CONTENT_FORMATS, SOURCE_KINDS, USER_KINDS, allowed,
+        object_description, optional_text, provenance, required_text,
     },
 };
 
 const MAX_BATCH_RESOURCES: usize = 500;
 const MAX_BATCH_BODY_BYTES: usize = 12 * 1024 * 1024;
 const INTAKE_NAMESPACE: Uuid = Uuid::from_u128(0x5b18f36b_699f_4da2_8b3e_9e744a7b941d);
-
-fn default_coverage() -> String {
-    "unknown".to_owned()
-}
 
 #[derive(Clone)]
 struct IntakeState {
@@ -52,9 +48,9 @@ pub fn router(app: AppState, token: String, approved_manifest_sha256: Option<Str
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .route("/api/v1/intake/batches/validate", post(validate_batch))
-        .route("/api/v1/intake/batches/commit", post(commit_batch))
-        .route("/api/v1/intake/batches/{batch_id}", get(read_batch_status))
+        .route("/api/v2/intake/batches/validate", post(validate_batch))
+        .route("/api/v2/intake/batches/commit", post(commit_batch))
+        .route("/api/v2/intake/batches/{batch_id}", get(read_batch_status))
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_BATCH_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, intake_auth))
@@ -132,9 +128,7 @@ pub struct IntakeBatchRequest {
     #[serde(default)]
     pub objects: Vec<IntakeObject>,
     #[serde(default)]
-    pub external_identities: Vec<IntakeExternalIdentity>,
-    #[serde(default)]
-    pub source_contents: Vec<IntakeSourceContent>,
+    pub artifacts: Vec<IntakeArtifact>,
     #[serde(default)]
     pub connections: Vec<IntakeConnection>,
 }
@@ -152,6 +146,8 @@ pub struct IntakeObject {
     pub provenance: Option<Value>,
     #[serde(default)]
     pub user_kind: Option<String>,
+    #[serde(default)]
+    pub identities: Vec<IntakeIdentity>,
     #[serde(default)]
     pub entity_kind: Option<String>,
     #[serde(default)]
@@ -196,9 +192,8 @@ pub struct IntakeNote {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct IntakeExternalIdentity {
-    pub client_key: String,
-    pub user: IntakeObjectRef,
+pub struct IntakeIdentity {
+    pub id: Option<Uuid>,
     pub provider: String,
     #[serde(default)]
     pub workspace_id: String,
@@ -208,23 +203,20 @@ pub struct IntakeExternalIdentity {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct IntakeSourceContent {
+pub struct IntakeArtifact {
     pub client_key: String,
-    pub source: IntakeObjectRef,
-    pub content_kind: String,
-    pub normalized_text: String,
-    #[serde(alias = "content_hash")]
-    pub content_sha256: String,
+    pub object: IntakeObjectRef,
+    pub kind: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub uri: Option<String>,
+    pub media_type: Option<String>,
+    pub sha256: String,
     pub language: Option<String>,
-    pub extraction_method: Option<String>,
-    pub extraction_version: Option<String>,
-    #[serde(alias = "artifact_reference")]
-    pub capture_artifact_reference: Option<String>,
-    #[serde(default = "default_coverage")]
-    pub coverage: String,
     pub captured_at: Option<String>,
     #[serde(default)]
-    pub locators: Option<Value>,
+    pub metadata: Option<Value>,
+    pub supersedes_artifact_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -253,7 +245,6 @@ pub(crate) struct PreparedBatch {
     pub(crate) request: IntakeBatchRequest,
     pub(crate) payload_sha256: String,
     pub(crate) object_ids: HashMap<String, Uuid>,
-    identity_ids: HashMap<String, Uuid>,
     content_ids: HashMap<String, Uuid>,
     connection_ids: HashMap<String, Uuid>,
     adopted_object_ids: HashSet<Uuid>,
@@ -261,16 +252,13 @@ pub(crate) struct PreparedBatch {
 
 impl PreparedBatch {
     pub(crate) fn event_count(&self) -> usize {
-        self.request.objects.len()
-            + self.request.source_contents.len()
-            + self.request.connections.len()
+        self.request.objects.len() + self.request.artifacts.len() + self.request.connections.len()
     }
 
     pub(crate) fn counts(&self) -> Value {
         json!({
             "objects":self.request.objects.len(),
-            "external_identities":self.request.external_identities.len(),
-            "source_contents":self.request.source_contents.len(),
+            "artifacts":self.request.artifacts.len(),
             "connections":self.request.connections.len(),
             "events":self.event_count(),
         })
@@ -279,8 +267,7 @@ impl PreparedBatch {
     fn id_map(&self) -> Value {
         json!({
             "objects":self.object_ids,
-            "external_identities":self.identity_ids,
-            "source_contents":self.content_ids,
+            "artifacts":self.content_ids,
             "connections":self.connection_ids,
         })
     }
@@ -297,9 +284,9 @@ impl PreparedBatch {
                 IntakeError::Internal(format!("unknown object client key {client_key}"))
             })?;
         self.adopted_object_ids.insert(object_id);
-        for content in &mut self.request.source_contents {
-            if content.source.object_id == Some(previous_id) {
-                content.source.object_id = Some(object_id);
+        for content in &mut self.request.artifacts {
+            if content.object.object_id == Some(previous_id) {
+                content.object.object_id = Some(object_id);
             }
         }
         for connection in &mut self.request.connections {
@@ -427,10 +414,7 @@ pub(crate) async fn prepare_batch_for_app(
             "manifest is not approved for this intake listener".into(),
         ));
     }
-    let resources = request.objects.len()
-        + request.external_identities.len()
-        + request.source_contents.len()
-        + request.connections.len();
+    let resources = request.objects.len() + request.artifacts.len() + request.connections.len();
     if resources == 0 || resources > MAX_BATCH_RESOURCES {
         return Err(IntakeError::BadRequest(format!(
             "batch must contain between 1 and {MAX_BATCH_RESOURCES} resources"
@@ -458,6 +442,25 @@ pub(crate) async fn prepare_batch_for_app(
                     "user_kind",
                     USER_KINDS,
                 )?);
+                for (index, identity) in object.identities.iter_mut().enumerate() {
+                    identity.id = Some(identity.id.unwrap_or_else(|| {
+                        stable_id(
+                            &request.batch_id,
+                            "identity",
+                            &format!("{}:{index}", object.client_key),
+                        )
+                    }));
+                    identity.provider =
+                        required_text(identity.provider.clone(), "identity.provider", 100)?;
+                    identity.workspace_id = identity.workspace_id.trim().to_owned();
+                    identity.provider_user_id = required_text(
+                        identity.provider_user_id.clone(),
+                        "identity.provider_user_id",
+                        300,
+                    )?;
+                    identity.display_name =
+                        optional_text(identity.display_name.take(), "identity.display_name", 500)?;
+                }
                 if object.entity_kind.is_some()
                     || object.source.is_some()
                     || object.note.is_some()
@@ -469,6 +472,11 @@ pub(crate) async fn prepare_batch_for_app(
                 }
             }
             "entity" => {
+                if !object.identities.is_empty() {
+                    return Err(IntakeError::BadRequest(
+                        "only User Objects accept identities".into(),
+                    ));
+                }
                 object.entity_kind = Some(allowed(
                     object.entity_kind.clone().ok_or_else(|| {
                         IntakeError::BadRequest("entity_kind is required for entity Objects".into())
@@ -496,6 +504,11 @@ pub(crate) async fn prepare_batch_for_app(
                 }
             }
             "source" => {
+                if !object.identities.is_empty() {
+                    return Err(IntakeError::BadRequest(
+                        "only User Objects accept identities".into(),
+                    ));
+                }
                 if object.user_kind.is_some()
                     || object.entity_kind.is_some()
                     || object.note.is_some()
@@ -510,6 +523,11 @@ pub(crate) async fn prepare_batch_for_app(
                 })?)?;
             }
             "note" => {
+                if !object.identities.is_empty() {
+                    return Err(IntakeError::BadRequest(
+                        "only User Objects accept identities".into(),
+                    ));
+                }
                 if object.user_kind.is_some()
                     || object.entity_kind.is_some()
                     || object.source.is_some()
@@ -524,6 +542,11 @@ pub(crate) async fn prepare_batch_for_app(
                 })?)?;
             }
             "theme" => {
+                if !object.identities.is_empty() {
+                    return Err(IntakeError::BadRequest(
+                        "only User Objects accept identities".into(),
+                    ));
+                }
                 if object.user_kind.is_some()
                     || object.entity_kind.is_some()
                     || object.source.is_some()
@@ -546,96 +569,56 @@ pub(crate) async fn prepare_batch_for_app(
         );
     }
 
-    let mut identity_ids = HashMap::new();
-    for identity in &mut request.external_identities {
-        identity.client_key = unique_key(
-            &mut all_keys,
-            &identity.client_key,
-            "external_identity.client_key",
-        )?;
-        identity.provider = required_text(identity.provider.clone(), "provider", 100)?;
-        identity.workspace_id = identity.workspace_id.trim().to_owned();
-        identity.provider_user_id =
-            required_text(identity.provider_user_id.clone(), "provider_user_id", 300)?;
-        identity.display_name = optional_text(identity.display_name.take(), "display_name", 500)?;
-        let (id, kind) =
-            resolve_ref(&app.pool, &object_ids, &request.objects, &identity.user).await?;
-        if kind != "user" {
+    let mut content_ids = HashMap::new();
+    for content in &mut request.artifacts {
+        content.client_key = unique_key(&mut all_keys, &content.client_key, "artifact.client_key")?;
+        content.kind = required_text(content.kind.clone(), "artifact.kind", 100)?;
+        content.title = optional_text(content.title.take(), "artifact.title", 500)?;
+        content.content = content
+            .content
+            .take()
+            .map(|value| {
+                crate::domain::required_preserved_text(value, "artifact.content", 10_000_000)
+            })
+            .transpose()?;
+        content.uri = optional_text(content.uri.take(), "artifact.uri", 2000)?;
+        content.media_type = optional_text(content.media_type.take(), "artifact.media_type", 255)?;
+        if content.content.is_none() && content.uri.is_none() {
             return Err(IntakeError::BadRequest(
-                "external identity must reference a user Object".into(),
+                "Artifact requires content or uri".into(),
             ));
         }
-        identity.user = IntakeObjectRef {
-            client_key: identity.user.client_key.clone(),
-            object_id: Some(id),
-        };
-        identity_ids.insert(
-            identity.client_key.clone(),
-            stable_id(&request.batch_id, "identity", &identity.client_key),
+        content.sha256 = validate_hash(&content.sha256, "artifact.sha256")?;
+        let actual = hex_sha256(
+            content
+                .content
+                .as_deref()
+                .unwrap_or_else(|| content.uri.as_deref().unwrap())
+                .as_bytes(),
         );
-    }
-
-    let mut content_ids = HashMap::new();
-    for content in &mut request.source_contents {
-        content.client_key = unique_key(
-            &mut all_keys,
-            &content.client_key,
-            "source_content.client_key",
-        )?;
-        content.content_kind = allowed(
-            content.content_kind.clone(),
-            "content_kind",
-            SOURCE_CONTENT_KINDS,
-        )?;
-        content.normalized_text = crate::domain::required_preserved_text(
-            content.normalized_text.clone(),
-            "normalized_text",
-            10_000_000,
-        )?;
-        content.content_sha256 = validate_hash(&content.content_sha256, "content_sha256")?;
-        let actual = hex_sha256(content.normalized_text.as_bytes());
-        if actual != content.content_sha256 {
+        if actual != content.sha256 {
             return Err(IntakeError::BadRequest(format!(
-                "source content {} hash mismatch",
+                "Artifact {} hash mismatch",
                 content.client_key
             )));
         }
         content.language = optional_text(content.language.take(), "language", 35)?;
-        content.extraction_method =
-            optional_text(content.extraction_method.take(), "extraction_method", 200)?;
-        content.extraction_version =
-            optional_text(content.extraction_version.take(), "extraction_version", 100)?;
-        content.capture_artifact_reference = optional_text(
-            content.capture_artifact_reference.take(),
-            "capture_artifact_reference",
-            1000,
-        )?;
-        content.coverage = allowed(
-            content.coverage.clone(),
-            "coverage",
-            &["complete", "partial", "unknown"],
-        )?;
         parse_time(content.captured_at.as_deref(), "captured_at")?;
-        let locators = content.locators.get_or_insert_with(|| json!({}));
-        if !locators.is_object() {
+        let metadata = content.metadata.get_or_insert_with(|| json!({}));
+        if !metadata.is_object() {
             return Err(IntakeError::BadRequest(
-                "locators must be a JSON object".into(),
+                "Artifact metadata must be a JSON object".into(),
             ));
         }
-        let (id, kind) =
-            resolve_ref(&app.pool, &object_ids, &request.objects, &content.source).await?;
-        if kind != "source" {
-            return Err(IntakeError::BadRequest(
-                "source content must reference a source Object".into(),
-            ));
-        }
-        content.source = IntakeObjectRef {
-            client_key: content.source.client_key.clone(),
+        let (id, _kind) =
+            resolve_ref(&app.pool, &object_ids, &request.objects, &content.object).await?;
+        content.object = IntakeObjectRef {
+            client_key: content.object.client_key.clone(),
             object_id: Some(id),
         };
         content_ids.insert(
             content.client_key.clone(),
-            stable_id(&request.batch_id, "content", &content.client_key),
+            stable_id(&request.batch_id, "artifact", &content.client_key),
         );
     }
 
@@ -694,7 +677,6 @@ pub(crate) async fn prepare_batch_for_app(
         request,
         payload_sha256,
         object_ids,
-        identity_ids,
         content_ids,
         connection_ids,
         adopted_object_ids: HashSet::new(),
@@ -877,6 +859,14 @@ pub(crate) async fn write_batch(
     batch: &PreparedBatch,
 ) -> Result<(), IntakeError> {
     let mut tx = pool.begin().await?;
+    let run_id = stable_id(&batch.request.batch_id, "run", "intake");
+    sqlx::query(r#"INSERT INTO runs
+      (id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at)
+      VALUES($1,'intake','running',$2,$3,$4,$5,'{}',now())"#)
+      .bind(run_id).bind(actor.actor_type).bind(&actor.actor_id)
+      .bind(format!("intake:{}",batch.request.batch_id))
+      .bind(json!({"batch_id":batch.request.batch_id,"manifest_sha256":batch.request.manifest_sha256,"payload_sha256":batch.payload_sha256}))
+      .execute(&mut *tx).await?;
     for object in &batch.request.objects {
         let id = batch.object_ids[&object.client_key];
         if batch.adopted_object_ids.contains(&id) {
@@ -884,7 +874,7 @@ pub(crate) async fn write_batch(
             let current: Option<(i64, Value)> = sqlx::query_as(
                 r#"SELECT o.revision,o.provenance FROM objects o JOIN sources s ON s.object_id=o.id
                    WHERE o.id=$1 AND o.kind='source' AND o.archived_at IS NULL AND NOT o.protected
-                     AND s.current_content_id IS NULL
+                     AND s.current_artifact_id IS NULL
                    FOR UPDATE"#,
             )
             .bind(id)
@@ -964,9 +954,13 @@ pub(crate) async fn write_batch(
             .execute(&mut *tx).await?;
         match object.kind.as_str() {
             "user" => {
-                sqlx::query("INSERT INTO users (object_id,user_kind) VALUES ($1,$2)")
+                sqlx::query("INSERT INTO users (object_id,user_kind,identities) VALUES ($1,$2,$3)")
                     .bind(id)
                     .bind(object.user_kind.as_deref())
+                    .bind(
+                        serde_json::to_value(&object.identities)
+                            .map_err(|error| IntakeError::Internal(error.to_string()))?,
+                    )
                     .execute(&mut *tx)
                     .await?;
             }
@@ -1044,67 +1038,65 @@ pub(crate) async fn write_batch(
         )
         .await?;
     }
-    for identity in &batch.request.external_identities {
-        sqlx::query(
-            r#"INSERT INTO external_identities
-            (id,user_object_id,provider,workspace_id,provider_user_id,display_name)
-            VALUES ($1,$2,$3,$4,$5,$6)"#,
-        )
-        .bind(batch.identity_ids[&identity.client_key])
-        .bind(identity.user.object_id.expect("resolved identity user"))
-        .bind(&identity.provider)
-        .bind(&identity.workspace_id)
-        .bind(&identity.provider_user_id)
-        .bind(&identity.display_name)
-        .execute(&mut *tx)
-        .await?;
-    }
-    for content in &batch.request.source_contents {
-        let source_id = content.source.object_id.expect("resolved source");
+    for content in &batch.request.artifacts {
+        let source_id = content.object.object_id.expect("resolved Artifact owner");
         let content_id = batch.content_ids[&content.client_key];
         let revision: i64 =
             sqlx::query_scalar("SELECT revision FROM objects WHERE id=$1 FOR UPDATE")
                 .bind(source_id)
                 .fetch_one(&mut *tx)
                 .await?;
-        let version: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(max(version),0)+1 FROM source_contents WHERE source_object_id=$1",
-        )
-        .bind(source_id)
-        .fetch_one(&mut *tx)
-        .await?;
         sqlx::query(
-            r#"INSERT INTO source_contents
-            (id,source_object_id,version,content_kind,normalized_text,language,
-             extraction_method,extraction_version,content_sha256,size_bytes,
-             capture_artifact_reference,coverage,captured_at,locators)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+            r#"INSERT INTO artifacts
+            (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
+             metadata,supersedes_artifact_id,captured_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
         )
         .bind(content_id)
         .bind(source_id)
-        .bind(version)
-        .bind(&content.content_kind)
-        .bind(&content.normalized_text)
+        .bind(&content.kind)
+        .bind(&content.title)
+        .bind(&content.content)
+        .bind(&content.uri)
+        .bind(&content.media_type)
         .bind(&content.language)
-        .bind(&content.extraction_method)
-        .bind(&content.extraction_version)
-        .bind(&content.content_sha256)
-        .bind(content.normalized_text.len() as i64)
-        .bind(&content.capture_artifact_reference)
-        .bind(&content.coverage)
+        .bind(&content.sha256)
+        .bind(
+            content
+                .content
+                .as_deref()
+                .unwrap_or_else(|| content.uri.as_deref().unwrap())
+                .len() as i64,
+        )
+        .bind(content.metadata.as_ref().expect("validated metadata"))
+        .bind(content.supersedes_artifact_id)
         .bind(parse_time(content.captured_at.as_deref(), "captured_at")?)
-        .bind(content.locators.as_ref().expect("validated locators"))
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE sources SET current_content_id=$2 WHERE object_id=$1")
+        sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
             .bind(source_id)
             .bind(content_id)
             .execute(&mut *tx)
             .await?;
         sqlx::query("UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
             .bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut *tx).await?;
-        insert_intake_event(&mut tx, actor, "source_content", content_id, source_id, "content_version_created", revision + 1, batch, "content", &content.client_key, json!({"content_kind":content.content_kind,"version":version,"content_sha256":content.content_sha256,"size_bytes":content.normalized_text.len()})).await?;
+        insert_intake_event(
+            &mut tx,
+            actor,
+            "object",
+            source_id,
+            source_id,
+            "artifact_attached",
+            revision + 1,
+            batch,
+            "artifact",
+            &content.client_key,
+            json!({"artifact_id":content_id,"kind":content.kind,"sha256":content.sha256}),
+        )
+        .await?;
     }
+    sqlx::query("UPDATE runs SET status='completed',result=jsonb_build_object('counts',$2::jsonb,'object_ids',$3::uuid[]),completed_at=now(),updated_at=now() WHERE id=$1")
+      .bind(run_id).bind(batch.counts()).bind(batch.object_ids.values().copied().collect::<Vec<_>>()).execute(&mut *tx).await?;
     for connection in &batch.request.connections {
         let id = batch.connection_ids[&connection.client_key];
         let source_id = connection
@@ -1150,13 +1142,62 @@ async fn insert_intake_event(
     );
     object.insert("intake_payload_sha256".into(), json!(batch.payload_sha256));
     object.insert("intake_client_key".into(), json!(client_key));
-    sqlx::query(r#"INSERT INTO object_events
-        (id,entity_type,entity_id,object_id,action,actor_type,actor_id,centaur_thread_key,centaur_execution_id,idempotency_key,to_revision,changes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#)
-        .bind(Uuid::new_v4()).bind(entity_type).bind(entity_id).bind(object_id).bind(action)
-        .bind(actor.actor_type).bind(&actor.actor_id).bind(&actor.centaur_thread_key).bind(&actor.centaur_execution_id)
-        .bind(format!("intake:{}:{family}:{client_key}", batch.request.batch_id)).bind(to_revision).bind(changes)
-        .execute(&mut **tx).await?;
+    let run_id = stable_id(&batch.request.batch_id, "run", "intake");
+    let sequence: i32 =
+        sqlx::query_scalar("SELECT COALESCE(max(sequence),0)+1 FROM object_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let target_type = if entity_type == "connection" {
+        "connection"
+    } else {
+        "object"
+    };
+    let target_id = if target_type == "connection" {
+        entity_id
+    } else {
+        object_id
+    };
+    let after: Value = if target_type == "connection" {
+        sqlx::query_scalar("SELECT to_jsonb(c) FROM connections c WHERE id=$1")
+            .bind(target_id)
+            .fetch_one(&mut **tx)
+            .await?
+    } else {
+        sqlx::query_scalar("SELECT to_jsonb(o) FROM objects o WHERE id=$1")
+            .bind(target_id)
+            .fetch_one(&mut **tx)
+            .await?
+    };
+    sqlx::query(
+        r#"INSERT INTO object_events
+        (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,idempotency_key,
+         from_revision,to_revision,before_state,after_state,reversible,created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true,now())"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(run_id)
+    .bind(sequence)
+    .bind(target_type)
+    .bind(target_id)
+    .bind(if action == "connected" {
+        "created"
+    } else {
+        action
+    })
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(format!(
+        "intake:{}:{family}:{client_key}",
+        batch.request.batch_id
+    ))
+    .bind((to_revision > 1).then_some(to_revision - 1))
+    .bind(to_revision)
+    .bind((to_revision > 1).then(|| json!({"revision":to_revision-1})))
+    .bind(after)
+    .execute(&mut **tx)
+    .await?;
+    crate::runs::append_trace(tx, run_id, "intake_mutation", changes).await?;
     Ok(())
 }
 
@@ -1180,13 +1221,10 @@ pub(crate) async fn status(
         object_ids: Vec<Uuid>,
     }
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT
-        min(changes->>'intake_manifest_sha256') AS manifest_sha256,
-        min(changes->>'intake_payload_sha256') AS payload_sha256,
-        count(*)::bigint AS event_count,
-        array_agg(DISTINCT object_id ORDER BY object_id) AS object_ids
-        FROM object_events WHERE changes->>'intake_batch_id'=$1
-        HAVING count(*)>0"#,
+        r#"SELECT input->>'manifest_sha256' manifest_sha256,input->>'payload_sha256' payload_sha256,
+        COALESCE((SELECT count(*) FROM object_events e WHERE e.run_id=r.id),0)::bigint event_count,
+        COALESCE(ARRAY(SELECT jsonb_array_elements_text(result->'object_ids')::uuid),'{}'::uuid[]) object_ids
+        FROM runs r WHERE kind='intake' AND input->>'batch_id'=$1"#,
     )
     .bind(batch_id)
     .fetch_optional(pool)

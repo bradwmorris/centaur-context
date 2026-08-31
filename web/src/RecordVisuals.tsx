@@ -10,8 +10,7 @@ const typeVisuals: Record<ObjectKind, { icon: string; label: string }> = {
   source: { icon: "▤", label: "Source" },
   note: { icon: "▱", label: "Note" },
   theme: { icon: "#", label: "Theme" },
-  external_action: { icon: "↗", label: "External action" },
-};
+  };
 
 const statusVisuals: Record<TaskStatus, { icon: string; label: string }> = {
   backlog: { icon: "◌", label: "Backlog" },

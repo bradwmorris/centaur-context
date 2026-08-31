@@ -1,6 +1,6 @@
 import type { SchemaViewMode } from "./types";
 
-export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "sources" | "notes" | "themes" | "curator" | "evals" | "schema";
+export type Section = "objects" | "tasks" | "chats" | "users" | "entities" | "memories" | "sources" | "notes" | "themes" | "runs" | "schema";
 
 export interface AppRoute {
   section: Section;
@@ -18,8 +18,7 @@ const sections: Record<string, Section> = {
   sources: "sources",
   notes: "notes",
   themes: "themes",
-  "curator-runs": "curator",
-  evals: "evals",
+  runs: "runs",
   schema: "schema",
 };
 
@@ -33,8 +32,7 @@ const paths: Record<Section, string> = {
   sources: "sources",
   notes: "notes",
   themes: "themes",
-  curator: "curator-runs",
-  evals: "evals",
+  runs: "runs",
   schema: "schema",
 };
 
