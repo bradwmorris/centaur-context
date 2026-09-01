@@ -182,7 +182,8 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
   }
   if (section === "runs") {
     const normalized = query.trim().toLocaleLowerCase();
-    return normalized ? runs.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id} ${itemTitle(item, objects)} ${itemDescription(item, objects)}`.toLocaleLowerCase().includes(normalized)) : runs;
+    const rootRuns = runs.filter((item) => item.parent_run_id === null);
+    return normalized ? rootRuns.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id} ${itemTitle(item, objects)} ${itemDescription(item, objects)}`.toLocaleLowerCase().includes(normalized)) : rootRuns;
   }
   if (section === "objects") return objects;
   const kind = sectionKinds[section];
@@ -205,6 +206,8 @@ function itemDescription(item: ListItem, objects: SharedObject[]) {
 }
 function runType(run: Run, objects: SharedObject[] | RunObject[]) {
   const primary = run.primary_object_id ? objects.find((object) => ("id" in object ? object.id : object.object_id) === run.primary_object_id) : undefined;
+  if (run.kind === "workflow" && run.input.workflow_name === "enyu_source_ingestion") return "Source ingestion";
+  if (run.kind === "intake" && run.parent_run_id) return "Context commit";
   if (run.kind === "intake" && primary?.kind === "source") return "Source ingestion";
   if (run.kind === "intake") return "Data ingestion";
   if (run.kind === "slack_interaction") return "Slack interaction";
@@ -225,6 +228,7 @@ function runOutcome(run: Run, objects: SharedObject[] | RunObject[]) {
     const action = objectCount > 0 ? `Created ${objectCount} ${subject}${objectCount === 1 ? "" : "s"}` : `Reused ${subject}`;
     return connectionCount > 0 ? `${action} · Added ${connectionCount} connection${connectionCount === 1 ? "" : "s"}` : action;
   }
+  if (run.kind === "workflow") return textValue(run.result.summary, run.status === "running" ? "Source ingestion is running." : "Workflow completed.");
   if (run.error) return run.error;
   return `${run.actor_type}:${run.actor_id} · ${run.verdict}`;
 }
@@ -702,7 +706,7 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
   }, [id]);
   useEffect(() => { void load(); }, [load]);
   if (!detail) return <DetailLoading error={error} />;
-  const { run, objects, events } = detail;
+  const { run, children, objects, events } = detail;
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null);
     const data = new FormData(event.currentTarget);
@@ -724,9 +728,17 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
   const chatVisual = run.chat_object_id ? visuals.get(run.chat_object_id) : undefined;
   const title = primary ? `${runType(run, objects)} · ${primary.title}` : runType(run, objects);
   const outcome = runOutcome(run, objects);
+  const metrics = runMetrics(run);
   return <div className="record-page"><div className="record-primary eval-detail">
     <div className="detail-heading run-heading"><span className="object-id-pill">Run ID: {shortId(run.id)}</span><h1 className="detail-title">{title}</h1><AttributionStack users={chatVisual?.users ?? []} /></div>
     <p className="detail-description">{outcome}</p>
+    <section className="run-metrics" aria-label="Run summary">
+      <RunMetric label="Duration" value={metrics.duration} />
+      <RunMetric label="Model" value={metrics.model} />
+      <RunMetric label="Tokens" value={metrics.tokens} />
+      <RunMetric label="Tool calls" value={String(metrics.toolCalls)} />
+      <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
+    </section>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
       <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
       <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
@@ -737,16 +749,77 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
     <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={run.verdict}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={run.review_notes ?? ""} /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></form>
     {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
-    <Section title="Activity"><div className="trace-list">{run.trace.map((entry, index) => <article className="trace-entry run-trace-entry" key={index}><span>{index + 1}</span><strong>{textValue(entry.entry_type ?? entry.type, "step").replaceAll("_", " ")}</strong><p>{runTraceDescription(entry)}</p><details className="run-technical"><summary>Technical details</summary><code>{JSON.stringify(entry)}</code></details></article>)}</div></Section>
+    <Section title="Execution trace"><div className="run-trace-list">{run.trace.map((entry, index) => <RunTraceEntry entry={entry} index={index} key={textValue(entry.id, String(index))} />)}{run.trace.length === 0 && <p className="run-empty-trace">No detailed trace was recorded for this run.</p>}</div></Section>
     <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
+    {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{children.map((child) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
     <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectId id={object.object_id} compact /><ObjectContext visual={visuals.get(object.object_id)} /></article>)}</div></Section>
     <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><div><strong>{item.action} {item.target_type}</strong><p>revision {item.from_revision ?? "new"} → {item.to_revision}</p>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} />}</div></article>)}</div></Section>
   </div></div>;
 }
 
+function RunMetric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
+  return <div className={warning ? "run-metric warning" : "run-metric"}><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function RunTraceEntry({ entry, index }: { entry: Record<string, unknown>; index: number }) {
+  const entryType = textValue(entry.entry_type ?? entry.type, "step").replaceAll("_", " ");
+  const name = textValue(entry.name, entryType).replaceAll("_", " ");
+  const status = textValue(entry.status, "completed");
+  const duration = numberValue(entry.duration_ms);
+  const tokens = numberValue(entry.total_tokens);
+  return <details className={`run-trace-card ${status}`}>
+    <summary>
+      <span className="run-trace-index">{index + 1}</span>
+      <span className="run-trace-summary"><strong>{name}</strong><small>{entryType} · {runTraceDescription(entry)}</small></span>
+      {duration !== null && <span className="run-trace-stat">{formatDuration(duration)}</span>}
+      {tokens !== null && <span className="run-trace-stat">{formatCount(tokens)} tokens</span>}
+      <StateBadge state={status} />
+      <span className="run-trace-chevron" aria-hidden="true">›</span>
+    </summary>
+    <div className="run-trace-detail">
+      <div><span>Component</span><strong>{textValue(entry.component, "workflow")}</strong></div>
+      {textValue(entry.model_id) && <div><span>Model</span><strong>{textValue(entry.model_id)}</strong></div>}
+      {numberValue(entry.input_tokens) !== null && <div><span>Input</span><strong>{formatCount(numberValue(entry.input_tokens) ?? 0)}</strong></div>}
+      {numberValue(entry.output_tokens) !== null && <div><span>Output</span><strong>{formatCount(numberValue(entry.output_tokens) ?? 0)}</strong></div>}
+      {numberValue(entry.cache_read_tokens) !== null && <div><span>Cache read</span><strong>{formatCount(numberValue(entry.cache_read_tokens) ?? 0)}</strong></div>}
+      {numberValue(entry.reasoning_tokens) !== null && <div><span>Reasoning</span><strong>{formatCount(numberValue(entry.reasoning_tokens) ?? 0)}</strong></div>}
+      <details className="run-technical"><summary>Raw trace entry</summary><code>{JSON.stringify(entry)}</code></details>
+    </div>
+  </details>;
+}
+
+function runMetrics(run: Run) {
+  let totalTokens = 0;
+  let hasTokens = false;
+  let toolCalls = 0;
+  let failures = 0;
+  let model = "—";
+  for (const entry of run.trace) {
+    if (entry.entry_type === "tool_call") toolCalls += 1;
+    if (entry.status === "failed") failures += 1;
+    const entryTokens = numberValue(entry.total_tokens);
+    if (entryTokens !== null) { totalTokens += entryTokens; hasTokens = true; }
+    if (model === "—") model = textValue(entry.model_id, "—");
+  }
+  const started = run.started_at ? new Date(run.started_at).getTime() : null;
+  const completed = run.completed_at ? new Date(run.completed_at).getTime() : null;
+  const duration = started !== null && completed !== null ? formatDuration(Math.max(0, completed - started)) : run.status === "running" ? "Running" : "—";
+  return { duration, model, tokens: hasTokens ? formatCount(totalTokens) : "—", toolCalls, failures };
+}
+
 function runTraceDescription(entry: Record<string, unknown>) {
   const facts = entry.facts as Record<string, unknown> | undefined;
-  return textValue(facts?.description, "Recorded a workflow step.");
+  return textValue(facts?.description, textValue(facts?.purpose, textValue(facts?.method, "Recorded workflow activity."))).replaceAll("_", " ");
+}
+
+function numberValue(value: unknown) { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function formatCount(value: number) { return new Intl.NumberFormat().format(value); }
+function formatDuration(milliseconds: number) {
+  if (milliseconds < 1000) return `${Math.round(milliseconds)} ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)} s`;
+  const minutes = Math.floor(milliseconds / 60_000);
+  const seconds = Math.round((milliseconds % 60_000) / 1000);
+  return `${minutes}m ${seconds}s`;
 }
 
 function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {

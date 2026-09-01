@@ -5,7 +5,7 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::Response,
@@ -52,6 +52,15 @@ pub fn router(app: AppState, token: String) -> Router {
             "/api/v2/source-intake/resolve-connections",
             post(resolve_connections),
         )
+        .route("/api/v2/source-intake/runs/start", post(start_workflow_run))
+        .route(
+            "/api/v2/source-intake/runs/{id}/trace",
+            post(append_workflow_trace),
+        )
+        .route(
+            "/api/v2/source-intake/runs/{id}/finish",
+            post(finish_workflow_run),
+        )
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_SOURCE_INTAKE_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, source_intake_auth))
@@ -65,6 +74,44 @@ async fn health() -> Json<Value> {
 async fn ready(State(state): State<SourceIntakeState>) -> Result<Json<Value>, IntakeError> {
     crate::db::ready(&state.app.pool).await?;
     Ok(Json(json!({"ok":true,"ready":true})))
+}
+
+async fn start_workflow_run(
+    State(state): State<SourceIntakeState>,
+    Extension(actor): Extension<ActorContext>,
+    Json(mut input): Json<crate::runs::WorkflowRunStart>,
+) -> Result<(StatusCode, Json<Value>), IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let run =
+        crate::runs::start_workflow_run(&state.app.pool, actor.actor_type, &actor.actor_id, &input)
+            .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"run_id":run.id,"status":run.status}})),
+    ))
+}
+
+async fn append_workflow_trace(
+    State(state): State<SourceIntakeState>,
+    Path(id): Path<Uuid>,
+    Json(mut input): Json<crate::runs::WorkflowTraceEntry>,
+) -> Result<(StatusCode, Json<Value>), IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let trace_entry_id = crate::runs::append_workflow_trace(&state.app.pool, id, &input).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"trace_entry_id":trace_entry_id}})),
+    ))
+}
+
+async fn finish_workflow_run(
+    State(state): State<SourceIntakeState>,
+    Path(id): Path<Uuid>,
+    Json(mut input): Json<crate::runs::WorkflowRunFinish>,
+) -> Result<Json<Value>, IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let run = crate::runs::finish_workflow_run(&state.app.pool, id, &input).await?;
+    Ok(Json(json!({"data":{"run_id":run.id,"status":run.status}})))
 }
 
 async fn source_intake_auth(
@@ -598,6 +645,7 @@ fn source_response(prepared: &PreparedBatch, status: &str, replayed: bool) -> Va
         "status":status,
         "replayed":replayed,
         "idempotency_key":prepared.request.batch_id,
+        "run_id":crate::intake::intake_run_id(&prepared.request.batch_id),
         "object_id":prepared.object_ids["source"],
         "payload_sha256":prepared.payload_sha256,
         "counts":prepared.counts(),

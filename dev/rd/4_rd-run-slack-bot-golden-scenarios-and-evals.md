@@ -103,6 +103,17 @@ reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gat
   subject title, Slack attribution, participants, outcome summary, and related
   Object links from those structured records. Raw trace and result JSON remain
   available under collapsed technical details.
+- **Workflow trace MVP:** Source ingestion now owns one top-level workflow Run;
+  its atomic Context intake is linked as a child Run. The scoped workflow API
+  accepts privacy-minimized OpenTelemetry-shaped model and tool entries, model
+  token usage, durations, failures, and terminal outcome without exposing a
+  database credential. The Run detail renders summary metrics and collapsible
+  trace entries in the existing UI, so Phoenix is not required for the MVP.
+  Schema 21 repaired the historical Ryan Greenblatt video linkage and correctly
+  labels its unavailable pre-instrumentation telemetry rather than inventing
+  spans. The local deployment and browser check confirmed the parent/child
+  relationship, seven related Objects, Brad/Rez attribution, responsive layout,
+  and no browser console errors.
 
 ## Checks
 

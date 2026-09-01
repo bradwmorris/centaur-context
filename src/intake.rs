@@ -1014,6 +1014,10 @@ fn stable_id(batch_id: &str, family: &str, client_key: &str) -> Uuid {
     )
 }
 
+pub(crate) fn intake_run_id(batch_id: &str) -> Uuid {
+    stable_id(batch_id, "run", "intake")
+}
+
 fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }

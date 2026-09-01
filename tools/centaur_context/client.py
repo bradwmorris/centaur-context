@@ -718,6 +718,80 @@ class CentaurContextClient:
             "status", manifest, principal_id=principal_id, thread_key=thread_key
         )
 
+    def workflow_run_start(
+        self,
+        run: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or reuse one durable workflow Run without storing source content."""
+        return self._workflow_run_request(
+            "POST",
+            "/api/v2/source-intake/runs/start",
+            run,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def workflow_run_trace(
+        self,
+        run_id: str,
+        entry: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one idempotent, privacy-minimized workflow trace entry."""
+        run_id = _clean(run_id)
+        if not run_id:
+            raise ValueError("run_id is required")
+        return self._workflow_run_request(
+            "POST",
+            f"/api/v2/source-intake/runs/{quote(run_id, safe='')}/trace",
+            entry,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def workflow_run_finish(
+        self,
+        run_id: str,
+        outcome: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Complete or fail one durable workflow Run and link its child commit."""
+        run_id = _clean(run_id)
+        if not run_id:
+            raise ValueError("run_id is required")
+        return self._workflow_run_request(
+            "POST",
+            f"/api/v2/source-intake/runs/{quote(run_id, safe='')}/finish",
+            outcome,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def _workflow_run_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        principal_id: str | None,
+        thread_key: str | None,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("workflow Run payload must be a JSON object")
+        return self._request(
+            method,
+            path,
+            json=payload,
+            token=self._source_intake_token(),
+            base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
     def _source_intake_request(
         self,
         action: str,

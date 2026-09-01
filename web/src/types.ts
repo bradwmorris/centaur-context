@@ -396,6 +396,7 @@ export interface RunObject {
 
 export interface RunDetail {
   run: Run;
+  children: Run[];
   objects: RunObject[];
   events: ObjectEvent[];
 }

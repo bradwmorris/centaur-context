@@ -71,8 +71,62 @@ pub struct RunObject {
 #[derive(Clone, Debug, Serialize)]
 pub struct RunDetail {
     pub run: RunSummary,
+    pub children: Vec<RunSummary>,
     pub objects: Vec<RunObject>,
     pub events: Vec<ObjectEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunStart {
+    pub run_id: Uuid,
+    pub workflow_name: String,
+    pub source_kind: String,
+    pub source_locator: Option<String>,
+    pub requested_title: Option<String>,
+    pub chat_object_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowTraceEntry {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub entry_type: String,
+    pub name: String,
+    pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub completed_at: OffsetDateTime,
+    pub duration_ms: i64,
+    pub component: String,
+    pub provider: Option<String>,
+    pub model_id: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub source_execution_id: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub reasoning_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    #[serde(default = "empty_object")]
+    pub facts: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRunFinish {
+    pub status: String,
+    pub primary_object_id: Option<Uuid>,
+    pub child_run_id: Option<Uuid>,
+    #[serde(default = "empty_object")]
+    pub result: Value,
+    pub error: Option<String>,
+}
+
+fn empty_object() -> Value {
+    json!({})
 }
 
 const RUN_SELECT: &str = r#"SELECT id,parent_run_id,kind,status,actor_type,actor_id,
@@ -142,19 +196,28 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<RunDetail, DbError> {
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::NotFound)?;
+    let children = sqlx::query_as::<_, RunSummary>(&format!(
+        "{RUN_SELECT} WHERE parent_run_id=$1 ORDER BY created_at,id"
+    ))
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
     let objects = sqlx::query_as(
-        r#"WITH linked AS (
+        r#"WITH RECURSIVE run_tree AS (
+             SELECT $1::uuid id
+             UNION ALL SELECT child.id FROM runs child JOIN run_tree parent ON child.parent_run_id=parent.id
+           ), linked AS (
              SELECT $3::uuid object_id,'primary'::text role,1 priority WHERE $3 IS NOT NULL
              UNION ALL SELECT $4::uuid,'origin_chat',2 WHERE $4 IS NOT NULL
              UNION ALL SELECT unnest($2::uuid[]),'consulted',3
              UNION ALL SELECT target_id,'changed',4 FROM object_events
-               WHERE run_id=$1 AND target_type='object'
+               WHERE run_id IN (SELECT id FROM run_tree) AND target_type='object'
              UNION ALL SELECT c.source_object_id,'connected',5
                FROM object_events e JOIN connections c ON c.id=e.target_id
-               WHERE e.run_id=$1 AND e.target_type='connection'
+               WHERE e.run_id IN (SELECT id FROM run_tree) AND e.target_type='connection'
              UNION ALL SELECT c.target_object_id,'connected',5
                FROM object_events e JOIN connections c ON c.id=e.target_id
-               WHERE e.run_id=$1 AND e.target_type='connection'
+               WHERE e.run_id IN (SELECT id FROM run_tree) AND e.target_type='connection'
            ), ranked AS (
              SELECT DISTINCT ON (object_id) object_id,role,priority
              FROM linked WHERE object_id IS NOT NULL
@@ -170,15 +233,283 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<RunDetail, DbError> {
     .bind(run.chat_object_id)
     .fetch_all(pool)
     .await?;
-    let events = sqlx::query_as("SELECT * FROM object_events WHERE run_id=$1 ORDER BY sequence")
+    let events = sqlx::query_as(
+        r#"WITH RECURSIVE run_tree AS (
+             SELECT $1::uuid id
+             UNION ALL SELECT child.id FROM runs child JOIN run_tree parent ON child.parent_run_id=parent.id
+           ) SELECT e.* FROM object_events e
+           WHERE e.run_id IN (SELECT id FROM run_tree)
+           ORDER BY e.created_at,e.run_id,e.sequence"#,
+    )
         .bind(id)
         .fetch_all(pool)
         .await?;
     Ok(RunDetail {
         run,
+        children,
         objects,
         events,
     })
+}
+
+impl WorkflowRunStart {
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.workflow_name = bounded_text(&self.workflow_name, "workflow_name", 200)?;
+        if self.workflow_name != "enyu_source_ingestion" {
+            return Err("workflow_name is not approved for this listener".into());
+        }
+        self.source_kind = bounded_text(&self.source_kind, "source_kind", 50)?;
+        if !["url", "file", "text"].contains(&self.source_kind.as_str()) {
+            return Err("source_kind is unsupported".into());
+        }
+        self.source_locator = optional_bounded(self.source_locator.take(), "source_locator", 2000)?;
+        self.requested_title =
+            optional_bounded(self.requested_title.take(), "requested_title", 500)?;
+        Ok(())
+    }
+}
+
+impl WorkflowTraceEntry {
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.entry_type = bounded_text(&self.entry_type, "entry_type", 100)?;
+        if ![
+            "workflow_step",
+            "agent_turn",
+            "model_attempt",
+            "tool_call",
+            "message",
+            "child_run",
+        ]
+        .contains(&self.entry_type.as_str())
+        {
+            return Err("entry_type is unsupported".into());
+        }
+        self.name = bounded_text(&self.name, "name", 200)?;
+        self.status = bounded_text(&self.status, "status", 50)?;
+        if !["completed", "failed"].contains(&self.status.as_str()) {
+            return Err("trace status is unsupported".into());
+        }
+        self.component = bounded_text(&self.component, "component", 100)?;
+        self.provider = optional_bounded(self.provider.take(), "provider", 100)?;
+        self.model_id = optional_bounded(self.model_id.take(), "model_id", 200)?;
+        self.reasoning_effort =
+            optional_bounded(self.reasoning_effort.take(), "reasoning_effort", 100)?;
+        self.source_execution_id =
+            optional_bounded(self.source_execution_id.take(), "source_execution_id", 300)?;
+        if self.completed_at < self.started_at {
+            return Err("completed_at must not precede started_at".into());
+        }
+        if !(0..=86_400_000).contains(&self.duration_ms) {
+            return Err("duration_ms must be between zero and one day".into());
+        }
+        let tokens = [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.reasoning_tokens,
+            self.total_tokens,
+        ];
+        if tokens.iter().flatten().any(|value| *value < 0) {
+            return Err("token counts must not be negative".into());
+        }
+        if let (Some(input), Some(output), Some(total)) =
+            (self.input_tokens, self.output_tokens, self.total_tokens)
+        {
+            let minimum = input
+                .checked_add(output)
+                .ok_or_else(|| "token counts are too large".to_owned())?;
+            if total < minimum {
+                return Err("total_tokens must include input_tokens and output_tokens".into());
+            }
+        }
+        let facts_size = serde_json::to_vec(&self.facts)
+            .map_err(|error| format!("facts could not be encoded: {error}"))?
+            .len();
+        if !self.facts.is_object() || facts_size > 32_768 {
+            return Err("facts must be an object no larger than 32 KiB".into());
+        }
+        Ok(())
+    }
+}
+
+impl WorkflowRunFinish {
+    pub fn validate(&mut self) -> Result<(), String> {
+        self.status = bounded_text(&self.status, "status", 50)?;
+        if !["completed", "failed"].contains(&self.status.as_str()) {
+            return Err("workflow status is unsupported".into());
+        }
+        let result_size = serde_json::to_vec(&self.result)
+            .map_err(|error| format!("result could not be encoded: {error}"))?
+            .len();
+        if !self.result.is_object() || result_size > 1_048_576 {
+            return Err("result must be an object no larger than 1 MiB".into());
+        }
+        self.error = optional_bounded(self.error.take(), "error", 10_000)?;
+        if self.status == "failed" && self.error.is_none() {
+            return Err("failed workflows require an error".into());
+        }
+        if self.status == "completed" && self.error.is_some() {
+            return Err("completed workflows cannot include an error".into());
+        }
+        Ok(())
+    }
+}
+
+fn bounded_text(value: &str, field: &str, max: usize) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max {
+        return Err(format!("{field} must contain 1 to {max} characters"));
+    }
+    Ok(value.to_owned())
+}
+
+fn optional_bounded(
+    value: Option<String>,
+    field: &str,
+    max: usize,
+) -> Result<Option<String>, String> {
+    value
+        .map(|value| bounded_text(&value, field, max))
+        .transpose()
+}
+
+pub async fn start_workflow_run(
+    pool: &PgPool,
+    actor_type: &str,
+    actor_id: &str,
+    input: &WorkflowRunStart,
+) -> Result<RunSummary, DbError> {
+    let run_input = json!({
+        "workflow_name": input.workflow_name,
+        "source_kind": input.source_kind,
+        "source_locator": input.source_locator,
+        "requested_title": input.requested_title,
+    });
+    sqlx::query(
+        r#"INSERT INTO runs (
+             id,kind,status,actor_type,actor_id,chat_object_id,idempotency_key,input,
+             result,available_at,started_at
+           ) VALUES ($1,'workflow','running',$2,$3,$4,$5,$6,
+             jsonb_build_object('summary','Source ingestion is running.'),now(),now())
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .bind(input.run_id)
+    .bind(actor_type)
+    .bind(actor_id)
+    .bind(input.chat_object_id)
+    .bind(format!("workflow:{}", input.run_id))
+    .bind(&run_input)
+    .execute(pool)
+    .await?;
+    let run = detail(pool, input.run_id).await?.run;
+    if run.kind != "workflow"
+        || run.actor_type != actor_type
+        || run.actor_id != actor_id
+        || run.input != run_input
+        || run.chat_object_id != input.chat_object_id
+    {
+        return Err(DbError::Conflict);
+    }
+    Ok(run)
+}
+
+pub async fn append_workflow_trace(
+    pool: &PgPool,
+    run_id: Uuid,
+    entry: &WorkflowTraceEntry,
+) -> Result<Uuid, DbError> {
+    let value = serde_json::to_value(entry).map_err(|error| DbError::Invalid(error.to_string()))?;
+    let updated = sqlx::query_scalar::<_, Uuid>(
+        r#"UPDATE runs
+           SET trace=trace||jsonb_build_array($2::jsonb),updated_at=now()
+           WHERE id=$1 AND kind='workflow'
+             AND NOT EXISTS(
+               SELECT 1 FROM jsonb_array_elements(trace) item WHERE item->>'id'=$3
+             )
+           RETURNING id"#,
+    )
+    .bind(run_id)
+    .bind(value)
+    .bind(entry.id.to_string())
+    .fetch_optional(pool)
+    .await?;
+    if updated.is_some() {
+        return Ok(entry.id);
+    }
+    let existing: Option<bool> = sqlx::query_scalar(
+        r#"SELECT EXISTS(
+             SELECT 1 FROM jsonb_array_elements(trace) item WHERE item->>'id'=$2
+           ) FROM runs WHERE id=$1 AND kind='workflow'"#,
+    )
+    .bind(run_id)
+    .bind(entry.id.to_string())
+    .fetch_optional(pool)
+    .await?;
+    match existing {
+        Some(true) => Ok(entry.id),
+        Some(false) => Err(DbError::Conflict),
+        None => Err(DbError::NotFound),
+    }
+}
+
+pub async fn finish_workflow_run(
+    pool: &PgPool,
+    run_id: Uuid,
+    input: &WorkflowRunFinish,
+) -> Result<RunSummary, DbError> {
+    let mut tx = pool.begin().await?;
+    let current: Option<(String, String)> =
+        sqlx::query_as("SELECT kind,status FROM runs WHERE id=$1 FOR UPDATE")
+            .bind(run_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((kind, status)) = current else {
+        return Err(DbError::NotFound);
+    };
+    if kind != "workflow" {
+        return Err(DbError::Conflict);
+    }
+    if status != "running" {
+        if status == input.status {
+            tx.commit().await?;
+            return Ok(detail(pool, run_id).await?.run);
+        }
+        return Err(DbError::Conflict);
+    }
+    if let Some(child_run_id) = input.child_run_id {
+        let linked = sqlx::query(
+            r#"UPDATE runs SET parent_run_id=$1,updated_at=now()
+               WHERE id=$2 AND kind='intake'
+                 AND input->>'batch_id'='workflow:'||$1::text
+                 AND (parent_run_id IS NULL OR parent_run_id=$1)"#,
+        )
+        .bind(run_id)
+        .bind(child_run_id)
+        .execute(&mut *tx)
+        .await?;
+        if linked.rows_affected() != 1 {
+            return Err(DbError::Conflict);
+        }
+    }
+    let mut result = input.result.clone();
+    let result_object = result.as_object_mut().expect("validated workflow result");
+    if let Some(child_run_id) = input.child_run_id {
+        result_object.insert("child_run_id".into(), json!(child_run_id));
+    }
+    sqlx::query(
+        r#"UPDATE runs SET status=$2,primary_object_id=$3,result=result||$4,
+             error=$5,completed_at=now(),updated_at=now()
+           WHERE id=$1"#,
+    )
+    .bind(run_id)
+    .bind(&input.status)
+    .bind(input.primary_object_id)
+    .bind(result)
+    .bind(&input.error)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(detail(pool, run_id).await?.run)
 }
 
 pub async fn review(
@@ -645,5 +976,59 @@ mod tests {
         let mut input = usage();
         input.billing_mode = "subscription_allowance".into();
         assert!(input.validate().unwrap_err().contains("billed USD"))
+    }
+
+    #[test]
+    fn workflow_trace_contract_accepts_safe_otel_shaped_usage() {
+        let now = OffsetDateTime::now_utc();
+        let mut entry = WorkflowTraceEntry {
+            id: Uuid::new_v4(),
+            parent_id: None,
+            entry_type: "model_attempt".into(),
+            name: "research-source".into(),
+            status: "completed".into(),
+            started_at: now,
+            completed_at: now,
+            duration_ms: 42,
+            component: "agent".into(),
+            provider: Some("codex".into()),
+            model_id: Some("fixture-model".into()),
+            reasoning_effort: Some("medium".into()),
+            source_execution_id: Some("execution-1".into()),
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cache_read_tokens: Some(25),
+            reasoning_tokens: Some(5),
+            total_tokens: Some(120),
+            facts: json!({"purpose":"capture and analyze source"}),
+        };
+        assert!(entry.validate().is_ok());
+    }
+
+    #[test]
+    fn workflow_trace_contract_rejects_inconsistent_usage() {
+        let now = OffsetDateTime::now_utc();
+        let mut entry = WorkflowTraceEntry {
+            id: Uuid::new_v4(),
+            parent_id: None,
+            entry_type: "model_attempt".into(),
+            name: "research-source".into(),
+            status: "completed".into(),
+            started_at: now,
+            completed_at: now,
+            duration_ms: 42,
+            component: "agent".into(),
+            provider: None,
+            model_id: None,
+            reasoning_effort: None,
+            source_execution_id: None,
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cache_read_tokens: None,
+            reasoning_tokens: None,
+            total_tokens: Some(119),
+            facts: json!({}),
+        };
+        assert!(entry.validate().unwrap_err().contains("total_tokens"));
     }
 }
