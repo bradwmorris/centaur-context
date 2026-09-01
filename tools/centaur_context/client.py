@@ -587,6 +587,8 @@ class CentaurContextClient:
         *,
         content_format: str = "markdown",
         provenance: dict[str, Any] | None = None,
+        originating_chat_object_id: str | None = None,
+        derived_from_source_object_ids: list[str] | None = None,
         idempotency_key: str,
     ) -> dict[str, Any]:
         """Create a Note with the separate, narrowly scoped write credential."""
@@ -624,6 +626,8 @@ class CentaurContextClient:
                 "content": content,
                 "content_format": content_format,
                 "provenance": provenance or {},
+                "originating_chat_object_id": _clean(originating_chat_object_id),
+                "derived_from_source_object_ids": derived_from_source_object_ids or [],
             },
             idempotency_key=idempotency_key,
             token=self._note_write_token(),

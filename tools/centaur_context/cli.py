@@ -99,6 +99,8 @@ def create_note(
     content: str,
     content_format: str = "markdown",
     provenance_json: str = "{}",
+    originating_chat_object_id: str | None = None,
+    derived_from_source_object_id: list[str] | None = None,
     idempotency_key: str = "",
 ) -> None:
     """Create a Note using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
@@ -113,6 +115,8 @@ def create_note(
             content,
             content_format=content_format,
             provenance=provenance,
+            originating_chat_object_id=originating_chat_object_id,
+            derived_from_source_object_ids=derived_from_source_object_id,
             idempotency_key=idempotency_key,
         )
     )
@@ -285,6 +289,8 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("--content", required=True)
     command.add_argument("--content-format", default="markdown")
     command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--originating-chat-object-id")
+    command.add_argument("--derived-from-source-object-id", action="append")
     command.add_argument("--idempotency-key", required=True)
 
     command = commands.add_parser("create-task")

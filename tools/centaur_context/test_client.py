@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -129,6 +131,8 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         title="Research note",
         description="A source-grounded note created through the narrow write listener.",
         content="Evidence",
+        originating_chat_object_id="chat-1",
+        derived_from_source_object_ids=["source-1"],
         idempotency_key="note-1",
     )
     scoped.create_task(
@@ -167,6 +171,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         "Bearer " + "s" * 32,
         "Bearer " + "e" * 32,
     ]
+    note_payload = json.loads(requests[0].content)
+    assert note_payload["originating_chat_object_id"] == "chat-1"
+    assert note_payload["derived_from_source_object_ids"] == ["source-1"]
 
 
 @pytest.mark.parametrize(

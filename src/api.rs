@@ -1200,6 +1200,9 @@ struct CreateNoteRequest {
     #[serde(default = "default_note_format")]
     content_format: String,
     provenance: Option<Value>,
+    originating_chat_object_id: Option<Uuid>,
+    #[serde(default)]
+    derived_from_source_object_ids: Vec<Uuid>,
 }
 
 fn default_note_format() -> String {
@@ -1223,6 +1226,8 @@ async fn create_note(
             provenance: provenance(input.provenance)?,
             content: required_text(input.content, "content", 100_000)?,
             content_format: allowed(input.content_format, "content_format", NOTE_CONTENT_FORMATS)?,
+            originating_chat_object_id: input.originating_chat_object_id,
+            derived_from_source_object_ids: input.derived_from_source_object_ids,
         },
         &key,
     )
