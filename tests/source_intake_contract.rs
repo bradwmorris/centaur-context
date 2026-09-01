@@ -188,6 +188,7 @@ async fn reuses_exact_source_for_new_connection_batches_without_duplicates() {
     let canonical_uri = format!("https://example.test/enyu-source/{key}");
     let content = format!("Exact captured evidence for Source reuse: {key}.");
     let target_id = uuid::Uuid::new_v4();
+    let chat_id = uuid::Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO objects
            (id,kind,title,description,protected,created_by_type,created_by_id,
@@ -201,6 +202,22 @@ async fn reuses_exact_source_for_new_connection_batches_without_duplicates() {
     .unwrap();
     sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,'person')")
         .bind(target_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"INSERT INTO objects
+           (id,kind,title,description,protected,created_by_type,created_by_id,
+            updated_by_type,updated_by_id,provenance)
+           VALUES ($1,'chat','Source request','The Slack conversation requesting this Source.',true,
+                   'human','contract-test','human','contract-test','{}'::jsonb)"#,
+    )
+    .bind(chat_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO chats (object_id) VALUES ($1)")
+        .bind(chat_id)
         .execute(&pool)
         .await
         .unwrap();
@@ -235,7 +252,7 @@ async fn reuses_exact_source_for_new_connection_batches_without_duplicates() {
             "provenance":{"source_type":"enyu_workflow","source_ref":"reuse-test"}
         },
         "connections":[],
-        "originating_chat_object_id":null
+        "originating_chat_object_id":chat_id
     });
     let app = router(
         AppState {
@@ -301,21 +318,25 @@ async fn reuses_exact_source_for_new_connection_batches_without_duplicates() {
     assert_eq!(repeated_body["data"]["object_id"], source_id);
     assert_eq!(repeated_body["data"]["counts"]["connections"], 0);
 
-    let stored_counts: (i64, i64, i64) = sqlx::query_as(
+    let stored_counts: (i64, i64, i64, i64) = sqlx::query_as(
         r#"SELECT
              (SELECT count(*) FROM sources WHERE canonical_uri=$1),
              (SELECT count(*) FROM artifacts WHERE object_id=$2::uuid),
              (SELECT count(*) FROM connections
               WHERE source_object_id=$2::uuid AND kind='references'
-                AND target_object_id=$3 AND archived_at IS NULL)"#,
+                AND target_object_id=$3 AND archived_at IS NULL),
+             (SELECT count(*) FROM connections
+              WHERE source_object_id=$4 AND kind='about'
+                AND target_object_id=$2::uuid AND archived_at IS NULL)"#,
     )
     .bind(&canonical_uri)
     .bind(source_id)
     .bind(target_id)
+    .bind(chat_id)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(stored_counts, (1, 1, 1));
+    assert_eq!(stored_counts, (1, 1, 1, 1));
 
     let mut content_only = payload.clone();
     content_only["idempotency_key"] = json!(format!("{key}-content-only"));

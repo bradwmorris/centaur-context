@@ -367,7 +367,8 @@ async fn prepared(
             let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
                 sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
                     r#"SELECT source_object_id,kind,target_object_id,id FROM connections
-                   WHERE source_object_id=$1 AND archived_at IS NULL"#,
+                   WHERE (source_object_id=$1 OR target_object_id=$1)
+                     AND archived_at IS NULL"#,
                 )
                 .bind(conflict.object_id)
                 .fetch_all(&state.app.pool)
@@ -387,7 +388,8 @@ async fn prepared(
             let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
                 sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
                     r#"SELECT source_object_id,kind,target_object_id,id FROM connections
-                   WHERE source_object_id=$1 AND archived_at IS NULL"#,
+                   WHERE (source_object_id=$1 OR target_object_id=$1)
+                     AND archived_at IS NULL"#,
                 )
                 .bind(conflict.object_id)
                 .fetch_all(&state.app.pool)
