@@ -89,7 +89,7 @@ scoring/reporting, repeat pass, and landing the three feature branches.
 - The Context Curator subscription credential was synchronized with the Centaur
   inference credential. The required credential equality and read paths are
   recorded in Enyu's deployment contract.
-- Live deployment is Centaur Helm revision 97. API, Context, Ed, Rez, and repo
+- Live deployment is Centaur Helm revision 98. API, Context, Ed, Rez, and repo
   cache were all `1/1 Ready` at the checkpoint.
 
 ### Acceptance evidence
@@ -97,6 +97,7 @@ scoring/reporting, repeat pass, and landing the three feature branches.
 | Capability | Evidence | Result |
 | --- | --- | --- |
 | R1 article ingest | Source `220859be-ef33-5ab4-8f88-0affb9637498`; workflow Run `01a05beb-759c-7dad-ae77-7852ff9313e7`; intake child Run `344dbaa6-1181-536e-a0ab-b6067a178310`; Chat `a55be2d6-55b4-432e-aaab-0847ebe4444a` | Passed once; 26,447-byte complete article artifact, lexical/semantic readiness, four evidenced connections, and Slack completion confirmed. |
+| File/text Source ingest | Source `912d8c89-d381-5803-898b-a41ab5c978d2`; workflow Run `01a05bfc-3560-76ad-873b-fa859b302978`; intake child Run `56f47ff2-3009-5152-9e7a-9caadfcd8690`; Chat `2626351f-5fff-469f-b0e2-c273e36f5053` | Passed exact failed-input replay on the first attempt; the 6,037 stored bytes and SHA-256 exactly match the uploaded text, the filename remains an artifact reference, `canonical_uri` is null, lexical/semantic readiness is true, five connections exist, and Slack completion was sent. |
 | R2 video ingest/replay | Source `fc63ac35-8340-56db-a5e0-9064f28cb046`; workflow Run `01a05ba3-474a-78c3-93b3-c699a936b7dc`; interaction Run `c8bf2b70-a497-41ec-905a-ce238f1e926f` | Passed once; replay reused one Source. |
 | Rez Note/Task write | Note `cdaa149c-a9e7-48a2-afda-787a4154c6e8`; Task `4abd8559-8cce-4c8e-8431-213e86381dca`; Run `cfaf6a40-55dc-4688-9e2a-aaf8be75a846` | Passed; exact fields and both affected IDs recorded. |
 | E1 Ed Source read | Run `8b9e5a33-e41e-41c1-b9c4-72c15679b69b` | Passed. |
@@ -118,6 +119,24 @@ accepts a complete rendered article body as canonical readable content and check
 capture outcome before the empty-content guard. The focused and full Enyu suites
 pass, the revision was deployed, and the exact Slack request then passed on the
 first workflow attempt with the R1 evidence above.
+
+A later uploaded-notes attempt, workflow Run
+`01a05bf4-377d-7ae1-b51d-247c95788d7e`, exposed a separate deterministic
+manifest bug. The Researcher correctly returned `canonical_uri: null` for the
+file, but the workflow replaced null with the local filename
+`brad-agent-civilizations-notes.txt`; Context correctly rejected that value as
+not being an HTTP URL. Enyu commit
+`f891865ddcaa1c1ff632b07613343b4aa5c27816` now permits only parsed HTTP or
+HTTPS values at the workflow boundary, rejects malformed URL-source locators
+before agent work, keeps filenames and Slack/local locators out of
+`canonical_uri`, and instructs the model contract accordingly. Regression tests
+cover valid and invalid URLs, filenames, local paths, Slack locators, file
+sources, pasted text, URL fallback, and YouTube canonicalization. All 61 Enyu
+tests pass. The exact stored input replay passed as workflow Run
+`01a05bfc-3560-76ad-873b-fa859b302978`. A fresh live regression of the
+Dwarkesh article input also passed on its first attempt as workflow Run
+`01a05c00-0668-7b89-bf01-9506f382f4e7`, reusing Source
+`220859be-ef33-5ab4-8f88-0affb9637498` with lexical and semantic readiness.
 
 ### Additional implementation evidence
 
@@ -171,7 +190,7 @@ rubric. Fluency never compensates for a failed hard gate.
 
 - [x] Context client tests: 15 passed; Python compilation passed.
 - [x] Slack Run trace tests: 5 passed; Slackbot type-check passed.
-- [x] Enyu overlay/deployment contract and workflow tests: 57 passed.
+- [x] Enyu overlay/deployment contract and workflow tests: 61 passed.
 - [x] `git diff --check` passed in all changed repositories.
 - [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread,
   not timing, and emits JSON plus a short report.
@@ -185,11 +204,12 @@ rubric. Fluency never compensates for a failed hard gate.
 
 - Context implementation checkpoint before this RD update:
   `codex/78-slack-bot-golden-evals` at
-  `1be88975e7496d8f3d676e6e33bd6703b0602458`.
+  `a7f7e081840e37d6ade92f4e0d77bfbb4ba2a640`.
 - Centaur: `codex/78-universal-slack-runs` at
   `5ac746896e61a18474216dc30bffde82fd230fc1`.
 - Enyu: `codex/78-slack-bot-golden-evals` at
-  `daedbae851a798c08cee1711cb84173543e76f71`.
+  `5a148a3` (implementation commit
+  `f891865ddcaa1c1ff632b07613343b4aa5c27816` is the deployed repo-cache pin).
 - All three branches are pushed. No PR is open and none of the changes is
   landed on `origin/main`.
 
