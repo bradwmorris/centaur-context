@@ -118,6 +118,13 @@ reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gat
   spans. The local deployment and browser check confirmed the parent/child
   relationship, seven related Objects, Brad/Rez attribution, responsive layout,
   and no browser console errors.
+- **Real Slack interaction defect found and repaired (2026-09-01):** a Rez
+  request to create a follow-up Note and Task produced a complete interaction
+  Run, but its shared-Context trace correctly reported failure because a
+  retrieved Theme decoded a null subtype. Context now returns an explicit Theme
+  subtype and safely omits unknown null subtypes. The disposable-database
+  regression test and a replay of the exact Context request both pass; the
+  latter returned six relevant Objects instead of HTTP 500.
 
 ## Checks
 

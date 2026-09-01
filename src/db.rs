@@ -2454,7 +2454,7 @@ pub async fn context_subtypes(
     #[derive(FromRow)]
     struct Row {
         object_id: Uuid,
-        subtype: Value,
+        subtype: Option<Value>,
     }
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT o.id AS object_id,
@@ -2485,6 +2485,8 @@ pub async fn context_subtypes(
                     WHEN 'note' THEN jsonb_build_object(
                         'kind','note','content_format',n.content_format,
                         'content_excerpt',substring(n.content FROM 1 FOR 400))
+                    WHEN 'theme' THEN jsonb_build_object(
+                        'kind','theme','slug',th.slug)
                   END AS subtype
            FROM objects o
            LEFT JOIN tasks t ON t.object_id=o.id
@@ -2495,6 +2497,7 @@ pub async fn context_subtypes(
            LEFT JOIN memories m ON m.object_id=o.id
            LEFT JOIN sources s ON s.object_id=o.id
            LEFT JOIN notes n ON n.object_id=o.id
+           LEFT JOIN themes th ON th.object_id=o.id
            LEFT JOIN LATERAL (
                SELECT identity->>'display_name' display_name
                FROM jsonb_array_elements(u.identities) identity
@@ -2509,7 +2512,7 @@ pub async fn context_subtypes(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| (row.object_id, row.subtype))
+        .filter_map(|row| row.subtype.map(|subtype| (row.object_id, subtype)))
         .collect())
 }
 

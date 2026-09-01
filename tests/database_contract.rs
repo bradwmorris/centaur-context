@@ -107,6 +107,33 @@ async fn users_embed_multiple_provider_identities() {
 }
 
 #[tokio::test]
+async fn context_subtypes_include_themes_without_null_decode_failures() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let object_id = Uuid::new_v4();
+    let slug = format!("theme-{}", object_id.simple());
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'theme','Test theme','A theme returned by shared Context retrieval.','system','test','system','test','{}')")
+        .bind(object_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO themes(object_id,slug) VALUES($1,$2)")
+        .bind(object_id)
+        .bind(&slug)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let subtypes = db::context_subtypes(&pool, &[object_id], None)
+        .await
+        .unwrap();
+    assert_eq!(subtypes[&object_id], json!({"kind":"theme","slug":slug}));
+}
+
+#[tokio::test]
 async fn artifacts_attach_to_any_object_and_are_immutable() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;
