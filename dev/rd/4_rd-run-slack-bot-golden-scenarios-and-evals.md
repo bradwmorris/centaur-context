@@ -169,6 +169,67 @@ Dwarkesh article input also passed on its first attempt as workflow Run
   Authorization, validation, client, database-creation, and exact-replay tests
   pass.
 
+## Deterministic Retrieval and Note Linkage — 2026-09-02
+
+A live Rez question about a supposed Dwarkesh Patel/Dylan Patel conversation
+exposed three independent defects. Automatic Context prefetch had a 1.5-second
+timeout, the brokered read credential did not permit `/api/v2/search/sources`,
+and Rez fell through to blocked `company_context` and invalid Slack search before
+using broad Object search. The assistant then treated an authentication failure
+as evidence that the conversation was absent, and Curator incorrectly preserved
+that operational outcome as Memory
+`f809f271-686e-4658-889d-926fb9493613`.
+
+The deployed fix now:
+
+- gives the existing read-only Context credential GET access to v1/v2 Source
+  search without adding any write permission;
+- raises automatic Context Builder timeout from 1,500 ms to 5,000 ms;
+- instructs Rez to use deterministic Source search first for Source/conversation
+  questions, use no more than two concise variants, and treat auth/timeouts as
+  operational failures rather than negative evidence;
+- prevents Curator from treating unanswered questions, failed/empty searches,
+  authentication or authorization errors, timeouts, missing tool access, or
+  assistant uncertainty as durable Memories.
+
+Live verification through Rez's existing sandbox and Iron Proxy returned Source
+`220859be-ef33-5ab4-8f88-0affb9637498` for `Dwarkesh Patel` and Source
+`2540b0c6-67b6-525a-8113-a9eb7c7119f4` for `Dylan Patel`; the request no
+longer fails authentication. The corpus still has no canonical Source that is a
+Dwarkesh Patel/Dylan Patel conversation, so the correct current outcome is a
+grounded “not found in Context,” not the prior access-gap inference.
+
+The live Note
+`38dd8fe9-dbb1-4a65-a247-e88ab1c1949b` exposed a separate write-contract gap.
+The note content named Source `220859be-ef33-5ab4-8f88-0affb9637498`, but the
+old `create-note` contract could not express either the originating Chat or
+supporting Source, so no structural connection was created. Context commit
+`48fabadecadf9ea615fcdf0b19343c2d20954f5b` makes both relationships part of
+the narrow Note write:
+
+- the authenticated Slack thread is resolved to its canonical Chat and creates
+  protected `Chat → Note (about)`;
+- each exact supplied Source Object ID creates protected
+  `Note → Source (derived_from)`;
+- IDs and active subtypes are validated, duplicate Source IDs are rejected, and
+  the Note plus connections commit atomically in one mutation Run;
+- exact idempotent replay can reconcile missing links on an older Note without
+  creating a duplicate Note.
+
+The original Note request was replayed with its original idempotency key. It
+returned the same Note and created exactly these protected connections:
+
+- `92f58c5d-0287-4bff-ab6e-da901b0b1add`: Chat
+  `66921cd0-1bf9-4094-b662-af8be7e587f7` → Note, `about`;
+- `b4bac75b-4a37-44f1-91a6-2845d1952581`: Note → Source
+  `220859be-ef33-5ab4-8f88-0affb9637498`, `derived_from`.
+
+Deployment is Helm revision 99 with Context image
+`centaur-context:rd78-note-links`, Context repo pin
+`48fabadecadf9ea615fcdf0b19343c2d20954f5b`, and Enyu runtime pin
+`f08a0f5e59420702084be553dc25ea471f573988`. The local UI forward is restored
+at `http://127.0.0.1:8080`.
+
 ## Golden Scenario Matrix
 
 | ID | Slack script and fixture shape | Hard oracle | State |
@@ -190,7 +251,7 @@ rubric. Fluency never compensates for a failed hard gate.
 
 - [x] Context client tests: 15 passed; Python compilation passed.
 - [x] Slack Run trace tests: 5 passed; Slackbot type-check passed.
-- [x] Enyu overlay/deployment contract and workflow tests: 61 passed.
+- [x] Enyu overlay/deployment contract and workflow tests: 62 passed.
 - [x] `git diff --check` passed in all changed repositories.
 - [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread,
   not timing, and emits JSON plus a short report.
@@ -204,12 +265,12 @@ rubric. Fluency never compensates for a failed hard gate.
 
 - Context implementation checkpoint before this RD update:
   `codex/78-slack-bot-golden-evals` at
-  `a7f7e081840e37d6ade92f4e0d77bfbb4ba2a640`.
+  `48fabadecadf9ea615fcdf0b19343c2d20954f5b` (before this RD-only commit).
 - Centaur: `codex/78-universal-slack-runs` at
   `5ac746896e61a18474216dc30bffde82fd230fc1`.
 - Enyu: `codex/78-slack-bot-golden-evals` at
-  `5a148a3` (implementation commit
-  `f891865ddcaa1c1ff632b07613343b4aa5c27816` is the deployed repo-cache pin).
+  `30c68df` (implementation commit
+  `f08a0f5e59420702084be553dc25ea471f573988` is the deployed repo-cache pin).
 - All three branches are pushed. No PR is open and none of the changes is
   landed on `origin/main`.
 
