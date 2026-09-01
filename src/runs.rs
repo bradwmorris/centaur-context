@@ -553,8 +553,11 @@ pub async fn open_slack_interaction(
     workspace_id: &str,
     channel_id: &str,
     thread_id: &str,
+    interaction_id: &str,
+    started_at: OffsetDateTime,
+    title: String,
 ) -> Result<(Uuid, bool), DbError> {
-    let key = format!("slack-open:{workspace_id}:{channel_id}:{thread_id}");
+    let key = format!("slack-turn:{workspace_id}:{channel_id}:{thread_id}:{interaction_id}");
     if let Some(id) = sqlx::query_scalar(
         "SELECT id FROM runs WHERE kind='slack_interaction' AND idempotency_key=$1 FOR UPDATE",
     )
@@ -565,10 +568,23 @@ pub async fn open_slack_interaction(
         return Ok((id, false));
     }
     let id = Uuid::new_v4();
-    sqlx::query(r#"INSERT INTO runs (id,kind,status,actor_type,actor_id,idempotency_key,input,result,available_at)
-      VALUES ($1,'slack_interaction','open','system','chat-ingestor',$2,$3,$4,now())"#)
-      .bind(id).bind(key).bind(json!({"workspace_id":workspace_id,"channel_id":channel_id,"thread_id":thread_id}))
-      .bind(json!({"summary":"Slack interaction awaiting curation"})).execute(&mut **tx).await?;
+    sqlx::query(r#"INSERT INTO runs (id,kind,status,actor_type,actor_id,idempotency_key,input,result,available_at,started_at)
+      VALUES ($1,'slack_interaction','running','system','chat-ingestor',$2,$3,$4,now(),$5)"#)
+      .bind(id).bind(key).bind(json!({"workspace_id":workspace_id,"channel_id":channel_id,"thread_id":thread_id,"interaction_id":interaction_id,"title":title}))
+      .bind(json!({"summary":"The bot interaction is running."})).bind(started_at).execute(&mut **tx).await?;
+    append_external_trace(
+        tx,
+        id,
+        &json!({
+            "id":format!("{id}:interaction-started"),
+            "entry_type":"interaction",
+            "name":"interaction started",
+            "status":"completed",
+            "component":"slackbotv2",
+            "facts":{"description":"The bot accepted the message."}
+        }),
+    )
+    .await?;
     Ok((id, true))
 }
 
@@ -579,7 +595,7 @@ pub async fn attach_slack_chat(
 ) -> Result<(), DbError> {
     sqlx::query(r#"UPDATE runs SET chat_object_id=$2,
       consulted_object_ids=CASE WHEN $2=ANY(consulted_object_ids) THEN consulted_object_ids ELSE array_append(consulted_object_ids,$2) END,
-      result=result || jsonb_build_object('summary','Slack interaction for Chat ' || $2::text),updated_at=now() WHERE id=$1"#)
+      updated_at=now() WHERE id=$1"#)
       .bind(run_id).bind(chat_object_id).execute(&mut **tx).await?;
     Ok(())
 }
@@ -622,6 +638,83 @@ pub async fn append_trace(
     }
 }
 
+pub async fn append_external_trace(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    entry: &Value,
+) -> Result<(), DbError> {
+    let id = entry
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty() && value.len() <= 500)
+        .ok_or_else(|| {
+            DbError::Validation(crate::domain::ValidationError::Required("run.trace.id"))
+        })?;
+    sqlx::query(
+        r#"UPDATE runs SET trace=trace||jsonb_build_array($2::jsonb),updated_at=now()
+           WHERE id=$1 AND NOT EXISTS (
+             SELECT 1 FROM jsonb_array_elements(trace) item WHERE item->>'id'=$3
+           )"#,
+    )
+    .bind(run_id)
+    .bind(entry)
+    .bind(id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+pub async fn finish_slack_interaction(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    status: &str,
+    completed_at: Option<OffsetDateTime>,
+    error: Option<&str>,
+    affected_object_ids: &[Uuid],
+) -> Result<(), DbError> {
+    if status == "running" {
+        return Ok(());
+    }
+    let primary_object_id = affected_object_ids.first().copied();
+    let summary = if status == "failed" {
+        "The bot interaction failed."
+    } else if affected_object_ids.is_empty() {
+        "The bot replied without changing a Context Object."
+    } else {
+        "The bot completed the interaction and changed Context Objects."
+    };
+    sqlx::query(
+        r#"UPDATE runs SET status=$2,primary_object_id=COALESCE(primary_object_id,$3),
+           error=$4,result=result||jsonb_build_object(
+             'summary',$5,'affected_object_ids',to_jsonb($6::uuid[])
+           ),completed_at=COALESCE($7,now()),updated_at=now()
+           WHERE id=$1 AND kind='slack_interaction' AND status='running'"#,
+    )
+    .bind(run_id)
+    .bind(status)
+    .bind(primary_object_id)
+    .bind(error)
+    .bind(summary)
+    .bind(affected_object_ids)
+    .bind(completed_at)
+    .execute(&mut **tx)
+    .await?;
+    append_external_trace(
+        tx,
+        run_id,
+        &json!({
+            "id":format!("{run_id}:interaction-finished"),
+            "entry_type":"interaction",
+            "name":"interaction finished",
+            "status":status,
+            "component":"slackbotv2",
+            "facts":{"description":summary}
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn attach_curator_run(
     tx: &mut Transaction<'_, Postgres>,
     interaction_run_id: Uuid,
@@ -641,11 +734,11 @@ pub async fn attach_curator_run(
     .await
 }
 
-pub async fn resume_slack_run(
+pub async fn latest_slack_run(
     tx: &mut Transaction<'_, Postgres>,
     chat_object_id: Uuid,
 ) -> Result<Option<Uuid>, DbError> {
-    Ok(sqlx::query_scalar("SELECT id FROM runs WHERE kind='slack_interaction' AND chat_object_id=$1 AND status='open' ORDER BY created_at LIMIT 1 FOR UPDATE")
+    Ok(sqlx::query_scalar("SELECT id FROM runs WHERE kind='slack_interaction' AND chat_object_id=$1 AND parent_run_id IS NULL ORDER BY created_at DESC LIMIT 1 FOR UPDATE")
        .bind(chat_object_id).fetch_optional(&mut **tx).await?)
 }
 

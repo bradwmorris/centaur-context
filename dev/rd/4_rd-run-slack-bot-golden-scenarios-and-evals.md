@@ -25,7 +25,8 @@ expected and decoy Object IDs before any run.
 1. Freeze a private golden manifest and preflight the deployed revisions,
    corpus hashes, identities, permissions, search/embedding health, and clean
    Slack test channel.
-2. Drive versioned, copy-paste-exact Slack scripts through the real UI, using a
+2. Record every completed bot turn as one idempotent Run, then drive versioned,
+   copy-paste-exact Slack scripts through the real UI, using a
    unique run marker in every root message; finish each thread with the sole
    message `done` and wait for terminal workflow, Curator, and eval states.
 3. Collect Slack transcript plus authenticated read-only Context evidence into
@@ -41,6 +42,9 @@ expected and decoy Object IDs before any run.
   correct existing identities, and avoid duplicates or attractive decoys.
 - [ ] Prove a Rez conversation closes into correctly linked canonical records
   and one complete Run.
+- [ ] Prove every user message handled by a bot creates exactly one Run, whether
+  the result is only a reply or also includes Notes, Tasks, Sources, or other
+  Context Object changes; tool calls are trace entries, not separate root Runs.
 - [ ] Prove Ed retrieves the required existing evidence through the intended
   search/context path, answers faithfully, and produces complete Run evidence.
 - [ ] Make the suite repeatable by an agent operating Slack without database

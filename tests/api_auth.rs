@@ -791,6 +791,11 @@ async fn ingestion_listener_rejects_unapproved_slack_surfaces_before_database_ac
                         "channel_id":"C_DENIED",
                         "thread_id":"1780000000.000100",
                         "surface_kind":"channel",
+                        "run":{
+                            "interaction_id":"1780000000.000100",
+                            "status":"running",
+                            "started_at":"2026-08-28T00:00:00Z"
+                        },
                         "messages":[{
                             "provider_message_id":"1780000000.000100",
                             "sender":{"provider_user_id":"U1","display_name":"Example User","user_kind":"human"},

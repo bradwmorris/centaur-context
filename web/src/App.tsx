@@ -198,7 +198,9 @@ function itemObjectKind(item: Exclude<ListItem, Run>): ObjectKind { return "kind
 function itemTitle(item: ListItem, objects: SharedObject[]) {
   if (!("actor_type" in item)) return "title" in item ? item.title : shortId(canonicalObjectId(item));
   const primary = item.primary_object_id ? objects.find((object) => object.id === item.primary_object_id) : undefined;
-  return primary ? `${runType(item, objects)} · ${primary.title}` : runType(item, objects);
+  if (primary) return `${runType(item, objects)} · ${primary.title}`;
+  const interactionTitle = item.kind === "slack_interaction" ? textValue(item.input.title) : "";
+  return interactionTitle ? `${runType(item, objects)} · ${interactionTitle}` : runType(item, objects);
 }
 function itemDescription(item: ListItem, objects: SharedObject[]) {
   if (!("actor_type" in item)) return "description" in item ? item.description : "";
@@ -210,7 +212,12 @@ function runType(run: Run, objects: SharedObject[] | RunObject[]) {
   if (run.kind === "intake" && run.parent_run_id) return "Context commit";
   if (run.kind === "intake" && primary?.kind === "source") return "Source ingestion";
   if (run.kind === "intake") return "Data ingestion";
-  if (run.kind === "slack_interaction") return "Slack interaction";
+  if (run.kind === "slack_interaction" && primary) {
+    const created = run.trace.some((entry) => entry.entry_type === "tool_call" && /create|add|write/i.test(textValue(entry.name)));
+    const objectType = primary.kind.replace(/^./, (value) => value.toUpperCase());
+    return created ? `${objectType} creation` : `${objectType} interaction`;
+  }
+  if (run.kind === "slack_interaction") return "Bot interaction";
   if (run.kind === "curator") return "Conversation curation";
   if (run.kind === "curator_undo") return "Curation reversal";
   if (run.kind === "external_action") return "External action";
@@ -229,6 +236,7 @@ function runOutcome(run: Run, objects: SharedObject[] | RunObject[]) {
     return connectionCount > 0 ? `${action} · Added ${connectionCount} connection${connectionCount === 1 ? "" : "s"}` : action;
   }
   if (run.kind === "workflow") return textValue(run.result.summary, run.status === "running" ? "Source ingestion is running." : "Workflow completed.");
+  if (run.kind === "slack_interaction") return textValue(run.result.summary, run.status === "running" ? "The bot is working." : "The bot interaction finished.");
   if (run.error) return run.error;
   return `${run.actor_type}:${run.actor_id} · ${run.verdict}`;
 }
@@ -726,7 +734,8 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
   };
   const primary = run.primary_object_id ? objects.find((object) => object.object_id === run.primary_object_id) : undefined;
   const chatVisual = run.chat_object_id ? visuals.get(run.chat_object_id) : undefined;
-  const title = primary ? `${runType(run, objects)} · ${primary.title}` : runType(run, objects);
+  const interactionTitle = run.kind === "slack_interaction" ? textValue(run.input.title) : "";
+  const title = primary ? `${runType(run, objects)} · ${primary.title}` : interactionTitle ? `${runType(run, objects)} · ${interactionTitle}` : runType(run, objects);
   const outcome = runOutcome(run, objects);
   const metrics = runMetrics(run);
   return <div className="record-page"><div className="record-primary eval-detail">
