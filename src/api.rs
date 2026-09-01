@@ -162,7 +162,12 @@ pub fn note_write_router(state: AppState, token: String) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .nest("/api/v2", Router::new().route("/notes", post(create_note)))
+        .nest(
+            "/api/v2",
+            Router::new()
+                .route("/notes", post(create_note))
+                .route("/tasks", post(create_task)),
+        )
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             AgentAuth {

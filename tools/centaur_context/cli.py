@@ -118,6 +118,37 @@ def create_note(
     )
 
 
+def create_task(
+    title: str,
+    description: str,
+    priority: str = "medium",
+    due_at: str | None = None,
+    owner_object_id: str | None = None,
+    agent_suitable: bool = False,
+    brief_markdown: str | None = None,
+    provenance_json: str = "{}",
+    idempotency_key: str = "",
+) -> None:
+    """Create an open Task using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
+    try:
+        provenance = json.loads(provenance_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("provenance_json must be valid JSON") from exc
+    _print(
+        _client().create_task(
+            title,
+            description,
+            priority=priority,
+            due_at=due_at,
+            owner_object_id=owner_object_id,
+            agent_suitable=agent_suitable,
+            brief_markdown=brief_markdown,
+            provenance=provenance,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
 def source_intake_validate(manifest_file: str) -> None:
     """Validate one Enyu Source manifest without writes."""
     _print(_client().source_intake_validate(_manifest(manifest_file)))
@@ -253,6 +284,17 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("--description", required=True)
     command.add_argument("--content", required=True)
     command.add_argument("--content-format", default="markdown")
+    command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--idempotency-key", required=True)
+
+    command = commands.add_parser("create-task")
+    command.add_argument("title")
+    command.add_argument("--description", required=True)
+    command.add_argument("--priority", choices=("low", "medium", "high", "urgent"), default="medium")
+    command.add_argument("--due-at")
+    command.add_argument("--owner-object-id")
+    command.add_argument("--agent-suitable", action="store_true")
+    command.add_argument("--brief-markdown")
     command.add_argument("--provenance-json", default="{}")
     command.add_argument("--idempotency-key", required=True)
 

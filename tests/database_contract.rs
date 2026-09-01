@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, human_router},
+    api::{AppState, human_router, note_write_router},
     db,
 };
 use http_body_util::BodyExt;
@@ -131,6 +131,61 @@ async fn context_subtypes_include_themes_without_null_decode_failures() {
         .await
         .unwrap();
     assert_eq!(subtypes[&object_id], json!({"kind":"theme","slug":slug}));
+}
+
+#[tokio::test]
+async fn narrow_write_listener_creates_and_replays_one_open_task() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let token = "w".repeat(32);
+    let app = note_write_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let fixture = Uuid::new_v4().simple().to_string();
+    let body = json!({
+        "title":"Follow up on research",
+        "description":"A bounded follow-up Task created through the narrow write listener.",
+        "priority":"medium",
+        "brief_markdown":"Review the captured evidence.",
+        "provenance":{"source_type":"human"}
+    });
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v2/tasks")
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-centaur-principal-id", "researcher")
+            .header("x-centaur-thread-key", "slack:T:C:thread")
+            .header("idempotency-key", format!("task-{fixture}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    };
+
+    let created = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: serde_json::Value =
+        serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let object_id = created["data"]["object_id"].as_str().unwrap();
+    assert_eq!(created["data"]["status"], "todo");
+
+    let replayed = app.oneshot(request()).await.unwrap();
+    assert_eq!(replayed.status(), StatusCode::CREATED);
+    let replayed: serde_json::Value =
+        serde_json::from_slice(&replayed.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(replayed["data"]["object_id"], object_id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE object_id=$1")
+        .bind(Uuid::parse_str(object_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]

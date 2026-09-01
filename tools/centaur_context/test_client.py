@@ -131,6 +131,12 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         content="Evidence",
         idempotency_key="note-1",
     )
+    scoped.create_task(
+        title="Follow up on research",
+        description="A bounded follow-up Task created through the narrow write listener.",
+        brief_markdown="Review the captured evidence.",
+        idempotency_key="task-1",
+    )
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
     scoped.source_intake_validate({"version": "centaur-context-source-intake-v2"})
     scoped.source_intake_resolve_connections(["Ryan Greenblatt", "Agents"])
@@ -141,6 +147,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
 
     assert [(request.url.host, request.url.path) for request in requests] == [
         ("notes.test", "/api/v2/notes"),
+        ("notes.test", "/api/v2/tasks"),
         ("intake.test", "/api/v2/intake/batches/validate"),
         ("source-intake.test", "/api/v2/source-intake/validate"),
         ("source-intake.test", "/api/v2/source-intake/resolve-connections"),
@@ -150,6 +157,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         ("actions.test", "/api/v2/external-actions/reserve"),
     ]
     assert [request.headers["authorization"] for request in requests] == [
+        "Bearer " + "n" * 32,
         "Bearer " + "n" * 32,
         "Bearer " + "i" * 32,
         "Bearer " + "s" * 32,
@@ -169,6 +177,11 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
             description="A source-grounded note created through a narrow listener.",
             content="Evidence",
             idempotency_key="note-1",
+        ),
+        lambda value: value.create_task(
+            title="Follow up on research",
+            description="A bounded follow-up Task created through a narrow listener.",
+            idempotency_key="task-1",
         ),
         lambda value: value.validate_intake_batch(
             {"batch_id": "batch-1", "manifest_sha256": "a" * 64}

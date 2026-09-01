@@ -15,8 +15,9 @@ stable Enyu researcher identity) and `Ed` (the stable editor identity).
 Editor-publishing, and Paradigm-corpus RDs; Slack interaction snapshots and the
 literal `done`/`finished` close signal; Chat-aware hybrid Context Builder;
 Source-intake workflow; Curator reconciliation; Run traces and dashboard; Enyu
-roles and live acceptance record. Today closure curates a primary Memory, not a
-Note, and interactive bots cannot write Context.
+roles and live acceptance record. Closure curates a primary Memory; Rez may also
+create explicitly requested Notes and Tasks through a separate narrow-write
+credential, while Ed and every broader mutation remain denied.
 
 **Missing:** At execution, Brad selects the private article and YouTube URL and
 approves live Slack/model/hosted-write use. Their fixture manifest must identify
@@ -125,6 +126,12 @@ reviewed 0–2 rubric. Never let answer fluency compensate for a failed hard gat
   subtype and safely omits unknown null subtypes. The disposable-database
   regression test and a replay of the exact Context request both pass; the
   latter returned six relevant Objects instead of HTTP 500.
+- **Rez narrow Note/Task write contract:** the separately authenticated write
+  listener now permits only Note and Task creation. The standard agent API
+  remains read-only. Rez alone receives the write credential and must create an
+  explicitly requested Note or open Task immediately with a stable replay key;
+  Ed and every other Context mutation remain denied. Authorization, client,
+  validation, database creation, and exact-replay tests pass.
 
 ## Checks
 
