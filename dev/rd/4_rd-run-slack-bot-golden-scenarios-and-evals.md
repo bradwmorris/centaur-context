@@ -89,13 +89,14 @@ scoring/reporting, repeat pass, and landing the three feature branches.
 - The Context Curator subscription credential was synchronized with the Centaur
   inference credential. The required credential equality and read paths are
   recorded in Enyu's deployment contract.
-- Live deployment is Centaur Helm revision 95. API, Context, Ed, Rez, and repo
+- Live deployment is Centaur Helm revision 97. API, Context, Ed, Rez, and repo
   cache were all `1/1 Ready` at the checkpoint.
 
 ### Acceptance evidence
 
 | Capability | Evidence | Result |
 | --- | --- | --- |
+| R1 article ingest | Source `220859be-ef33-5ab4-8f88-0affb9637498`; workflow Run `01a05beb-759c-7dad-ae77-7852ff9313e7`; intake child Run `344dbaa6-1181-536e-a0ab-b6067a178310`; Chat `a55be2d6-55b4-432e-aaab-0847ebe4444a` | Passed once; 26,447-byte complete article artifact, lexical/semantic readiness, four evidenced connections, and Slack completion confirmed. |
 | R2 video ingest/replay | Source `fc63ac35-8340-56db-a5e0-9064f28cb046`; workflow Run `01a05ba3-474a-78c3-93b3-c699a936b7dc`; interaction Run `c8bf2b70-a497-41ec-905a-ce238f1e926f` | Passed once; replay reused one Source. |
 | Rez Note/Task write | Note `cdaa149c-a9e7-48a2-afda-787a4154c6e8`; Task `4abd8559-8cce-4c8e-8431-213e86381dca`; Run `cfaf6a40-55dc-4688-9e2a-aaf8be75a846` | Passed; exact fields and both affected IDs recorded. |
 | E1 Ed Source read | Run `8b9e5a33-e41e-41c1-b9c4-72c15679b69b` | Passed. |
@@ -106,6 +107,17 @@ scoring/reporting, repeat pass, and landing the three feature branches.
 Failed diagnostic interactions remain visible as test history. They exposed the
 missing Note-read paths and stale Curator inference token. Both causes are fixed;
 the later evidence above is the clean acceptance result.
+
+The first live R1 attempt, workflow Run
+`01a05bdd-9e91-7f59-84c8-7245e1774e95`, opened and read the Dwarkesh article
+but rejected it because the prompt incorrectly required byte-identical raw HTML
+instead of a complete browser-rendered article body. Its final error also hid the
+agent's useful incomplete-capture reason behind `captured Source content is
+empty`. Enyu commit `f86c8203c0f130ec3459ec7ad1565eae73eca5f5`
+accepts a complete rendered article body as canonical readable content and checks
+capture outcome before the empty-content guard. The focused and full Enyu suites
+pass, the revision was deployed, and the exact Slack request then passed on the
+first workflow attempt with the R1 evidence above.
 
 ### Additional implementation evidence
 
@@ -142,7 +154,7 @@ the later evidence above is the clean acceptance result.
 
 | ID | Slack script and fixture shape | Hard oracle | State |
 | --- | --- | --- | --- |
-| R1 article | Ask Rez to ingest an article containing one exact Entity, one paraphrased related Entity, and one same-name decoy. | One canonical Source/content; expected IDs connected; decoy absent; no duplicates. | Not run. |
+| R1 article | Ask Rez to ingest an article containing one exact Entity, one paraphrased related Entity, and one same-name decoy. | One canonical Source/content; expected IDs connected; decoy absent; no duplicates. | Baseline passed once; frozen decoy fixture and exact replay remain. |
 | R2 video | Ask Rez to ingest a YouTube URL overlapping R1 and a pre-existing Theme/Entity. | Canonical watch URL, transcript/hash, correct IDs, terminal readiness, exact replay reuse. | Baseline passed once; golden fixture and second pass remain. |
 | R3 discuss/close | In one Rez thread ask a grounded fact, connection question, unsupported question, then `done`. | Grounded answers; calibrated uncertainty; one shared Chat; one interaction Run per bot turn; one Curator Run and primary Memory with exact Chat linkage. | Not run. |
 | E1 retrieve | In a fresh Ed thread ask for a fact only in an existing Source/Note body with lexical decoy and paraphrase. | Expected evidence in packet/answer; retrieval ranks and consulted IDs recorded; decoy unsupported. | Source and cross-agent Note baseline passed; decoy fixture remains. |
@@ -159,7 +171,7 @@ rubric. Fluency never compensates for a failed hard gate.
 
 - [x] Context client tests: 15 passed; Python compilation passed.
 - [x] Slack Run trace tests: 5 passed; Slackbot type-check passed.
-- [x] Enyu overlay/deployment contract tests: 17 passed.
+- [x] Enyu overlay/deployment contract and workflow tests: 57 passed.
 - [x] `git diff --check` passed in all changed repositories.
 - [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread,
   not timing, and emits JSON plus a short report.
@@ -177,7 +189,7 @@ rubric. Fluency never compensates for a failed hard gate.
 - Centaur: `codex/78-universal-slack-runs` at
   `5ac746896e61a18474216dc30bffde82fd230fc1`.
 - Enyu: `codex/78-slack-bot-golden-evals` at
-  `06447016b56e2cdc037c7530b02713cc1db64eb4`.
+  `daedbae851a798c08cee1711cb84173543e76f71`.
 - All three branches are pushed. No PR is open and none of the changes is
   landed on `origin/main`.
 
