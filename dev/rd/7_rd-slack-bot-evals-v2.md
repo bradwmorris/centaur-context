@@ -17,8 +17,9 @@ Kubernetes deployment. The Source currently exists as Object
 must be verified before each reset.
 
 **Current execution:** Candidate fixes are implemented on Issue #80 branches.
-Step 5's exact Object is selected from step 4 during each run. The first reset
-is awaiting approval of the immutable manifest recorded below.
+Step 5's exact Object is selected from step 4 during each run. The first
+approved reset and one diagnostic take are complete; a new clean reset and two
+consecutive clean takes are still required.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -285,3 +286,35 @@ First reset manifest (generated 2026-09-02):
   Best, Conviction, OpenAI, Anthropic, Andrej Karpathy, and the Agents Theme.
 - Execute only after Brad approves this exact scope. Any state change produces
   a different hash and requires a fresh manifest and approval.
+
+## Diagnostic Take — 2026-09-02
+
+- The reset completed and Source workflow
+  `01a061b8-59f2-7280-8360-fda93dbd5dde` created Source
+  `60a93eb0-5250-5074-9e2a-5b9550e53b7b`. Readiness completed after 70.643
+  seconds with all 14 embeddings present. Its useful ingestion-created
+  relationships were preserved.
+- Steps 2–4 produced a grounded RSI answer, Note
+  `2f890c6d-328b-4ea2-95e5-c8f0572a883c` with exactly its two intended initial
+  links, and a useful recent-RSI list.
+- Step 5 exposed three independent deployment defects: the HMAC rule was not
+  scoped to the mutation path, the webhook token was absent, and the workflow
+  principal lacked its specialized Context-write and Slack roles. Each failed
+  before or after a bounded mutation and was repaired without duplicating the
+  Note or Source.
+- A fourth defect was semantic: the first successful mutation chose a different
+  Ryan Greenblatt video (`fc63ac35-8340-56db-a5e0-9064f28cb046`) instead of the
+  podcast URL cited in step 4. That one incorrect Connection and its Object
+  Event were surgically deleted. Rez's guidance now requires preserving and
+  verifying the exact cited URL/ID and scopes retry idempotency to the current
+  triggering message.
+- The unambiguous repair run `01a061f7-cade-7405-880b-f97e34f38cb6` created
+  exactly one `related_to` Connection,
+  `83d5cd3d-22ac-48a2-a691-ff92285c8094`, from the Note to Source
+  `ee67e8c4-c7ea-5231-8626-9f76da35b7ba` at canonical URL
+  `https://www.youtube.com/watch?v=-RXD4bTuFTo`. Slack posted the terminal
+  completion receipt.
+- This was a diagnostic repair take, not a clean pass: step 5 required retries
+  and an explicit URL. The next take must begin with the approved surgical
+  reset and prove the normal five-message wording resolves the step-4 target
+  without correction.
