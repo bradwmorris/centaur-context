@@ -1,6 +1,6 @@
 # 4 — RD: Run Slack Bot Golden Scenarios and Evals
 
-**Status:** `in_progress`
+**Status:** `review`
 **Created:** 2026-08-30
 **Issue:** [#78](https://github.com/bradwmorris/centaur-context/issues/78)
 **Dependencies:** Active priority 3 and the completed canonical-data,
@@ -9,26 +9,23 @@ researcher) and `Ed` (Enyu editor).
 
 ## Execution Plan
 
-**Status:** `still needs work`
+**Status:** `complete and ready`
 
 **Basis checked:** Live Slack interactions; authenticated Context read/write
 paths; Slack interaction ingestion; Chat-aware Context Builder; Source-intake
 workflow; Curator reconciliation; Run list/detail UI; tool and usage traces;
 Enyu personas and role grants; deployed Kubernetes workloads.
 
-**Missing:** The minimum product baseline now works. The remaining work is the
-controlled golden-scenario run, deterministic evidence bundle, automated
-scoring/reporting, repeat pass, and landing the three feature branches.
+**Missing:** No further implementation is planned in this RD. The repeatable
+golden matrix, deterministic evidence bundle, automated scoring/reporting, and
+clean repeat pass are deliberately transferred to the Evals V2 RD. Landing the
+three feature branches remains a separate review and merge step.
 
-1. Freeze the private golden manifest with expected and decoy Object IDs,
-   content hashes, exact prompts, and deployed revisions.
-2. Run one marked Slack interaction at a time. Do not begin the next interaction
-   until its reply, interaction Run, object read-back, and any expected workflow
-   or Curator Run are terminal.
-3. Complete R1–R3, E1–E2, and X1; collect authenticated evidence and score hard
-   invariants independently from answer quality.
-4. Repeat the clean suite and exact replays, document failures without weakening
-   oracles, run repository checks, review, and land the feature branches.
+1. Establish and repair the minimum Slack→agent→Context→Run baseline.
+2. Verify representative Source, Note, Task, retrieval, denial, replay, and
+   Curator paths through live Slack plus direct API read-back.
+3. Record the remaining deterministic eval work as a clean V2 effort and prepare
+   the three implementation branches for review and landing.
 
 ## What We Are Doing
 
@@ -40,18 +37,20 @@ scoring/reporting, repeat pass, and landing the three feature branches.
   creation remains denied.
 - [x] Prove finished conversation evidence can be curated into a Memory with an
   exact `derived_from` connection to its Chat.
-- [ ] Complete the full golden matrix twice, including the article, multi-turn
-  grounding, isolation, replay, decoys, and deterministic eval report.
+- [x] Separate the unfinished full golden matrix from this baseline and carry it
+  forward into a clean Evals V2 RD without claiming it passed here.
 - [ ] Land and synchronize the Context, Centaur, and Enyu changes.
 
 ## Contract
 
 - **Goal:** Validate the complete human→Slack→bot/workflow→Context→Curator→Run
   loop against known answers.
-- **Done:** Every required scenario passes its hard invariants and reviewed
-  rubric twice; exact replay creates no duplicates; each failure is attributable
-  to a stage; the evidence bundle identifies deployed and fixture versions; and
-  the changes are landed on all canonical repositories.
+- **Done for this iteration:** The minimum bot baseline is proven through live
+  Slack and direct read-back: each completed interaction has a Run; Sources,
+  Notes, and Tasks can be read/written within persona permissions; created Notes
+  and Tasks link to their originating Chat and supporting Sources; ingestion and
+  narrow writes replay without duplication; and remaining full-suite work is
+  explicitly transferred to Evals V2.
 - **Run identity:** One Slack thread maps to one shared Chat. Every user→bot turn
   that finishes maps to its own Run. Workflows and Curator operations have their
   own linked Runs. A multi-turn Chat therefore has multiple interaction Runs,
@@ -230,6 +229,64 @@ Deployment is Helm revision 99 with Context image
 `f08a0f5e59420702084be553dc25ea471f573988`. The local UI forward is restored
 at `http://127.0.0.1:8080`.
 
+## Task Linkage and Final Live Baseline — 2026-09-02
+
+The final YouTube test ingested
+`https://youtu.be/hY6S__xeCjg` through Rez as Source
+`c364005f-4cc9-58d2-8ed7-8ed4bce24460`, titled “Sarah Guo - What the 250
+People Building AI Believe - [Invest Like the Best, EP.489]”. Workflow Run
+`01a0600f-3332-73f3-9604-2ab8e46b7fd5` completed with the available caption
+track, semantic/lexical readiness, and the expected originating Chat linkage.
+
+Rez then created Task `f39caab7-f1eb-49fd-a3d6-0da811a9c4ba`, “Follow up on
+Sarah Guo AI interview”, to listen to the Source, add linked notes, and draft a
+Twitter/X post. The first Task write exposed the same structural gap previously
+fixed for Notes: the Task content mentioned the Source and Chat, but the narrow
+Task API could not create canonical connections.
+
+Context commit `a172ca9fa6a92a4749796ce97813184b2470f178` fixes the Task
+contract end to end:
+
+- `create-task` accepts the authenticated originating Chat and one or more exact
+  supporting Source IDs;
+- Task creation atomically creates protected `Chat → Task (about)` and
+  `Task → Source (derived_from)` connections;
+- exact idempotent replay reconciles missing links on an existing Task without
+  creating a duplicate;
+- the Python client, CLI, API, database transaction, validation, and regression
+  tests all use the same linkage contract.
+
+Enyu commit `be7c61d8e66be02abea58fcaf7162721a177d640` requires Rez to pass
+the supporting Source IDs for follow-up Tasks. Deployment commits `a67c07e` and
+`fe2898c` pin the repaired runtime contract. The live local deployment is Helm
+revision 100 with Context image `centaur-context:rd78-task-links` and repository
+pins Context `a172ca9fa6a92a4749796ce97813184b2470f178`, Enyu
+`be7c61d8e66be02abea58fcaf7162721a177d640`, and Centaur
+`5ac746896e61a18474216dc30bffde82fd230fc1`.
+
+The original Task request was replayed in its original Slack thread with the
+same stable idempotency key. Direct API read-back proved that the Task retained
+its original ID, title, description, `todo` status, and null due date, and now
+has exactly these two active protected connections:
+
+- Chat `91a1a0ee-a49f-417a-b3f9-0ec7205c2910` → Task
+  `f39caab7-f1eb-49fd-a3d6-0da811a9c4ba`, `about`;
+- Task `f39caab7-f1eb-49fd-a3d6-0da811a9c4ba` → Source
+  `c364005f-4cc9-58d2-8ed7-8ed4bce24460`, `derived_from`.
+
+Rez independently returned the same Task ID and confirmed both connections in
+Slack. No duplicate Task was created. This is the final live acceptance case for
+the minimum baseline.
+
+## Closeout and V2 Handoff
+
+This RD is being wrapped at the proven MVP baseline rather than continuing to
+grow one long-running test document. It does **not** claim that the original
+twice-run golden matrix, decoy suite, deterministic runner, or scoring report is
+complete. Those requirements, plus clean fixtures and repeat execution, move to
+a new Evals V2 RD to be executed from a fresh task and agent after these baseline
+branches are reviewed and landed.
+
 ## Golden Scenario Matrix
 
 | ID | Slack script and fixture shape | Hard oracle | State |
@@ -253,24 +310,23 @@ rubric. Fluency never compensates for a failed hard gate.
 - [x] Slack Run trace tests: 5 passed; Slackbot type-check passed.
 - [x] Enyu overlay/deployment contract and workflow tests: 62 passed.
 - [x] `git diff --check` passed in all changed repositories.
-- [ ] Runner correlates evidence by run marker plus Slack workspace/channel/thread,
-  not timing, and emits JSON plus a short report.
-- [ ] Reports separate retrieval rank, Context packet, answer, durable changes,
-  workflow/Curator result, Run trace, and usage.
-- [ ] Failure tests cover stale/missing embeddings, lexical fallback, timeout,
-  retry, wrong persona, decoys, unsupported answers, and partial failure.
-- [ ] Two clean runs and exact replays pass; full repository-root checks pass.
+- [ ] **Transferred to Evals V2:** runner correlation and JSON/report output.
+- [ ] **Transferred to Evals V2:** separate retrieval, answer, durable-change,
+  workflow, trace, and usage evidence.
+- [ ] **Transferred to Evals V2:** failure cases for embeddings, fallback,
+  timeout, retry, persona isolation, decoys, unsupported answers, and partial
+  failure.
+- [ ] **Transferred to Evals V2:** two clean runs and exact replays.
 
 ## Branch and Landing State
 
-- Context implementation checkpoint before this RD update:
-  `codex/78-slack-bot-golden-evals` at
-  `48fabadecadf9ea615fcdf0b19343c2d20954f5b` (before this RD-only commit).
+- Context: `codex/78-slack-bot-golden-evals` at
+  `a172ca9fa6a92a4749796ce97813184b2470f178` before this RD closeout commit.
 - Centaur: `codex/78-universal-slack-runs` at
   `5ac746896e61a18474216dc30bffde82fd230fc1`.
 - Enyu: `codex/78-slack-bot-golden-evals` at
-  `30c68df` (implementation commit
-  `f08a0f5e59420702084be553dc25ea471f573988` is the deployed repo-cache pin).
+  `fe2898ca4aa231586e331db44f8b996319bc6439` (runtime implementation pin
+  `be7c61d8e66be02abea58fcaf7162721a177d640`).
 - All three branches are pushed. No PR is open and none of the changes is
   landed on `origin/main`.
 
