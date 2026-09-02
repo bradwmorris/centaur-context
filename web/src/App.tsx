@@ -875,8 +875,13 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
     <section className="run-metrics" aria-label="Run summary">
       <RunMetric label="Duration" value={metrics.duration} />
       <RunMetric label="Model" value={metrics.model} />
-      <RunMetric label="Tokens" value={metrics.tokens} />
+      <RunMetric label="Total tokens" value={metrics.tokens.total} />
+      <RunMetric label="Input" value={metrics.tokens.input} />
+      <RunMetric label="Cache read" value={metrics.tokens.cacheRead} />
+      <RunMetric label="Output" value={metrics.tokens.output} />
+      <RunMetric label="Reasoning" value={metrics.tokens.reasoning} />
       <RunMetric label="Tool calls" value={String(metrics.toolCalls)} />
+      <RunMetric label="Readiness polls" value={String(metrics.polls)} />
       <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
     </section>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
@@ -924,28 +929,43 @@ function RunTraceEntry({ entry, index }: { entry: Record<string, unknown>; index
       {numberValue(entry.output_tokens) !== null && <div><span>Output</span><strong>{formatCount(numberValue(entry.output_tokens) ?? 0)}</strong></div>}
       {numberValue(entry.cache_read_tokens) !== null && <div><span>Cache read</span><strong>{formatCount(numberValue(entry.cache_read_tokens) ?? 0)}</strong></div>}
       {numberValue(entry.reasoning_tokens) !== null && <div><span>Reasoning</span><strong>{formatCount(numberValue(entry.reasoning_tokens) ?? 0)}</strong></div>}
+      {textValue((entry.facts as Record<string, unknown> | undefined)?.error_class) && <div><span>Error class</span><strong>{textValue((entry.facts as Record<string, unknown>).error_class)}</strong></div>}
       <details className="run-technical"><summary>Raw trace entry</summary><code>{JSON.stringify(entry)}</code></details>
     </div>
   </details>;
 }
 
 function runMetrics(run: Run) {
-  let totalTokens = 0;
-  let hasTokens = false;
+  const tokenTotals = { total: 0, input: 0, cacheRead: 0, output: 0, reasoning: 0 };
+  const hasTokens = { total: false, input: false, cacheRead: false, output: false, reasoning: false };
   let toolCalls = 0;
+  let polls = 0;
   let failures = 0;
   let model = "—";
   for (const entry of run.trace) {
-    if (entry.entry_type === "tool_call") toolCalls += 1;
+    const method = textValue((entry.facts as Record<string, unknown> | undefined)?.method);
+    if (entry.entry_type === "tool_call") {
+      if (method === "source_intake_status") polls += 1;
+      else toolCalls += 1;
+    }
     if (entry.status === "failed") failures += 1;
-    const entryTokens = numberValue(entry.total_tokens);
-    if (entryTokens !== null) { totalTokens += entryTokens; hasTokens = true; }
+    for (const [field, key] of [["total_tokens", "total"], ["input_tokens", "input"], ["cache_read_tokens", "cacheRead"], ["output_tokens", "output"], ["reasoning_tokens", "reasoning"]] as const) {
+      const value = numberValue(entry[field]);
+      if (value !== null) { tokenTotals[key] += value; hasTokens[key] = true; }
+    }
     if (model === "—") model = textValue(entry.model_id, "—");
   }
   const started = run.started_at ? new Date(run.started_at).getTime() : null;
   const completed = run.completed_at ? new Date(run.completed_at).getTime() : null;
   const duration = started !== null && completed !== null ? formatDuration(Math.max(0, completed - started)) : run.status === "running" ? "Running" : "—";
-  return { duration, model, tokens: hasTokens ? formatCount(totalTokens) : "—", toolCalls, failures };
+  return {
+    duration,
+    model,
+    tokens: Object.fromEntries(Object.entries(tokenTotals).map(([key, value]) => [key, hasTokens[key as keyof typeof hasTokens] ? formatCount(value) : "—"])) as Record<keyof typeof tokenTotals, string>,
+    toolCalls,
+    polls,
+    failures,
+  };
 }
 
 function runTraceDescription(entry: Record<string, unknown>) {

@@ -33,6 +33,8 @@ def privileged_client(handler):
         intake_token="i" * 32,
         source_intake_url="http://source-intake.test",
         source_intake_token="s" * 32,
+        research_mutation_url="http://research-mutation.test",
+        research_mutation_token="m" * 32,
         external_action_url="http://actions.test",
         external_action_token="e" * 32,
         principal_id="agent-test",
@@ -146,6 +148,31 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
     scoped.source_intake_validate({"version": "centaur-context-source-intake-v2"})
     scoped.source_intake_resolve_connections(["Ryan Greenblatt", "Agents"])
+    scoped.edit_source(
+        "source-1",
+        {"expected_revision": 2, "title": "Corrected title"},
+        "edit-source-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
+    scoped.connect(
+        {
+            "source_object_id": "note-1",
+            "kind": "related_to",
+            "target_object_id": "source-1",
+            "description": "The note discusses the same research topic.",
+        },
+        "connect-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
+    scoped.edit_connection(
+        "connection-1",
+        {"expected_revision": 1, "description": "A clearer explanation."},
+        "edit-connection-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
     scoped.workflow_run_start({"run_id": "run-1"})
     scoped.workflow_run_trace("run-1", {"id": "trace-1"})
     scoped.workflow_run_finish("run-1", {"status": "completed"})
@@ -157,6 +184,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         ("intake.test", "/api/v2/intake/batches/validate"),
         ("source-intake.test", "/api/v2/source-intake/validate"),
         ("source-intake.test", "/api/v2/source-intake/resolve-connections"),
+        ("research-mutation.test", "/api/v2/sources/source-1"),
+        ("research-mutation.test", "/api/v2/connections"),
+        ("research-mutation.test", "/api/v2/connections/connection-1"),
         ("source-intake.test", "/api/v2/source-intake/runs/start"),
         ("source-intake.test", "/api/v2/source-intake/runs/run-1/trace"),
         ("source-intake.test", "/api/v2/source-intake/runs/run-1/finish"),
@@ -168,6 +198,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         "Bearer " + "i" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
+        "Bearer " + "m" * 32,
+        "Bearer " + "m" * 32,
+        "Bearer " + "m" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
@@ -199,6 +232,15 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
             {"batch_id": "batch-1", "manifest_sha256": "a" * 64}
         ),
         lambda value: value.source_intake_validate({"version": "centaur-context-source-intake-v2"}),
+        lambda value: value.connect(
+            {
+                "source_object_id": "note-1",
+                "kind": "related_to",
+                "target_object_id": "source-1",
+                "description": "The records concern the same topic.",
+            },
+            "connect-1",
+        ),
         lambda value: value.reserve_external_action(
             {"version": "centaur-context-external-action-v2"}
         ),
@@ -209,6 +251,7 @@ def test_specialized_writes_never_fall_back_to_the_read_token(monkeypatch, opera
         "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN",
         "CENTAUR_CONTEXT_INTAKE_TOKEN",
         "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN",
         "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN",
     ]:
         monkeypatch.delenv(name, raising=False)

@@ -1,0 +1,43 @@
+{
+  "fixture_version": "slack-rsi-flow-v1",
+  "source": {
+    "canonical_uri": "https://www.youtube.com/watch?v=hY6S__xeCjg",
+    "baseline_object_id": "c364005f-4cc9-58d2-8ed7-8ed4bce24460",
+    "creation_path": "enyu-source-ingest"
+  },
+  "steps": [
+    {
+      "id": "ingest",
+      "message": "can you add this conversation as source\nhttps://youtu.be/hY6S__xeCjg?si=g_3DaHSPnJDxDNvG",
+      "expects": ["one source", "complete artifact", "ingestion connections", "terminal workflow receipt"]
+    },
+    {
+      "id": "question",
+      "message": "hey @Rez (enyu researcher) in that recent invest like the best podcast, what does she say about recursive self-improvement?",
+      "expects": ["grounded answer", "source consulted", "no mutation"]
+    },
+    {
+      "id": "note",
+      "message": "can you create a note on this",
+      "expects": ["one note", "derived_from source", "about originating chat"]
+    },
+    {
+      "id": "retrieve-rsi",
+      "message": "what’s the other most interesting stuff we’ve recently added on RSI?",
+      "expects": ["relevant pre-existing objects", "no mutation"]
+    },
+    {
+      "id": "connect",
+      "message_template": "can you link the new note to <selected object title and ID from step 4>?",
+      "expects": ["one explicit connection", "created or reused", "object event"]
+    }
+  ],
+  "acceptance": {
+    "same_slack_thread": true,
+    "wait_for_terminal_state_between_steps": true,
+    "timing_only_correlation_forbidden": true,
+    "source_creation_outside_ingestion_forbidden": true,
+    "duplicate_active_connection_forbidden": true,
+    "two_consecutive_clean_takes_required": true
+  }
+}

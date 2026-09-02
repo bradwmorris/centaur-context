@@ -172,6 +172,11 @@ def source_intake_status(manifest_file: str) -> None:
     _print(_client().source_intake_status(_manifest(manifest_file)))
 
 
+def source_intake_wait(manifest_file: str) -> None:
+    """Wait for a committed Source intake to become query-ready."""
+    _print(_client().source_intake_wait(_manifest(manifest_file)))
+
+
 def list_themes(slug: str | None = None) -> None:
     """List approved Themes."""
     _print(_client().list_themes(slug=slug))
@@ -277,7 +282,6 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("source_id")
 
     command = commands.add_parser("read-artifact")
-    command.add_argument("source_id")
     command.add_argument("artifact_id")
     command.add_argument("--offset", type=_bounded_int(0, 2**31 - 1), default=0)
     command.add_argument("--limit", type=_bounded_int(1, 20_000), default=8_000)
@@ -314,6 +318,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "source-intake-validate",
         "source-intake-commit",
         "source-intake-status",
+        "source-intake-wait",
     ):
         command = commands.add_parser(name)
         command.add_argument("manifest_file")

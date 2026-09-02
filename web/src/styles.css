@@ -149,7 +149,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .trace-entry.failure strong { color: #cc8585; }
 .run-heading { align-items: center; }
 .run-heading .detail-title { flex: 1 1 420px; margin: 0; }
-.run-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 7px; margin: 18px 0 22px; }
+.run-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(110px,1fr)); gap: 7px; margin: 18px 0 22px; }
 .run-metric { min-width: 0; display: grid; gap: 6px; border: 1px solid rgba(255,255,255,.07); border-radius: 7px; padding: 11px 12px; background: #17181b; }
 .run-metric span { color: var(--text-subtle); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
 .run-metric strong { min-width: 0; color: #d8d9dd; font-size: 13px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

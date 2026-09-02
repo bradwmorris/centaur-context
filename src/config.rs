@@ -14,6 +14,7 @@ pub struct Config {
     pub note_write_api_token: String,
     pub intake: Option<IntakeConfig>,
     pub source_intake: Option<SourceIntakeConfig>,
+    pub research_mutation: Option<ResearchMutationConfig>,
     pub external_actions: Option<ExternalActionConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
@@ -38,6 +39,12 @@ pub struct IntakeConfig {
 
 #[derive(Clone)]
 pub struct SourceIntakeConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
+}
+
+#[derive(Clone)]
+pub struct ResearchMutationConfig {
     pub addr: SocketAddr,
     pub api_token: String,
 }
@@ -172,6 +179,7 @@ impl Config {
         let curator_model = curator_model_config()?;
         let intake = intake_config()?;
         let source_intake = source_intake_config()?;
+        let research_mutation = research_mutation_config()?;
         let external_actions = external_action_config()?;
         if intake.as_ref().is_some_and(|intake| {
             intake.api_token == agent_api_token
@@ -206,6 +214,23 @@ impl Config {
         }) {
             bail!("EXTERNAL_ACTION_API_TOKEN must differ from every other service credential");
         }
+        if research_mutation.as_ref().is_some_and(|research_mutation| {
+            research_mutation.api_token == agent_api_token
+                || research_mutation.api_token == note_write_api_token
+                || research_mutation.api_token == chat_ingest_api_token
+                || research_mutation.api_token == curator_api_token
+                || intake
+                    .as_ref()
+                    .is_some_and(|intake| intake.api_token == research_mutation.api_token)
+                || source_intake.as_ref().is_some_and(|source_intake| {
+                    source_intake.api_token == research_mutation.api_token
+                })
+                || external_actions.as_ref().is_some_and(|external_actions| {
+                    external_actions.api_token == research_mutation.api_token
+                })
+        }) {
+            bail!("RESEARCH_MUTATION_API_TOKEN must differ from every other service credential");
+        }
 
         let static_dir = env::var("STATIC_DIR")
             .map(PathBuf::from)
@@ -227,6 +252,7 @@ impl Config {
             note_write_api_token,
             intake,
             source_intake,
+            research_mutation,
             external_actions,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
@@ -286,6 +312,19 @@ fn source_intake_config() -> Result<Option<SourceIntakeConfig>> {
     }
     Ok(Some(SourceIntakeConfig {
         addr: parse_addr("SOURCE_INTAKE_ADDR", "0.0.0.0:8086")?,
+        api_token,
+    }))
+}
+
+fn research_mutation_config() -> Result<Option<ResearchMutationConfig>> {
+    let Some(api_token) = optional("RESEARCH_MUTATION_API_TOKEN") else {
+        return Ok(None);
+    };
+    if api_token.len() < 32 {
+        bail!("RESEARCH_MUTATION_API_TOKEN must be at least 32 characters");
+    }
+    Ok(Some(ResearchMutationConfig {
+        addr: parse_addr("RESEARCH_MUTATION_ADDR", "0.0.0.0:8087")?,
         api_token,
     }))
 }

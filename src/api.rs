@@ -1499,7 +1499,7 @@ async fn create_connection(
         return Err(ValidationError::SelfConnection.into());
     }
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
-    let connection = db::create_connection(
+    let result = db::create_or_reuse_connection(
         &state.pool,
         &actor,
         NewConnection {
@@ -1513,7 +1513,14 @@ async fn create_connection(
         &key,
     )
     .await?;
-    Ok((StatusCode::CREATED, Json(json!({"data": connection}))))
+    Ok((
+        if result.reused {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(json!({"data":result.connection,"reused":result.reused})),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

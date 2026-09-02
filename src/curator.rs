@@ -502,6 +502,7 @@ async fn reconcile_owned(
     let mut created = HashMap::new();
     let mut changed_objects = HashMap::new();
     let mut sequence = 0_i32;
+    let mut skipped_operations = 0_i32;
 
     for item in &plan.create_objects {
         sequence += 1;
@@ -542,20 +543,17 @@ async fn reconcile_owned(
     }
 
     for item in &plan.update_objects {
-        sequence += 1;
         let current = current_object(&mut tx, item.object_id).await?;
         if current.protected || current.lifecycle != "active" {
-            return Err(CuratorError::Invalid(
-                "the curator cannot update a protected or archived Object".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         if current.revision != item.expected_revision {
             return Err(CuratorError::Conflict);
         }
         if current.kind == "chat" || current.kind == "user" {
-            return Err(CuratorError::Invalid(
-                "Chat and User Objects are protected from curator reconciliation".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         validate_task_patch(&current.kind, item.task.as_ref())?;
         crate::domain::validate_object_description(
@@ -563,6 +561,20 @@ async fn reconcile_owned(
             item.description.as_deref().unwrap_or(&current.description),
         )
         .map_err(invalid)?;
+        if item
+            .title
+            .as_ref()
+            .is_none_or(|value| value == &current.title)
+            && item
+                .description
+                .as_ref()
+                .is_none_or(|value| value == &current.description)
+            && item.task.is_none()
+        {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let before = current_object_json(&current);
         let provenance = curator_provenance(
             run_id,
@@ -611,7 +623,6 @@ async fn reconcile_owned(
     }
 
     for item in &plan.create_connections {
-        sequence += 1;
         let source = resolve_ref(&item.source, &created)?;
         let target = resolve_ref(&item.target, &created)?;
         if source == target {
@@ -621,6 +632,21 @@ async fn reconcile_owned(
         }
         ensure_active_object(&mut tx, source).await?;
         ensure_active_object(&mut tx, target).await?;
+        let exists: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(SELECT 1 FROM connections
+               WHERE source_object_id=$1 AND kind=$2 AND target_object_id=$3
+                 AND archived_at IS NULL)"#,
+        )
+        .bind(source)
+        .bind(&item.kind)
+        .bind(target)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let id = Uuid::new_v4();
         let provenance = curator_provenance(
             run_id,
@@ -660,16 +686,27 @@ async fn reconcile_owned(
     }
 
     for item in &plan.update_connections {
-        sequence += 1;
         let current = current_connection(&mut tx, item.connection_id).await?;
         if current.protected || current.archived_at.is_some() {
-            return Err(CuratorError::Invalid(
-                "the curator cannot update a protected or archived connection".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         if current.revision != item.expected_revision {
             return Err(CuratorError::Conflict);
         }
+        if item
+            .kind
+            .as_ref()
+            .is_none_or(|value| value == &current.kind)
+            && item
+                .description
+                .as_ref()
+                .is_none_or(|value| value == &current.description)
+        {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let before = connection_json(&current);
         let provenance = curator_provenance(
             run_id,
@@ -712,8 +749,12 @@ async fn reconcile_owned(
 
     validate_derived_connections(&plan, &created, &changed_objects, run.chat_object_id)?;
     let result = json!({
-        "run_id": run_id, "status": "completed", "chat_object_id": run.chat_object_id,
-        "created_objects": created, "change_count": sequence,
+        "run_id": run_id,
+        "status": if sequence == 0 { "no_changes" } else { "completed" },
+        "chat_object_id": run.chat_object_id,
+        "created_objects": created,
+        "change_count": sequence,
+        "skipped_operations": skipped_operations,
     });
     sqlx::query(
         r#"UPDATE runs SET status='completed',completed_at=now(),
@@ -849,13 +890,17 @@ pub async fn undo_as(
 }
 
 pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> {
+    plan.update_objects
+        .retain(|item| item.title.is_some() || item.description.is_some() || item.task.is_some());
+    plan.update_connections
+        .retain(|item| item.kind.is_some() || item.description.is_some());
     let count = plan.create_objects.len()
         + plan.update_objects.len()
         + plan.create_connections.len()
         + plan.update_connections.len();
-    if count == 0 || count > MAX_OPERATIONS {
+    if count > MAX_OPERATIONS {
         return Err(CuratorError::Invalid(
-            "a reconciliation plan must contain between 1 and 100 operations".into(),
+            "a reconciliation plan must contain at most 100 operations".into(),
         ));
     }
     let mut clients = HashSet::new();
@@ -1023,9 +1068,6 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                 ));
             }
         }
-        if item.title.is_none() && item.description.is_none() && item.task.is_none() {
-            return Err(CuratorError::Invalid("Object update has no changes".into()));
-        }
     }
     for item in &mut plan.create_connections {
         for reference in [&mut item.source, &mut item.target] {
@@ -1067,11 +1109,6 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
             .map_err(invalid)?;
         item.description = optional_text(item.description.take(), "connection description", 1000)
             .map_err(invalid)?;
-        if item.kind.is_none() && item.description.is_none() {
-            return Err(CuratorError::Invalid(
-                "Connection update has no changes".into(),
-            ));
-        }
     }
     Ok(())
 }

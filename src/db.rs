@@ -769,6 +769,12 @@ pub struct NewConnection {
     pub protected: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ConnectionWriteResult {
+    pub connection: Connection,
+    pub reused: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ConnectionChanges {
     pub kind: Option<String>,
@@ -2155,6 +2161,19 @@ pub async fn create_connection(
     input: NewConnection,
     idempotency_key: &str,
 ) -> Result<Connection, DbError> {
+    Ok(
+        create_or_reuse_connection(pool, actor, input, idempotency_key)
+            .await?
+            .connection,
+    )
+}
+
+pub async fn create_or_reuse_connection(
+    pool: &PgPool,
+    actor: &ActorContext,
+    input: NewConnection,
+    idempotency_key: &str,
+) -> Result<ConnectionWriteResult, DbError> {
     validate_connection_endpoints(
         pool,
         input.source_object_id,
@@ -2163,19 +2182,25 @@ pub async fn create_connection(
     )
     .await?;
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
-        return sqlx::query_as("SELECT * FROM connections WHERE id=$1")
+        let connection = sqlx::query_as("SELECT * FROM connections WHERE id=$1")
             .bind(id)
             .fetch_one(pool)
-            .await
-            .map_err(DbError::from);
+            .await?;
+        return Ok(ConnectionWriteResult {
+            connection,
+            reused: true,
+        });
     }
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
-    let connection: Connection = sqlx::query_as(
+    let inserted: Option<Connection> = sqlx::query_as(
         r#"INSERT INTO connections
            (id, source_object_id, kind, target_object_id, description,
             created_by_type, created_by_id, updated_by_type, updated_by_id, provenance, protected)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,$8,$9) RETURNING *"#,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,$8,$9)
+           ON CONFLICT (source_object_id,kind,target_object_id)
+             WHERE archived_at IS NULL DO NOTHING
+           RETURNING *"#,
     )
     .bind(id)
     .bind(input.source_object_id)
@@ -2186,23 +2211,100 @@ pub async fn create_connection(
     .bind(&actor.actor_id)
     .bind(&input.provenance)
     .bind(input.protected)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
-    insert_event(
-        &mut tx,
-        actor,
-        "connection",
-        id,
-        input.source_object_id,
-        "connected",
-        Some(idempotency_key),
-        None,
-        1,
-        json!({"kind": input.kind, "target_object_id": input.target_object_id, "description": input.description, "protected": input.protected}),
-    )
-    .await?;
+    let (connection, reused) = if let Some(connection) = inserted {
+        insert_event(
+            &mut tx,
+            actor,
+            "connection",
+            id,
+            input.source_object_id,
+            "connected",
+            Some(idempotency_key),
+            None,
+            1,
+            json!({"kind": input.kind, "target_object_id": input.target_object_id, "description": input.description, "protected": input.protected}),
+        )
+        .await?;
+        (connection, false)
+    } else {
+        let current: Connection = sqlx::query_as(
+            r#"SELECT * FROM connections
+               WHERE source_object_id=$1 AND kind=$2 AND target_object_id=$3
+                 AND archived_at IS NULL FOR UPDATE"#,
+        )
+        .bind(input.source_object_id)
+        .bind(&input.kind)
+        .bind(input.target_object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let merged = merge_connection_assertion(
+            &current.provenance,
+            &current.description,
+            &input.provenance,
+            &input.description,
+        );
+        if merged == current.provenance {
+            (current, true)
+        } else {
+            let updated: Connection = sqlx::query_as(
+                r#"UPDATE connections SET provenance=$2,revision=revision+1,
+                     updated_by_type=$3,updated_by_id=$4,updated_at=now()
+                   WHERE id=$1 RETURNING *"#,
+            )
+            .bind(current.id)
+            .bind(&merged)
+            .bind(actor.actor_type)
+            .bind(&actor.actor_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            insert_event(
+                &mut tx,
+                actor,
+                "connection",
+                current.id,
+                current.source_object_id,
+                "updated",
+                Some(idempotency_key),
+                Some(current.revision),
+                updated.revision,
+                json!({"assertion_added":true,"kind":current.kind,"target_object_id":current.target_object_id}),
+            )
+            .await?;
+            (updated, true)
+        }
+    };
     tx.commit().await?;
-    Ok(connection)
+    Ok(ConnectionWriteResult { connection, reused })
+}
+
+fn merge_connection_assertion(
+    existing: &Value,
+    existing_description: &str,
+    incoming: &Value,
+    incoming_description: &str,
+) -> Value {
+    let mut root = existing.as_object().cloned().unwrap_or_default();
+    let mut assertions = root
+        .remove("assertions")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    if assertions.is_empty() && !root.is_empty() {
+        assertions.push(json!({
+            "description": existing_description,
+            "provenance": Value::Object(root.clone()),
+        }));
+    }
+    let assertion = json!({
+        "description": incoming_description,
+        "provenance": incoming,
+    });
+    if !assertions.contains(&assertion) {
+        assertions.push(assertion);
+    }
+    root.insert("assertions".into(), Value::Array(assertions));
+    Value::Object(root)
 }
 
 pub async fn update_connection(

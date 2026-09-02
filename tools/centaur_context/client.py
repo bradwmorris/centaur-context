@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
@@ -12,6 +13,7 @@ DEFAULT_CENTAUR_CONTEXT_URL = "http://centaur-context.centaur.svc.cluster.local:
 DEFAULT_NOTE_WRITE_URL = "http://centaur-context-note-write.centaur.svc.cluster.local:8084"
 DEFAULT_INTAKE_URL = "http://centaur-context-intake.centaur.svc.cluster.local:8085"
 DEFAULT_SOURCE_INTAKE_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8086"
+DEFAULT_RESEARCH_MUTATION_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8087"
 DEFAULT_EXTERNAL_ACTION_URL = "http://centaur-context-enyu.centaur.svc.cluster.local:8088"
 DEFAULT_CONSOLE_URL = "http://centaur-console:3000"
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
@@ -20,6 +22,7 @@ LEGACY_TOKEN_NAME = "CENTAUR_OS_API_TOKEN"
 NOTE_WRITE_TOKEN_NAME = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN"
 INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_INTAKE_TOKEN"
 SOURCE_INTAKE_TOKEN_NAME = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN"
+RESEARCH_MUTATION_TOKEN_NAME = "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN"
 EXTERNAL_ACTION_TOKEN_NAME = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
@@ -87,6 +90,13 @@ def _clean(value: str | None) -> str:
     return (value or "").strip()
 
 
+def _required(value: str | None, field: str) -> str:
+    cleaned = _clean(value)
+    if not cleaned:
+        raise ValueError(f"{field} is required")
+    return cleaned
+
+
 def _compatible_value(canonical: str, legacy: str, *, source: str) -> str:
     canonical_value = _clean(canonical)
     legacy_value = _clean(legacy)
@@ -135,6 +145,8 @@ class CentaurContextClient:
         intake_token: str | None = None,
         source_intake_url: str | None = None,
         source_intake_token: str | None = None,
+        research_mutation_url: str | None = None,
+        research_mutation_token: str | None = None,
         external_action_url: str | None = None,
         external_action_token: str | None = None,
         principal_id: str | None = None,
@@ -161,6 +173,13 @@ class CentaurContextClient:
             _clean(source_intake_url or os.getenv("CENTAUR_CONTEXT_SOURCE_INTAKE_URL"))
             or DEFAULT_SOURCE_INTAKE_URL
         ).rstrip("/")
+        self.research_mutation_url = (
+            _clean(
+                research_mutation_url
+                or os.getenv("CENTAUR_CONTEXT_RESEARCH_MUTATION_URL")
+            )
+            or DEFAULT_RESEARCH_MUTATION_URL
+        ).rstrip("/")
         self.external_action_url = (
             _clean(external_action_url or os.getenv("CENTAUR_CONTEXT_EXTERNAL_ACTION_URL"))
             or DEFAULT_EXTERNAL_ACTION_URL
@@ -172,6 +191,7 @@ class CentaurContextClient:
         self._explicit_note_write_token = _clean(note_write_token)
         self._explicit_intake_token = _clean(intake_token)
         self._explicit_source_intake_token = _clean(source_intake_token)
+        self._explicit_research_mutation_token = _clean(research_mutation_token)
         self._explicit_external_action_token = _clean(external_action_token)
         self._explicit_principal_id = _clean(principal_id)
         self._explicit_thread_key = _clean(thread_key)
@@ -226,6 +246,18 @@ class CentaurContextClient:
         if not value:
             raise RuntimeError(
                 f"{SOURCE_INTAKE_TOKEN_NAME} is required for Enyu Source intake"
+            )
+        return value
+
+    def _research_mutation_token(self) -> str:
+        value = self._explicit_research_mutation_token or _clean(
+            os.getenv(RESEARCH_MUTATION_TOKEN_NAME)
+        )
+        if not value:
+            value = _tool_secret(RESEARCH_MUTATION_TOKEN_NAME)
+        if not value:
+            raise RuntimeError(
+                f"{RESEARCH_MUTATION_TOKEN_NAME} is required for Research mutations"
             )
         return value
 
@@ -786,6 +818,110 @@ class CentaurContextClient:
         """Check commit and retrieval readiness for one Enyu Source manifest."""
         return self._source_intake_request(
             "status", manifest, principal_id=principal_id, thread_key=thread_key
+        )
+
+    def source_intake_wait(
+        self,
+        manifest: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+        *,
+        attempts: int = 12,
+        interval_seconds: float = 5,
+    ) -> dict[str, Any]:
+        """Wait for intake readiness inside one externally visible tool call."""
+        if attempts < 1 or attempts > 60:
+            raise ValueError("attempts must be between 1 and 60")
+        if interval_seconds < 0 or interval_seconds > 30:
+            raise ValueError("interval_seconds must be between 0 and 30")
+        result: dict[str, Any] = {}
+        for attempt in range(attempts):
+            result = self.source_intake_status(
+                manifest, principal_id=principal_id, thread_key=thread_key
+            )
+            if result.get("ready") is True:
+                return result
+            if attempt + 1 < attempts:
+                time.sleep(interval_seconds)
+        return result
+
+    def edit_source(
+        self,
+        source_id: str,
+        changes: dict[str, Any],
+        idempotency_key: str,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit one ingested Source through the dedicated Research workflow listener."""
+        return self._research_mutation_request(
+            "PATCH",
+            f"/api/v2/sources/{quote(_required(source_id, 'source_id'), safe='')}",
+            changes,
+            idempotency_key,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def connect(
+        self,
+        connection: dict[str, Any],
+        idempotency_key: str,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or reuse one canonical Connection through the Research workflow listener."""
+        return self._research_mutation_request(
+            "POST",
+            "/api/v2/connections",
+            connection,
+            idempotency_key,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def edit_connection(
+        self,
+        connection_id: str,
+        changes: dict[str, Any],
+        idempotency_key: str,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit one canonical Connection through the Research workflow listener."""
+        return self._research_mutation_request(
+            "PATCH",
+            f"/api/v2/connections/{quote(_required(connection_id, 'connection_id'), safe='')}",
+            changes,
+            idempotency_key,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def _research_mutation_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        *,
+        principal_id: str | None,
+        thread_key: str | None,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("Research mutation payload must be a JSON object")
+        idempotency_key = _required(idempotency_key, "idempotency_key")
+        if len(idempotency_key) > 200:
+            raise ValueError("idempotency_key must be at most 200 characters")
+        return self._request(
+            method,
+            path,
+            json=payload,
+            idempotency_key=idempotency_key,
+            token=self._research_mutation_token(),
+            base_url=self.research_mutation_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
         )
 
     def workflow_run_start(
