@@ -324,6 +324,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .related-object-description { min-width: 0; flex: 1 1 auto; color: var(--text-subtle); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .related-object-description::before { content: "— "; }
 .related-object-meaning, .related-connection-link { color: var(--text-subtle); font-size: 9px; text-transform: capitalize; white-space: nowrap; }
+.focused-object-graph { position: relative; width: 100%; min-height: 320px; overflow: hidden; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background-color: #0e0f11; background-image: radial-gradient(rgba(255,255,255,.05) .75px, transparent .75px); background-size: 19px 19px; }
+.focused-object-graph > svg { width: 100%; height: 320px; display: block; }
+.focused-object-graph marker path { fill: #777a84; }
+.focused-object-graph .connection-graph-edge { opacity: .48; }
+.focused-object-graph > p { position: absolute; left: 11px; bottom: 8px; margin: 0; color: #777a84; font-size: 9px; pointer-events: none; }
+.focused-graph-state { min-height: 180px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background: #0e0f11; color: var(--text-subtle); font-size: 11px; }
+.focused-graph-state.error { color: #d1a0a5; }
 .identity { display: grid; gap: 4px; }
 .identity span { color: var(--text-subtle); font-size: 10px; text-transform: uppercase; }
 .identity strong { color: #c9cbd0; font-size: 12px; font-weight: 520; }
@@ -636,6 +643,8 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
   .run-related-object > .object-identity, .run-related-object > .object-context { display: none; }
   .related-object-row { grid-template-columns: max-content minmax(0,1fr) max-content; }
   .related-object-row > .object-identity, .related-object-row > .object-context, .related-connection-link { display: none; }
+  .focused-object-graph { min-height: 260px; }
+  .focused-object-graph > svg { height: 260px; }
   .change { grid-template-columns: 10px minmax(90px,1fr) max-content; }
   .change > .object-identity, .change > .supporting-identity { display: none; }
   .modal-backdrop { padding-top: 8vh; }

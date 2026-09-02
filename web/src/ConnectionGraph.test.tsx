@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConnectionGraphWorkspace } from "./ConnectionGraph";
+import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph";
 import type { ConnectionGraphSnapshot } from "./types";
 
 const graph: ConnectionGraphSnapshot = {
@@ -23,7 +23,10 @@ function mockGraph(snapshot: ConnectionGraphSnapshot = graph) {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify({ data: snapshot }), { status: 200, headers: { "Content-Type": "application/json" } }))));
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.replaceState({}, "", "/");
+});
 
 describe("Connections graph workspace", () => {
   it("loads one compact graph and focuses searched Objects", async () => {
@@ -47,6 +50,23 @@ describe("Connections graph workspace", () => {
     expect(screen.getByRole("heading", { name: "about" })).toBeVisible();
     expect(screen.getByText("Central Object is about Source Leaf.")).toBeVisible();
     expect(screen.getByRole("link", { name: "Open Connection detail" })).toHaveAttribute("href", "/connections/edge-a");
+  });
+
+  it("renders one Object neighbourhood and links to the full graph with focus", async () => {
+    mockGraph();
+    render(<FocusedObjectGraph objectId="hub" objectTitle="Central Object" />);
+    expect(await screen.findByRole("img", { name: "Central Object with 2 related Objects and 2 direct Connections" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open in Connections" })).toHaveAttribute("href", "/connections?object=hub");
+    expect(screen.getByRole("button", { name: /Central Object, entity Object/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Quiet Object/ })).not.toBeInTheDocument();
+  });
+
+  it("opens the full graph focused on the Object from its query link", async () => {
+    window.history.replaceState({}, "", "/connections?object=hub");
+    mockGraph();
+    render(<ConnectionGraphWorkspace />);
+    expect(await screen.findByLabelText("Selected Object")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Central Object" })).toBeVisible();
   });
 
   it("supports fit, zoom, Escape, and empty states", async () => {

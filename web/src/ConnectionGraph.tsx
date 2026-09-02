@@ -3,7 +3,7 @@ import { api } from "./api";
 import { layoutConnectionGraph } from "./connectionGraphLayout";
 import type { PositionedGraphEdge, PositionedGraphNode } from "./connectionGraphLayout";
 import { ObjectTypeBadge } from "./RecordVisuals";
-import { connectionPath, interceptNavigation, objectPath } from "./routing";
+import { connectionPath, connectionsPath, interceptNavigation, navigate, objectPath } from "./routing";
 import type { ConnectionGraphSnapshot } from "./types";
 
 type Selection = { type: "node" | "edge"; id: string } | null;
@@ -31,7 +31,13 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
       .then((snapshot) => {
         if (generation !== loadGeneration.current) return;
         setGraph(snapshot);
-        setSelection((current) => selectionExists(current, snapshot) ? current : null);
+        setSelection((current) => {
+          if (selectionExists(current, snapshot)) return current;
+          const requestedObject = new URLSearchParams(window.location.search).get("object");
+          return requestedObject && snapshot.nodes.some((node) => node.id === requestedObject)
+            ? { type: "node", id: requestedObject }
+            : null;
+        });
       })
       .catch((cause) => { if (generation === loadGeneration.current) setError(cause instanceof Error ? cause.message : "The graph could not be loaded."); })
       .finally(() => { if (generation === loadGeneration.current) setLoading(false); });
@@ -169,6 +175,45 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
   </section>;
 }
 
+export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { objectId: string; objectTitle: string; refreshKey?: number }) {
+  const [graph, setGraph] = useState<ConnectionGraphSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setError(null);
+    void api.connectionGraph()
+      .then((snapshot) => { if (active) setGraph(snapshot); })
+      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "The Connection map could not be loaded."); });
+    return () => { active = false; };
+  }, [objectId, refreshKey]);
+
+  const neighbourhood = useMemo(() => {
+    if (!graph) return null;
+    const edges = graph.edges.filter((edge) => edge.source_object_id === objectId || edge.target_object_id === objectId);
+    const ids = new Set([objectId]);
+    for (const edge of edges) {
+      ids.add(edge.source_object_id);
+      ids.add(edge.target_object_id);
+    }
+    return layoutConnectionGraph(graph.nodes.filter((node) => ids.has(node.id)), edges);
+  }, [graph, objectId]);
+  const fullGraphPath = connectionsPath(objectId);
+
+  return <section className="detail-section focused-object-graph-section" aria-label={`Connection map for ${objectTitle}`}>
+    <header><h3>Connection map</h3><a className="text-button" href={fullGraphPath} onClick={(event) => interceptNavigation(event, fullGraphPath)}>Open in Connections</a></header>
+    {error ? <div className="focused-graph-state error">{error}</div> : !neighbourhood ? <div className="focused-graph-state">Loading Connection map…</div> : neighbourhood.nodes.length === 0 ? <div className="focused-graph-state">This Object is not present in the active Connection graph.</div> : <div className="focused-object-graph">
+      <svg viewBox={`0 0 ${neighbourhood.width} ${neighbourhood.height}`} role="img" aria-label={`${objectTitle} with ${neighbourhood.nodes.length - 1} related Objects and ${neighbourhood.edges.length} direct Connections`}>
+        <defs><marker id="focused-connection-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
+        <g className="connection-graph-edges">{neighbourhood.edges.map((edge) => <GraphEdge key={edge.id} edge={edge} active selected={false} keyboardEnabled onSelect={() => navigate(connectionPath(edge.id))} markerId="focused-connection-arrow" />)}</g>
+        <g className="connection-graph-nodes">{neighbourhood.nodes.map((node) => <GraphNode key={node.id} node={node} matched active selected={node.id === objectId} hovered={hoveredNode === node.id} onHover={setHoveredNode} onSelect={() => navigate(objectPath(node.id))} />)}</g>
+      </svg>
+      <p>{neighbourhood.edges.length} direct {neighbourhood.edges.length === 1 ? "Connection" : "Connections"} · select a node or line to open it</p>
+    </div>}
+  </section>;
+}
+
 function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect }: {
   node: PositionedGraphNode;
   matched: boolean;
@@ -190,12 +235,13 @@ function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect
   </g>;
 }
 
-function GraphEdge({ edge, active, selected, keyboardEnabled, onSelect }: {
+function GraphEdge({ edge, active, selected, keyboardEnabled, onSelect, markerId = "connection-arrow" }: {
   edge: PositionedGraphEdge;
   active: boolean;
   selected: boolean;
   keyboardEnabled: boolean;
   onSelect: () => void;
+  markerId?: string;
 }) {
   const className = ["connection-graph-edge", !active ? "muted" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
   const path = `M ${edge.source.x} ${edge.source.y} L ${edge.target.x} ${edge.target.y}`;
@@ -203,7 +249,7 @@ function GraphEdge({ edge, active, selected, keyboardEnabled, onSelect }: {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); }
   };
   return <g className={className}>
-    <path d={path} className="edge-line" markerEnd="url(#connection-arrow)" />
+    <path d={path} className="edge-line" markerEnd={`url(#${markerId})`} />
     <path d={path} className="edge-hit-area" role={keyboardEnabled ? "button" : undefined} tabIndex={keyboardEnabled ? 0 : -1} aria-label={keyboardEnabled ? `${edge.source.title} ${edge.kind.replaceAll("_", " ")} ${edge.target.title}: ${edge.description}` : undefined} onClick={(event) => { event.stopPropagation(); onSelect(); }} onKeyDown={activate} />
   </g>;
 }
