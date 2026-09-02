@@ -179,6 +179,7 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
   const [graph, setGraph] = useState<ConnectionGraphSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1.6);
 
   useEffect(() => {
     let active = true;
@@ -188,6 +189,8 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "The Connection map could not be loaded."); });
     return () => { active = false; };
   }, [objectId, refreshKey]);
+
+  useEffect(() => setZoom(1.6), [objectId]);
 
   const neighbourhood = useMemo(() => {
     if (!graph) return null;
@@ -200,11 +203,13 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
     return layoutConnectionGraph(graph.nodes.filter((node) => ids.has(node.id)), edges);
   }, [graph, objectId]);
   const fullGraphPath = connectionsPath(objectId);
+  const viewBox = neighbourhood && neighbourhood.nodes.length > 0 ? focusedViewBox(neighbourhood.nodes, zoom) : "0 0 900 600";
 
   return <section className="detail-section focused-object-graph-section" aria-label={`Connection map for ${objectTitle}`}>
     <header><h3>Connection map</h3><a className="text-button" href={fullGraphPath} onClick={(event) => interceptNavigation(event, fullGraphPath)}>Open in Connections</a></header>
     {error ? <div className="focused-graph-state error">{error}</div> : !neighbourhood ? <div className="focused-graph-state">Loading Connection map…</div> : neighbourhood.nodes.length === 0 ? <div className="focused-graph-state">This Object is not present in the active Connection graph.</div> : <div className="focused-object-graph">
-      <svg viewBox={`0 0 ${neighbourhood.width} ${neighbourhood.height}`} role="img" aria-label={`${objectTitle} with ${neighbourhood.nodes.length - 1} related Objects and ${neighbourhood.edges.length} direct Connections`}>
+      <div className="focused-graph-controls" role="group" aria-label="Focused graph controls"><button type="button" onClick={() => setZoom((value) => clamp(value / 1.25, 0.55, 2.5))} aria-label="Zoom out focused graph">−</button><button type="button" onClick={() => setZoom(1)}>Fit</button><button type="button" onClick={() => setZoom((value) => clamp(value * 1.25, 0.55, 2.5))} aria-label="Zoom in focused graph">+</button></div>
+      <svg viewBox={viewBox} role="img" aria-label={`${objectTitle} with ${neighbourhood.nodes.length - 1} related Objects and ${neighbourhood.edges.length} direct Connections`}>
         <defs><marker id="focused-connection-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
         <g className="connection-graph-edges">{neighbourhood.edges.map((edge) => <GraphEdge key={edge.id} edge={edge} active selected={false} keyboardEnabled onSelect={() => navigate(connectionPath(edge.id))} markerId="focused-connection-arrow" />)}</g>
         <g className="connection-graph-nodes">{neighbourhood.nodes.map((node) => <GraphNode key={node.id} node={node} matched active selected={node.id === objectId} hovered={hoveredNode === node.id} onHover={setHoveredNode} onSelect={() => navigate(objectPath(node.id))} />)}</g>
@@ -212,6 +217,20 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
       <p>{neighbourhood.edges.length} direct {neighbourhood.edges.length === 1 ? "Connection" : "Connections"} · select a node or line to open it</p>
     </div>}
   </section>;
+}
+
+function focusedViewBox(nodes: PositionedGraphNode[], zoom: number): string {
+  const left = Math.min(...nodes.map((node) => node.x - node.radius)) - 70;
+  const right = Math.max(...nodes.map((node) => node.x + node.radius)) + 170;
+  const top = Math.min(...nodes.map((node) => node.y - node.radius)) - 70;
+  const bottom = Math.max(...nodes.map((node) => node.y + node.radius)) + 70;
+  const fittedWidth = Math.max(260, right - left);
+  const fittedHeight = Math.max(200, bottom - top);
+  const width = fittedWidth / zoom;
+  const height = fittedHeight / zoom;
+  const centerX = (left + right) / 2;
+  const centerY = (top + bottom) / 2;
+  return `${centerX - width / 2} ${centerY - height / 2} ${width} ${height}`;
 }
 
 function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect }: {

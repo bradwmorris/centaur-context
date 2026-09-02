@@ -55,7 +55,14 @@ describe("Connections graph workspace", () => {
   it("renders one Object neighbourhood and links to the full graph with focus", async () => {
     mockGraph();
     render(<FocusedObjectGraph objectId="hub" objectTitle="Central Object" />);
-    expect(await screen.findByRole("img", { name: "Central Object with 2 related Objects and 2 direct Connections" })).toBeVisible();
+    const focusedGraph = await screen.findByRole("img", { name: "Central Object with 2 related Objects and 2 direct Connections" });
+    expect(focusedGraph).toBeVisible();
+    const fittedViewBox = focusedGraph.getAttribute("viewBox");
+    expect(fittedViewBox).not.toBe("0 0 900 600");
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in focused graph" }));
+    expect(focusedGraph.getAttribute("viewBox")).not.toBe(fittedViewBox);
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    expect(focusedGraph.getAttribute("viewBox")).not.toBe(fittedViewBox);
     expect(screen.getByRole("link", { name: "Open in Connections" })).toHaveAttribute("href", "/connections?object=hub");
     expect(screen.getByRole("button", { name: /Central Object, entity Object/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Quiet Object/ })).not.toBeInTheDocument();
