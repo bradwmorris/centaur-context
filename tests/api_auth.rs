@@ -295,7 +295,7 @@ async fn human_api_declares_v2_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.3.0");
     assert_eq!(metadata["api_version"], "v2");
     assert_eq!(metadata["ontology_version"], "v3");
-    assert_eq!(metadata["database_schema_version"], 18);
+    assert_eq!(metadata["database_schema_version"], 21);
     assert_eq!(metadata["tool_version"], "0.3.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -478,7 +478,7 @@ async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
 }
 
 #[tokio::test]
-async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
+async fn note_and_task_write_listener_is_a_separate_attributed_idempotent_grant() {
     let write_token = "w".repeat(32);
     let body = r##"{"title":"Research note","description":"A bounded note created by an authorized research agent.","content":"# Evidence\nSynthetic evidence only.","content_format":"markdown","provenance":{"source_type":"human"}}"##;
     let wrong = note_write_router(state(), write_token.clone())
@@ -529,6 +529,23 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .unwrap();
     assert_eq!(missing_retry_key.status(), StatusCode::BAD_REQUEST);
 
+    let task_body = r##"{"title":"Research follow-up","description":"A bounded follow-up Task created by an authorized research agent.","priority":"medium","brief_markdown":"Review the captured evidence."}"##;
+    let task_missing_retry_key = note_write_router(state(), "w".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/tasks")
+                .header("authorization", format!("Bearer {}", "w".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("content-type", "application/json")
+                .body(Body::from(task_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_missing_retry_key.status(), StatusCode::BAD_REQUEST);
+
     let read_surface = agent_router(state(), "a".repeat(32))
         .oneshot(
             Request::builder()
@@ -545,6 +562,23 @@ async fn note_write_listener_is_a_separate_attributed_idempotent_grant() {
         .await
         .unwrap();
     assert_eq!(read_surface.status(), StatusCode::NOT_FOUND);
+
+    let task_read_surface = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/tasks")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", "task-1")
+                .header("content-type", "application/json")
+                .body(Body::from(task_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_read_surface.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -791,6 +825,11 @@ async fn ingestion_listener_rejects_unapproved_slack_surfaces_before_database_ac
                         "channel_id":"C_DENIED",
                         "thread_id":"1780000000.000100",
                         "surface_kind":"channel",
+                        "run":{
+                            "interaction_id":"1780000000.000100",
+                            "status":"running",
+                            "started_at":"2026-08-28T00:00:00Z"
+                        },
                         "messages":[{
                             "provider_message_id":"1780000000.000100",
                             "sender":{"provider_user_id":"U1","display_name":"Example User","user_kind":"human"},

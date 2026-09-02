@@ -1,8 +1,11 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::Response,
@@ -22,6 +25,7 @@ use crate::{
         IntakeArtifact, IntakeBatchRequest, IntakeConnection, IntakeError, IntakeObject,
         IntakeObjectRef, IntakeSource, PreparedBatch,
     },
+    search,
 };
 
 const MAX_SOURCE_INTAKE_BODY_BYTES: usize = 1024 * 1024;
@@ -44,6 +48,19 @@ pub fn router(app: AppState, token: String) -> Router {
         .route("/api/v2/source-intake/validate", post(validate_source))
         .route("/api/v2/source-intake/commit", post(commit_source))
         .route("/api/v2/source-intake/status", post(source_status))
+        .route(
+            "/api/v2/source-intake/resolve-connections",
+            post(resolve_connections),
+        )
+        .route("/api/v2/source-intake/runs/start", post(start_workflow_run))
+        .route(
+            "/api/v2/source-intake/runs/{id}/trace",
+            post(append_workflow_trace),
+        )
+        .route(
+            "/api/v2/source-intake/runs/{id}/finish",
+            post(finish_workflow_run),
+        )
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(MAX_SOURCE_INTAKE_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state, source_intake_auth))
@@ -57,6 +74,44 @@ async fn health() -> Json<Value> {
 async fn ready(State(state): State<SourceIntakeState>) -> Result<Json<Value>, IntakeError> {
     crate::db::ready(&state.app.pool).await?;
     Ok(Json(json!({"ok":true,"ready":true})))
+}
+
+async fn start_workflow_run(
+    State(state): State<SourceIntakeState>,
+    Extension(actor): Extension<ActorContext>,
+    Json(mut input): Json<crate::runs::WorkflowRunStart>,
+) -> Result<(StatusCode, Json<Value>), IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let run =
+        crate::runs::start_workflow_run(&state.app.pool, actor.actor_type, &actor.actor_id, &input)
+            .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"run_id":run.id,"status":run.status}})),
+    ))
+}
+
+async fn append_workflow_trace(
+    State(state): State<SourceIntakeState>,
+    Path(id): Path<Uuid>,
+    Json(mut input): Json<crate::runs::WorkflowTraceEntry>,
+) -> Result<(StatusCode, Json<Value>), IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let trace_entry_id = crate::runs::append_workflow_trace(&state.app.pool, id, &input).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"trace_entry_id":trace_entry_id}})),
+    ))
+}
+
+async fn finish_workflow_run(
+    State(state): State<SourceIntakeState>,
+    Path(id): Path<Uuid>,
+    Json(mut input): Json<crate::runs::WorkflowRunFinish>,
+) -> Result<Json<Value>, IntakeError> {
+    input.validate().map_err(IntakeError::BadRequest)?;
+    let run = crate::runs::finish_workflow_run(&state.app.pool, id, &input).await?;
+    Ok(Json(json!({"data":{"run_id":run.id,"status":run.status}})))
 }
 
 async fn source_intake_auth(
@@ -174,6 +229,61 @@ pub struct SourceConnection {
     pub provenance: Option<Value>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveConnectionsRequest {
+    queries: Vec<String>,
+}
+
+async fn resolve_connections(
+    State(state): State<SourceIntakeState>,
+    Json(input): Json<ResolveConnectionsRequest>,
+) -> Result<Json<Value>, IntakeError> {
+    if input.queries.len() > 16 {
+        return Err(IntakeError::BadRequest(
+            "connection resolution accepts at most 16 queries".into(),
+        ));
+    }
+    let mut resolved = Vec::new();
+    let mut target_ids = HashSet::new();
+    for raw_query in input.queries {
+        let query = raw_query.trim();
+        if query.is_empty() || query.len() > 1_000 {
+            return Err(IntakeError::BadRequest(
+                "connection queries must be non-empty and at most 1000 bytes".into(),
+            ));
+        }
+        let packet = search::search(
+            &state.app.pool,
+            None,
+            state.app.text_search_config,
+            query,
+            None,
+            10,
+        )
+        .await?;
+        let exact = packet
+            .objects
+            .into_iter()
+            .filter(|candidate| {
+                matches!(candidate.kind.as_str(), "entity" | "theme")
+                    && candidate.title.eq_ignore_ascii_case(query)
+            })
+            .collect::<Vec<_>>();
+        if let [candidate] = exact.as_slice()
+            && target_ids.insert(candidate.id)
+        {
+            resolved.push(json!({
+                "query": query,
+                "target_object_id": candidate.id,
+                "target_kind": candidate.kind,
+                "title": candidate.title,
+            }));
+        }
+    }
+    Ok(Json(json!({"data":{"connections":resolved}})))
+}
+
 async fn prepared(
     state: &SourceIntakeState,
     request: SourceIntakeRequest,
@@ -184,25 +294,37 @@ async fn prepared(
         .source
         .as_ref()
         .expect("Source adapter");
+    let canonical_uri = source.canonical_uri.clone();
     #[derive(sqlx::FromRow)]
     struct Conflict {
         object_id: Uuid,
         protected: bool,
         current_artifact_id: Option<Uuid>,
-        sha256: Option<String>,
+        current_artifact_sha256: Option<String>,
+        current_artifact_supersedes_id: Option<Uuid>,
+        matching_artifact_id: Option<Uuid>,
         provenance: Value,
         canonical_uri: Option<String>,
         same_batch: bool,
     }
     let conflicts: Vec<Conflict> = sqlx::query_as(
-        r#"SELECT s.object_id,o.protected,s.current_artifact_id,sc.sha256,o.provenance,
+        r#"SELECT s.object_id,o.protected,s.current_artifact_id,
+                  current_artifact.sha256 AS current_artifact_sha256,
+                  current_artifact.supersedes_artifact_id AS current_artifact_supersedes_id,
+                  matching_artifact.id AS matching_artifact_id,o.provenance,
                   s.canonical_uri,EXISTS(
                     SELECT 1 FROM runs r WHERE r.kind='intake' AND r.input->>'batch_id'=$3
                   ) AS same_batch
            FROM sources s JOIN objects o ON o.id=s.object_id
-           LEFT JOIN artifacts sc ON sc.id=s.current_artifact_id
+           LEFT JOIN artifacts current_artifact ON current_artifact.id=s.current_artifact_id
+           LEFT JOIN LATERAL (
+             SELECT a.id FROM artifacts a
+             WHERE a.object_id=s.object_id AND a.sha256=$2
+             ORDER BY a.created_at DESC,a.id DESC LIMIT 1
+           ) matching_artifact ON true
            WHERE o.archived_at IS NULL
-             AND (($1::text IS NOT NULL AND s.canonical_uri=$1) OR sc.sha256=$2)"#,
+             AND (($1::text IS NOT NULL AND s.canonical_uri=$1)
+                  OR matching_artifact.id IS NOT NULL)"#,
     )
     .bind(&source.canonical_uri)
     .bind(&prepared.request.artifacts[0].sha256)
@@ -219,21 +341,72 @@ async fn prepared(
                 "canonical URI or exact content belongs to multiple Sources".into(),
             ));
         }
+        let same_canonical_source =
+            canonical_uri.is_some() && conflict.canonical_uri == canonical_uri;
+        let exact_existing_source =
+            same_canonical_source && conflict.matching_artifact_id.is_some();
         let curator_placeholder = !conflict.protected
             && conflict.current_artifact_id.is_none()
-            && conflict.sha256.is_none()
+            && conflict.current_artifact_sha256.is_none()
             && conflict.canonical_uri == source.canonical_uri
             && conflict
                 .provenance
                 .get("source_type")
                 .and_then(Value::as_str)
                 == Some("context_curator");
-        if !conflict.same_batch && !curator_placeholder {
+        if exact_existing_source {
+            if conflict.matching_artifact_id == prepared.artifact_id("source-content") {
+                prepared.reuse_object_with_artifacts(
+                    "source",
+                    conflict.object_id,
+                    conflict.current_artifact_supersedes_id,
+                )?;
+            } else {
+                prepared.reuse_object("source", conflict.object_id)?;
+            }
+            let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
+                sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
+                    r#"SELECT source_object_id,kind,target_object_id,id FROM connections
+                   WHERE (source_object_id=$1 OR target_object_id=$1)
+                     AND archived_at IS NULL"#,
+                )
+                .bind(conflict.object_id)
+                .fetch_all(&state.app.pool)
+                .await?
+                .into_iter()
+                .map(|(source_id, kind, target_id, connection_id)| {
+                    ((source_id, kind, target_id), connection_id)
+                })
+                .collect();
+            prepared.discard_connections(&existing_connections)?;
+        } else if same_canonical_source && conflict.current_artifact_id.is_some() {
+            prepared.reuse_object_with_artifacts(
+                "source",
+                conflict.object_id,
+                conflict.current_artifact_id,
+            )?;
+            let existing_connections: HashMap<(Uuid, String, Uuid), Uuid> =
+                sqlx::query_as::<_, (Uuid, String, Uuid, Uuid)>(
+                    r#"SELECT source_object_id,kind,target_object_id,id FROM connections
+                   WHERE (source_object_id=$1 OR target_object_id=$1)
+                     AND archived_at IS NULL"#,
+                )
+                .bind(conflict.object_id)
+                .fetch_all(&state.app.pool)
+                .await?
+                .into_iter()
+                .map(|(source_id, kind, target_id, connection_id)| {
+                    ((source_id, kind, target_id), connection_id)
+                })
+                .collect();
+            prepared.discard_connections(&existing_connections)?;
+        } else if !conflict.same_batch && !curator_placeholder {
             return Err(IntakeError::Conflict(
                 "canonical URI or exact content already belongs to a different Source".into(),
             ));
+        } else {
+            prepared.adopt_object("source", conflict.object_id)?;
         }
-        prepared.adopt_object("source", conflict.object_id)?;
     }
     Ok(prepared)
 }
@@ -474,6 +647,7 @@ fn source_response(prepared: &PreparedBatch, status: &str, replayed: bool) -> Va
         "status":status,
         "replayed":replayed,
         "idempotency_key":prepared.request.batch_id,
+        "run_id":crate::intake::intake_run_id(&prepared.request.batch_id),
         "object_id":prepared.object_ids["source"],
         "payload_sha256":prepared.payload_sha256,
         "counts":prepared.counts(),

@@ -25,6 +25,8 @@ use crate::{
 const INGESTOR_ACTOR_ID: &str = "chat-ingestor";
 const MAX_MESSAGES_PER_REQUEST: usize = 500;
 const MAX_USAGE_ATTEMPTS_PER_REQUEST: usize = 100;
+const MAX_TRACE_ENTRIES_PER_REQUEST: usize = 500;
+const MAX_AFFECTED_OBJECTS_PER_REQUEST: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct ApprovedSlackSurfaces {
@@ -173,6 +175,25 @@ pub struct SlackInteractionInput {
     pub interaction_finished: bool,
     #[serde(default)]
     pub agent_usage: Vec<Value>,
+    pub run: SlackRunInput,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackRunInput {
+    pub interaction_id: String,
+    pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub completed_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub trace: Vec<Value>,
+    #[serde(default)]
+    pub affected_object_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub consulted_object_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +232,19 @@ pub struct ValidatedSlackInteraction {
     messages: Vec<ValidatedSlackMessage>,
     interaction_finished: bool,
     agent_usage: Vec<Value>,
+    run: ValidatedSlackRun,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedSlackRun {
+    interaction_id: String,
+    status: String,
+    started_at: OffsetDateTime,
+    completed_at: Option<OffsetDateTime>,
+    trace: Vec<Value>,
+    affected_object_ids: Vec<Uuid>,
+    consulted_object_ids: Vec<Uuid>,
+    error: Option<String>,
 }
 
 impl SlackInteractionInput {
@@ -236,6 +270,45 @@ impl SlackInteractionInput {
                 value: "every usage attempt must be an object".to_owned(),
             });
         }
+        if self.run.trace.len() > MAX_TRACE_ENTRIES_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.trace",
+                max: MAX_TRACE_ENTRIES_PER_REQUEST,
+            });
+        }
+        if self.run.trace.iter().any(|value| !value.is_object()) {
+            return Err(ValidationError::Unsupported {
+                field: "run.trace",
+                value: "every trace entry must be an object".to_owned(),
+            });
+        }
+        if self.run.affected_object_ids.len() > MAX_AFFECTED_OBJECTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.affected_object_ids",
+                max: MAX_AFFECTED_OBJECTS_PER_REQUEST,
+            });
+        }
+        if self.run.consulted_object_ids.len() > MAX_AFFECTED_OBJECTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.consulted_object_ids",
+                max: MAX_AFFECTED_OBJECTS_PER_REQUEST,
+            });
+        }
+        let run_input = self.run;
+        let run = ValidatedSlackRun {
+            interaction_id: required_text(run_input.interaction_id, "run.interaction_id", 300)?,
+            status: allowed(
+                run_input.status,
+                "run.status",
+                &["running", "completed", "failed"],
+            )?,
+            started_at: run_input.started_at,
+            completed_at: run_input.completed_at,
+            trace: run_input.trace,
+            affected_object_ids: run_input.affected_object_ids,
+            consulted_object_ids: run_input.consulted_object_ids,
+            error: optional_text(run_input.error, "run.error", 4_000)?,
+        };
         let mut seen = BTreeSet::new();
         let mut messages = Vec::with_capacity(self.messages.len());
         for message in self.messages {
@@ -288,6 +361,7 @@ impl SlackInteractionInput {
             messages,
             interaction_finished: self.interaction_finished,
             agent_usage: self.agent_usage,
+            run,
         })
     }
 }
@@ -347,12 +421,14 @@ fn validate_avatar_asset(
 
 #[derive(Clone, Debug, Serialize)]
 pub struct IngestResult {
+    pub run_id: Uuid,
     pub chat_object_id: Uuid,
     pub participant_object_ids: Vec<Uuid>,
     pub inserted_message_count: usize,
     pub duplicate_message_count: usize,
     pub curator_run_id: Option<Uuid>,
     pub interaction_state: &'static str,
+    pub run_state: String,
 }
 
 async fn ingest_slack_interaction(
@@ -398,11 +474,14 @@ pub async fn ingest(
         ),
     )
     .await?;
-    let (run_id, run_created) = crate::runs::open_slack_interaction(
+    let (run_id, _) = crate::runs::open_slack_interaction(
         &mut tx,
         &input.workspace_id,
         &input.channel_id,
         &input.thread_id,
+        &input.run.interaction_id,
+        input.run.started_at,
+        interaction_title(&input),
     )
     .await?;
     let chat_object_id = get_or_create_chat(&mut tx, &actor, run_id, &input).await?;
@@ -490,15 +569,50 @@ pub async fn ingest(
         })?;
         crate::runs::record_usage_in_tx(&mut tx, &usage).await?;
     }
-    if run_created && inserted_message_count == 0 && curator_run_id.is_none() {
-        sqlx::query("UPDATE runs SET status='completed',result='{\"outcome\":\"duplicate_delivery\"}'::jsonb,completed_at=now(),updated_at=now() WHERE id=$1")
-            .bind(run_id)
-            .execute(&mut *tx)
-            .await?;
+    for entry in &input.run.trace {
+        crate::runs::append_external_trace(&mut tx, run_id, entry).await?;
     }
+    let mut affected_object_ids = Vec::new();
+    for object_id in &input.run.affected_object_ids {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND archived_at IS NULL)",
+        )
+        .bind(object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            crate::runs::link_object(&mut tx, run_id, *object_id, "affected").await?;
+            affected_object_ids.push(*object_id);
+        }
+    }
+    for object_id in &input.run.consulted_object_ids {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND archived_at IS NULL)",
+        )
+        .bind(object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            crate::runs::link_object(&mut tx, run_id, *object_id, "consulted").await?;
+        }
+    }
+    crate::runs::finish_slack_interaction(
+        &mut tx,
+        run_id,
+        &input.run.status,
+        input.run.completed_at,
+        input.run.error.as_deref(),
+        &affected_object_ids,
+    )
+    .await?;
+    let persisted_run_state: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     Ok(IngestResult {
+        run_id,
         chat_object_id,
         participant_object_ids: participants.into_iter().collect(),
         inserted_message_count,
@@ -509,7 +623,32 @@ pub async fn ingest(
         } else {
             "open"
         },
+        run_state: persisted_run_state,
     })
+}
+
+fn interaction_title(input: &ValidatedSlackInteraction) -> String {
+    let content = input
+        .messages
+        .iter()
+        .find(|message| message.provider_message_id == input.run.interaction_id)
+        .map(|message| message.content.as_str())
+        .unwrap_or("Slack interaction");
+    let mut words = content.split_whitespace();
+    let first = words.next().unwrap_or("Slack interaction");
+    let compact = if first.starts_with('@') {
+        words.collect::<Vec<_>>().join(" ")
+    } else {
+        std::iter::once(first)
+            .chain(words)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    if compact.is_empty() {
+        "Slack interaction".to_owned()
+    } else {
+        compact.chars().take(160).collect()
+    }
 }
 
 async fn advisory_lock(tx: &mut Transaction<'_, Postgres>, key: &str) -> Result<(), DbError> {
@@ -915,20 +1054,25 @@ pub async fn queue_inactive_interactions(
     .await?;
     let mut queued = 0usize;
     for (chat_object_id, workspace_id, channel_id, thread_id) in chats {
-        let run_id =
-            if let Some(id) = crate::runs::resume_slack_run(&mut tx, chat_object_id).await? {
-                id
-            } else {
-                let (id, _) = crate::runs::open_slack_interaction(
-                    &mut tx,
-                    &workspace_id,
-                    &channel_id,
-                    &thread_id,
-                )
-                .await?;
-                crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
-                id
-            };
+        let run_id = if let Some(id) =
+            crate::runs::latest_slack_run(&mut tx, chat_object_id).await?
+        {
+            id
+        } else {
+            let fallback_id = format!("inactivity:{}", OffsetDateTime::now_utc().unix_timestamp());
+            let (id, _) = crate::runs::open_slack_interaction(
+                &mut tx,
+                &workspace_id,
+                &channel_id,
+                &thread_id,
+                &fallback_id,
+                OffsetDateTime::now_utc(),
+                "Slack conversation inactivity".to_owned(),
+            )
+            .await?;
+            crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
+            id
+        };
         if queue_next_window(&mut tx, &actor, run_id, chat_object_id, "inactivity")
             .await?
             .is_some()

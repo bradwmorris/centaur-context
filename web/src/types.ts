@@ -368,6 +368,7 @@ export interface Run {
   actor_type: string;
   actor_id: string;
   chat_object_id: string | null;
+  primary_object_id: string | null;
   idempotency_key: string;
   input: Record<string, unknown>;
   trace: Array<Record<string, unknown>>;
@@ -395,6 +396,7 @@ export interface RunObject {
 
 export interface RunDetail {
   run: Run;
+  children: Run[];
   objects: RunObject[];
   events: ObjectEvent[];
 }

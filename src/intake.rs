@@ -308,6 +308,124 @@ impl PreparedBatch {
         );
         Ok(())
     }
+
+    pub(crate) fn reuse_object(
+        &mut self,
+        client_key: &str,
+        object_id: Uuid,
+    ) -> Result<(), IntakeError> {
+        let previous_id = self
+            .object_ids
+            .insert(client_key.to_owned(), object_id)
+            .ok_or_else(|| {
+                IntakeError::Internal(format!("unknown object client key {client_key}"))
+            })?;
+        for connection in &mut self.request.connections {
+            if connection.source.object_id == Some(previous_id) {
+                connection.source.object_id = Some(object_id);
+            }
+            if connection.target.object_id == Some(previous_id) {
+                connection.target.object_id = Some(object_id);
+            }
+        }
+        self.request
+            .objects
+            .retain(|object| object.client_key != client_key);
+        let removed_artifact_keys = self
+            .request
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.object.object_id == Some(previous_id))
+            .map(|artifact| artifact.client_key.clone())
+            .collect::<HashSet<_>>();
+        self.request
+            .artifacts
+            .retain(|artifact| artifact.object.object_id != Some(previous_id));
+        self.content_ids
+            .retain(|key, _| !removed_artifact_keys.contains(key));
+        self.refresh_payload_sha256()?;
+        Ok(())
+    }
+
+    pub(crate) fn reuse_object_with_artifacts(
+        &mut self,
+        client_key: &str,
+        object_id: Uuid,
+        supersedes_artifact_id: Option<Uuid>,
+    ) -> Result<(), IntakeError> {
+        let previous_id = self
+            .object_ids
+            .insert(client_key.to_owned(), object_id)
+            .ok_or_else(|| {
+                IntakeError::Internal(format!("unknown object client key {client_key}"))
+            })?;
+        for artifact in &mut self.request.artifacts {
+            if artifact.object.object_id == Some(previous_id) {
+                artifact.object.object_id = Some(object_id);
+                artifact.supersedes_artifact_id = supersedes_artifact_id;
+            }
+        }
+        for connection in &mut self.request.connections {
+            if connection.source.object_id == Some(previous_id) {
+                connection.source.object_id = Some(object_id);
+            }
+            if connection.target.object_id == Some(previous_id) {
+                connection.target.object_id = Some(object_id);
+            }
+        }
+        self.request
+            .objects
+            .retain(|object| object.client_key != client_key);
+        self.refresh_payload_sha256()?;
+        Ok(())
+    }
+
+    pub(crate) fn artifact_id(&self, client_key: &str) -> Option<Uuid> {
+        self.content_ids.get(client_key).copied()
+    }
+
+    pub(crate) fn discard_connections(
+        &mut self,
+        existing: &HashMap<(Uuid, String, Uuid), Uuid>,
+    ) -> Result<(), IntakeError> {
+        let discarded = self
+            .request
+            .connections
+            .iter()
+            .filter(|connection| {
+                let edge = (
+                    connection
+                        .source
+                        .object_id
+                        .expect("resolved connection source"),
+                    connection.kind.clone(),
+                    connection
+                        .target
+                        .object_id
+                        .expect("resolved connection target"),
+                );
+                existing.get(&edge).is_some_and(|existing_id| {
+                    self.connection_ids.get(&connection.client_key) != Some(existing_id)
+                })
+            })
+            .map(|connection| connection.client_key.clone())
+            .collect::<HashSet<_>>();
+        self.request
+            .connections
+            .retain(|connection| !discarded.contains(&connection.client_key));
+        self.connection_ids
+            .retain(|key, _| !discarded.contains(key));
+        self.refresh_payload_sha256()?;
+        Ok(())
+    }
+
+    fn refresh_payload_sha256(&mut self) -> Result<(), IntakeError> {
+        self.payload_sha256 = hex_sha256(
+            &serde_json::to_vec(&self.request)
+                .map_err(|error| IntakeError::Internal(error.to_string()))?,
+        );
+        Ok(())
+    }
 }
 
 async fn validate_batch(
@@ -896,6 +1014,10 @@ fn stable_id(batch_id: &str, family: &str, client_key: &str) -> Uuid {
     )
 }
 
+pub(crate) fn intake_run_id(batch_id: &str) -> Uuid {
+    stable_id(batch_id, "run", "intake")
+}
+
 fn hex_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -1143,8 +1265,29 @@ pub(crate) async fn write_batch(
         )
         .await?;
     }
-    sqlx::query("UPDATE runs SET status='completed',result=jsonb_build_object('counts',$2::jsonb,'object_ids',$3::uuid[]),completed_at=now(),updated_at=now() WHERE id=$1")
-      .bind(run_id).bind(batch.counts()).bind(batch.object_ids.values().copied().collect::<Vec<_>>()).execute(&mut *tx).await?;
+    let object_ids = batch.object_ids.values().copied().collect::<Vec<_>>();
+    let primary_object_id = (object_ids.len() == 1).then_some(object_ids[0]);
+    let originating_chat_object_id = batch
+        .request
+        .connections
+        .iter()
+        .find(|connection| connection.client_key == "originating-chat")
+        .and_then(|connection| connection.source.object_id);
+    sqlx::query(
+        r#"UPDATE runs SET status='completed',
+           result=jsonb_build_object('counts',$2::jsonb,'object_ids',$3::uuid[]),
+           primary_object_id=$4,
+           chat_object_id=CASE WHEN EXISTS(SELECT 1 FROM chats WHERE object_id=$5)
+             THEN $5 ELSE chat_object_id END,
+           completed_at=now(),updated_at=now() WHERE id=$1"#,
+    )
+    .bind(run_id)
+    .bind(batch.counts())
+    .bind(object_ids)
+    .bind(primary_object_id)
+    .bind(originating_chat_object_id)
+    .execute(&mut *tx)
+    .await?;
     for connection in &batch.request.connections {
         let id = batch.connection_ids[&connection.client_key];
         let source_id = connection

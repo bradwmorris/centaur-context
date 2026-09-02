@@ -162,7 +162,12 @@ pub fn note_write_router(state: AppState, token: String) -> Router {
     Router::new()
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
-        .nest("/api/v2", Router::new().route("/notes", post(create_note)))
+        .nest(
+            "/api/v2",
+            Router::new()
+                .route("/notes", post(create_note))
+                .route("/tasks", post(create_task)),
+        )
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             AgentAuth {
@@ -426,6 +431,8 @@ struct SearchQuery {
     q: String,
     kind: Option<String>,
     limit: Option<i64>,
+    #[serde(default)]
+    lexical_only: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,7 +505,11 @@ async fn search_objects(
         .transpose()?;
     let packet = search::search(
         &state.pool,
-        state.embeddings.as_ref(),
+        if query.lexical_only {
+            None
+        } else {
+            state.embeddings.as_ref()
+        },
         state.text_search_config,
         &query_text,
         kind.as_deref(),
@@ -1189,6 +1200,9 @@ struct CreateNoteRequest {
     #[serde(default = "default_note_format")]
     content_format: String,
     provenance: Option<Value>,
+    originating_chat_object_id: Option<Uuid>,
+    #[serde(default)]
+    derived_from_source_object_ids: Vec<Uuid>,
 }
 
 fn default_note_format() -> String {
@@ -1212,6 +1226,8 @@ async fn create_note(
             provenance: provenance(input.provenance)?,
             content: required_text(input.content, "content", 100_000)?,
             content_format: allowed(input.content_format, "content_format", NOTE_CONTENT_FORMATS)?,
+            originating_chat_object_id: input.originating_chat_object_id,
+            derived_from_source_object_ids: input.derived_from_source_object_ids,
         },
         &key,
     )
@@ -1596,6 +1612,9 @@ struct CreateTaskRequest {
     due_at: Option<String>,
     github_issue_url: Option<String>,
     brief_markdown: Option<String>,
+    originating_chat_object_id: Option<Uuid>,
+    #[serde(default)]
+    derived_from_source_object_ids: Vec<Uuid>,
 }
 
 fn default_task_status() -> String {
@@ -1638,6 +1657,8 @@ async fn create_task(
             completed_at: (status == "done").then(OffsetDateTime::now_utc),
             github_issue_url: github_issue_url(input.github_issue_url)?,
             brief_markdown: optional_text(input.brief_markdown, "brief_markdown", 100_000)?,
+            originating_chat_object_id: input.originating_chat_object_id,
+            derived_from_source_object_ids: input.derived_from_source_object_ids,
         },
         &key,
     )

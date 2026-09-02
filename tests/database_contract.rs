@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use centaur_context::{
-    api::{AppState, human_router},
+    api::{AppState, human_router, note_write_router},
     db,
 };
 use http_body_util::BodyExt;
@@ -104,6 +104,142 @@ async fn users_embed_multiple_provider_identities() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn context_subtypes_include_themes_without_null_decode_failures() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let object_id = Uuid::new_v4();
+    let slug = format!("theme-{}", object_id.simple());
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'theme','Test theme','A theme returned by shared Context retrieval.','system','test','system','test','{}')")
+        .bind(object_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO themes(object_id,slug) VALUES($1,$2)")
+        .bind(object_id)
+        .bind(&slug)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let subtypes = db::context_subtypes(&pool, &[object_id], None)
+        .await
+        .unwrap();
+    assert_eq!(subtypes[&object_id], json!({"kind":"theme","slug":slug}));
+}
+
+#[tokio::test]
+async fn narrow_write_listener_creates_and_replays_one_open_task() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let chat_id = Uuid::new_v4();
+    let source_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'chat','Slack conversation','A Slack conversation requesting a follow-up task.','system','fixture','system','fixture','{}')")
+        .bind(chat_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
+        .bind(chat_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'source','Research source','A Source requiring a follow-up task.','system','fixture','system','fixture','{}')")
+        .bind(source_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES($1,'video')")
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let token = "w".repeat(32);
+    let app = note_write_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let fixture = Uuid::new_v4().simple().to_string();
+    let body = json!({
+        "title":"Follow up on research",
+        "description":"A bounded follow-up Task created through the narrow write listener.",
+        "priority":"medium",
+        "brief_markdown":"Review the captured evidence.",
+        "provenance":{"source_type":"human"},
+        "originating_chat_object_id":chat_id,
+        "derived_from_source_object_ids":[source_id]
+    });
+    let request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v2/tasks")
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-centaur-principal-id", "researcher")
+            .header("x-centaur-thread-key", "slack:T:C:thread")
+            .header("idempotency-key", format!("task-{fixture}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    };
+
+    let created = app.clone().oneshot(request()).await.unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: serde_json::Value =
+        serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let object_id = created["data"]["object_id"].as_str().unwrap();
+    assert_eq!(created["data"]["status"], "todo");
+
+    let connections: Vec<(Uuid, String, Uuid)> = sqlx::query_as(
+        "SELECT source_object_id,kind,target_object_id FROM connections WHERE (source_object_id=$1 OR target_object_id=$1) AND archived_at IS NULL ORDER BY kind",
+    )
+    .bind(Uuid::parse_str(object_id).unwrap())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        connections,
+        vec![
+            (chat_id, "about".into(), Uuid::parse_str(object_id).unwrap()),
+            (
+                Uuid::parse_str(object_id).unwrap(),
+                "derived_from".into(),
+                source_id
+            ),
+        ]
+    );
+
+    sqlx::query("DELETE FROM connections WHERE source_object_id=$1 AND kind='derived_from'")
+        .bind(Uuid::parse_str(object_id).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let replayed = app.oneshot(request()).await.unwrap();
+    assert_eq!(replayed.status(), StatusCode::CREATED);
+    let replayed: serde_json::Value =
+        serde_json::from_slice(&replayed.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(replayed["data"]["object_id"], object_id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM tasks WHERE object_id=$1")
+        .bind(Uuid::parse_str(object_id).unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    let connection_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM connections WHERE (source_object_id=$1 OR target_object_id=$1) AND archived_at IS NULL",
+    )
+    .bind(Uuid::parse_str(object_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(connection_count, 2);
 }
 
 #[tokio::test]

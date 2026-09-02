@@ -2075,7 +2075,7 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Create zero or more Memories: only create a Memory for a concrete event or insight worth retaining, and use primary_event=true for at most one central event. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -2581,6 +2581,15 @@ mod tests {
             update_connections: vec![],
         };
         assert!(validate_plan(&mut plan).is_ok());
+    }
+
+    #[test]
+    fn curator_prompt_rejects_operational_failures_as_memories() {
+        let source = include_str!("curator.rs");
+        assert!(source.contains("unanswered question"));
+        assert!(source.contains("authentication or authorization error"));
+        assert!(source.contains("transient operational outcomes"));
+        assert!(source.contains("explicitly asserted by a human message"));
     }
 
     #[test]

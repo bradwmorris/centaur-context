@@ -353,7 +353,15 @@ class CentaurContextClient:
             params["kind"] = _clean(kind)
         return self._request("GET", "/api/v2/context", params=params)
 
-    def search_objects(self, query: str, kind: str | None = None, limit: int = 20) -> dict[str, Any]:
+    def search_objects(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 20,
+        lexical_only: bool = False,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
         """Search canonical Objects without Context Builder importance boosting."""
         query = _clean(query)
         if not query:
@@ -361,7 +369,33 @@ class CentaurContextClient:
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         if _clean(kind):
             params["kind"] = _clean(kind)
-        return self._request("GET", "/api/v2/search/objects", params=params)
+        if lexical_only:
+            params["lexical_only"] = "true"
+        return self._request(
+            "GET",
+            "/api/v2/search/objects",
+            params=params,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def search_objects_lexical(
+        self,
+        query: str,
+        kind: str | None = None,
+        limit: int = 20,
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Search canonical Objects using full-text retrieval only."""
+        return self.search_objects(
+            query,
+            kind=kind,
+            limit=limit,
+            lexical_only=True,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
 
     def read_object(self, id: str) -> dict[str, Any]:
         """Read one shared record by ID."""
@@ -553,6 +587,8 @@ class CentaurContextClient:
         *,
         content_format: str = "markdown",
         provenance: dict[str, Any] | None = None,
+        originating_chat_object_id: str | None = None,
+        derived_from_source_object_ids: list[str] | None = None,
         idempotency_key: str,
     ) -> dict[str, Any]:
         """Create a Note with the separate, narrowly scoped write credential."""
@@ -590,7 +626,75 @@ class CentaurContextClient:
                 "content": content,
                 "content_format": content_format,
                 "provenance": provenance or {},
+                "originating_chat_object_id": _clean(originating_chat_object_id),
+                "derived_from_source_object_ids": derived_from_source_object_ids or [],
             },
+            idempotency_key=idempotency_key,
+            token=self._note_write_token(),
+            base_url=self.note_write_url,
+        )
+
+    def create_task(
+        self,
+        title: str,
+        description: str,
+        *,
+        priority: str = "medium",
+        due_at: str | None = None,
+        owner_object_id: str | None = None,
+        agent_suitable: bool = False,
+        brief_markdown: str | None = None,
+        provenance: dict[str, Any] | None = None,
+        originating_chat_object_id: str | None = None,
+        derived_from_source_object_ids: list[str] | None = None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create an open Task with the separate, narrowly scoped write credential."""
+        title = _clean(title)
+        description = _clean(description)
+        priority = _clean(priority).lower()
+        due_at = _clean(due_at)
+        owner_object_id = _clean(owner_object_id)
+        brief_markdown = _clean(brief_markdown)
+        idempotency_key = _clean(idempotency_key)
+        if not title:
+            raise ValueError("title is required")
+        if len(title) > 300:
+            raise ValueError("title must be at most 300 characters")
+        if not description:
+            raise ValueError("description is required")
+        if len(description) > 2_000:
+            raise ValueError("description must be at most 2000 characters")
+        if priority not in {"low", "medium", "high", "urgent"}:
+            raise ValueError("priority must be low, medium, high, or urgent")
+        if len(brief_markdown) > MAX_NOTE_CONTENT:
+            raise ValueError("brief_markdown must be at most 100000 characters")
+        if provenance is not None and not isinstance(provenance, dict):
+            raise ValueError("provenance must be a JSON object")
+        if not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        if len(idempotency_key) > 200:
+            raise ValueError("idempotency_key must be at most 200 characters")
+        payload: dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "status": "todo",
+            "priority": priority,
+            "agent_suitable": bool(agent_suitable),
+            "provenance": provenance or {},
+            "originating_chat_object_id": _clean(originating_chat_object_id),
+            "derived_from_source_object_ids": derived_from_source_object_ids or [],
+        }
+        if due_at:
+            payload["due_at"] = due_at
+        if owner_object_id:
+            payload["owner_object_id"] = owner_object_id
+        if brief_markdown:
+            payload["brief_markdown"] = brief_markdown
+        return self._request(
+            "POST",
+            "/api/v2/tasks",
+            json=payload,
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
             base_url=self.note_write_url,
@@ -643,6 +747,25 @@ class CentaurContextClient:
             "validate", manifest, principal_id=principal_id, thread_key=thread_key
         )
 
+    def source_intake_resolve_connections(
+        self,
+        queries: list[str],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve unique exact Entity and Theme titles through trusted Source intake."""
+        if not isinstance(queries, list) or not queries:
+            raise ValueError("queries must be a non-empty array")
+        return self._request(
+            "POST",
+            "/api/v2/source-intake/resolve-connections",
+            json={"queries": queries},
+            token=self._source_intake_token(),
+            base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
     def source_intake_commit(
         self,
         manifest: dict[str, Any],
@@ -663,6 +786,80 @@ class CentaurContextClient:
         """Check commit and retrieval readiness for one Enyu Source manifest."""
         return self._source_intake_request(
             "status", manifest, principal_id=principal_id, thread_key=thread_key
+        )
+
+    def workflow_run_start(
+        self,
+        run: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or reuse one durable workflow Run without storing source content."""
+        return self._workflow_run_request(
+            "POST",
+            "/api/v2/source-intake/runs/start",
+            run,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def workflow_run_trace(
+        self,
+        run_id: str,
+        entry: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Append one idempotent, privacy-minimized workflow trace entry."""
+        run_id = _clean(run_id)
+        if not run_id:
+            raise ValueError("run_id is required")
+        return self._workflow_run_request(
+            "POST",
+            f"/api/v2/source-intake/runs/{quote(run_id, safe='')}/trace",
+            entry,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def workflow_run_finish(
+        self,
+        run_id: str,
+        outcome: dict[str, Any],
+        principal_id: str | None = None,
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Complete or fail one durable workflow Run and link its child commit."""
+        run_id = _clean(run_id)
+        if not run_id:
+            raise ValueError("run_id is required")
+        return self._workflow_run_request(
+            "POST",
+            f"/api/v2/source-intake/runs/{quote(run_id, safe='')}/finish",
+            outcome,
+            principal_id=principal_id,
+            thread_key=thread_key,
+        )
+
+    def _workflow_run_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        principal_id: str | None,
+        thread_key: str | None,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("workflow Run payload must be a JSON object")
+        return self._request(
+            method,
+            path,
+            json=payload,
+            token=self._source_intake_token(),
+            base_url=self.source_intake_url,
+            principal_id=principal_id,
+            thread_key=thread_key,
         )
 
     def _source_intake_request(
