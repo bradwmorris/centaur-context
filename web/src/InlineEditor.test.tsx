@@ -7,6 +7,15 @@ import { InlineEditor } from "./InlineEditor";
 afterEach(() => vi.useRealTimers());
 
 describe("InlineEditor", () => {
+  it("keeps the view height and grows a multiline editor to its content", () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<InlineEditor label="Body" value="A long body" multiline onSave={save} />);
+    const edit = screen.getByRole("button", { name: "Edit Body" });
+    vi.spyOn(edit, "getBoundingClientRect").mockReturnValue({ height: 180 } as DOMRect);
+    fireEvent.click(edit);
+    expect(screen.getByRole("textbox", { name: "Body" })).toHaveStyle({ minHeight: "180px" });
+  });
+
   it("autosaves after 800ms and suppresses unchanged writes", async () => {
     vi.useFakeTimers();
     const save = vi.fn().mockResolvedValue(undefined);

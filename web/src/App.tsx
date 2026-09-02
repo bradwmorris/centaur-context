@@ -9,7 +9,7 @@ import { InlineEditor } from "./InlineEditor";
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
@@ -62,7 +62,7 @@ export default function App() {
     try {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
       const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs";
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals] = await Promise.all([
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
         needsObjects ? api.objects(selectedId || section === "runs" ? "" : query, objectKind, sort) : Promise.resolve(null),
         section === "tasks" ? api.tasks(sort) : Promise.resolve(null),
         section === "sources" ? api.sources(selectedId ? "" : query, sort) : Promise.resolve(null),
@@ -70,13 +70,14 @@ export default function App() {
         section === "themes" ? api.themes(sort) : Promise.resolve(null),
         section === "runs" && !selectedId ? api.runs() : Promise.resolve(null),
         api.objectVisuals(),
+        sort === "connections" && isObjectBackedSection(section) ? api.connectionGraph() : Promise.resolve(null),
       ]);
       if (generation !== requestGeneration.current) return;
-      if (nextObjects) setObjects(nextObjects);
-      if (nextTasks) setTasks(nextTasks);
-      if (nextSources) setSources(nextSources.items);
-      if (nextNotes) setNotes(nextNotes.items);
-      if (nextThemes) setThemes(nextThemes);
+      if (nextObjects) setObjects(sortWithGraphFallback(nextObjects, densityGraph));
+      if (nextTasks) setTasks(sortWithGraphFallback(nextTasks, densityGraph));
+      if (nextSources) setSources(sortWithGraphFallback(nextSources.items, densityGraph));
+      if (nextNotes) setNotes(sortWithGraphFallback(nextNotes.items, densityGraph));
+      if (nextThemes) setThemes(sortWithGraphFallback(nextThemes, densityGraph));
       if (nextRuns) setRuns(nextRuns);
       setVisuals(nextVisuals);
     } catch (cause) {
@@ -187,9 +188,11 @@ export default function App() {
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
                   <span className="record-kind">{"actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
                   <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
-                  <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                  <span className="record-users"><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /></span>
+                  <span className="record-main">
+                    <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
+                    <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
+                    <span className="record-users"><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /></span>
+                  </span>
                   <DescriptionSnippet description={itemDescription(item, objects)} />
                   <time>{relative(item.created_at)}</time>
                 </div>
@@ -213,6 +216,20 @@ export default function App() {
 }
 
 type ListItem = SharedObject | Task | Source | NoteSummary | Theme | Run;
+
+function sortWithGraphFallback<T extends Exclude<ListItem, Run>>(items: T[], graph: ConnectionGraphSnapshot | null): T[] {
+  if (!graph) return items;
+  const degree = new Map<string, number>();
+  for (const edge of graph.edges) {
+    degree.set(edge.source_object_id, (degree.get(edge.source_object_id) ?? 0) + 1);
+    degree.set(edge.target_object_id, (degree.get(edge.target_object_id) ?? 0) + 1);
+  }
+  return [...items].sort((left, right) =>
+    (degree.get(canonicalObjectId(right)) ?? 0) - (degree.get(canonicalObjectId(left)) ?? 0)
+    || right.created_at.localeCompare(left.created_at)
+    || canonicalObjectId(right).localeCompare(canonicalObjectId(left))
+  );
+}
 
 function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], runs: Run[], query: string): ListItem[] {
   if (section === "schema" || section === "connections") return [];
@@ -717,11 +734,13 @@ function RelatedObjectRow({ currentObjectId, connection, objects, visuals }: { c
   return <article className="related-object-row">
     {related ? <ObjectTypeBadge kind={related.kind} compact /> : <span />}
     <ObjectId id={relatedId} rowPill />
-    <a className="related-object-title" href={detailPath("objects", relatedId)}>{related?.title ?? shortId(relatedId)}</a>
+    <span className="related-object-copy">
+      <a className="related-object-title" href={detailPath("objects", relatedId)}>{related?.title ?? shortId(relatedId)}</a>
+      <span className="related-object-description" title={connection.description}>{connection.description}</span>
+    </span>
     <ObjectContext visual={visuals.get(relatedId)} />
     <span className="related-object-meaning"><span title={outbound ? "Outbound from this Object" : "Inbound to this Object"}>{outbound ? "→" : "←"}</span> {connection.kind.replaceAll("_", " ")}</span>
     <a className="related-connection-link" href={detailPath("connections", connection.id)} aria-label={`Open connection ${connection.id}`}>Connection</a>
-    <p title={connection.description}>{connection.description}</p>
   </article>;
 }
 

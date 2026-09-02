@@ -51,11 +51,6 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
   const incidentIds = useMemo(() => new Set(selectedNode ? layout.edges
     .filter((edge) => edge.source.id === selectedNode.id || edge.target.id === selectedNode.id)
     .flatMap((edge) => [edge.id, edge.source.id, edge.target.id]) : []), [layout.edges, selectedNode]);
-  const topNodes = useMemo(() => [...layout.nodes]
-    .filter((node) => node.degree > 0)
-    .sort((left, right) => right.degree - left.degree || left.title.localeCompare(right.title))
-    .slice(0, 12), [layout.nodes]);
-
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
     const match = [...layout.nodes]
@@ -166,11 +161,7 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
       <GraphInspector
         node={selectedNode}
         edge={selectedEdge}
-        edges={layout.edges}
-        topNodes={topNodes}
-        isolatedCount={layout.isolatedCount}
         onSelectNode={(id) => setSelection({ type: "node", id })}
-        onSelectEdge={(id) => setSelection({ type: "edge", id })}
       />
     </div>}
     <MobileGraphList nodes={layout.nodes} onSelect={(id) => setSelection({ type: "node", id })} />
@@ -217,14 +208,10 @@ function GraphEdge({ edge, active, selected, keyboardEnabled, onSelect }: {
   </g>;
 }
 
-function GraphInspector({ node, edge, edges, topNodes, isolatedCount, onSelectNode, onSelectEdge }: {
+function GraphInspector({ node, edge, onSelectNode }: {
   node: PositionedGraphNode | null;
   edge: PositionedGraphEdge | null;
-  edges: PositionedGraphEdge[];
-  topNodes: PositionedGraphNode[];
-  isolatedCount: number;
   onSelectNode: (id: string) => void;
-  onSelectEdge: (id: string) => void;
 }) {
   if (edge) return <aside className="connection-graph-inspector" aria-label="Selected Connection">
     <span className="inspector-eyebrow">Connection</span>
@@ -235,31 +222,13 @@ function GraphInspector({ node, edge, edges, topNodes, isolatedCount, onSelectNo
     </div>
     <a href={connectionPath(edge.id)} onClick={(event) => interceptNavigation(event, connectionPath(edge.id))}>Open Connection detail</a>
   </aside>;
-  if (node) {
-    const neighbours = edges
-      .filter((item) => item.source.id === node.id || item.target.id === node.id)
-      .sort((left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id));
-    return <aside className="connection-graph-inspector" aria-label="Selected Object">
+  if (node) return <aside className="connection-graph-inspector" aria-label="Selected Object">
       <span className="inspector-eyebrow"><ObjectTypeBadge kind={node.kind} /></span>
       <h2>{node.title}</h2>
       <p>{node.degree} direct {node.degree === 1 ? "Connection" : "Connections"} · cluster {node.component + 1}</p>
       <a href={objectPath(node.id)} onClick={(event) => interceptNavigation(event, objectPath(node.id))}>Open Object detail</a>
-      <h3>Neighbourhood</h3>
-      <ul className="inspector-neighbours">{neighbours.map((item) => {
-        const other = item.source.id === node.id ? item.target : item.source;
-        const direction = item.source.id === node.id ? "→" : "←";
-        return <li key={item.id}><button onClick={() => onSelectNode(other.id)}>{other.title}</button><button className="edge-kind" onClick={() => onSelectEdge(item.id)} aria-label={`Open ${item.kind} Connection`}>{direction} {item.kind.replaceAll("_", " ")}</button></li>;
-      })}</ul>
     </aside>;
-  }
-  return <aside className="connection-graph-inspector" aria-label="Graph summary">
-    <span className="inspector-eyebrow">Cluster-first map</span>
-    <h2>Most connected</h2>
-    <p>Node size and position gently promote Objects with more direct Connections. Lines retain source-to-target direction.</p>
-    <ul className="inspector-top-nodes">{topNodes.map((item) => <li key={item.id}><button onClick={() => onSelectNode(item.id)}><span>{item.title}</span><b>{item.degree}</b></button></li>)}</ul>
-    {isolatedCount > 0 && <small>{isolatedCount} isolated {isolatedCount === 1 ? "Object is" : "Objects are"} kept in the quiet outer group.</small>}
-    <div className="connection-graph-legend"><span><i className="legend-node" /> Object</span><span><i className="legend-edge" /> directed Connection</span></div>
-  </aside>;
+  return null;
 }
 
 function MobileGraphList({ nodes, onSelect }: { nodes: PositionedGraphNode[]; onSelect: (id: string) => void }) {

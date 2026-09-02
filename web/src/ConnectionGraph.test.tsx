@@ -57,7 +57,8 @@ describe("Connections graph workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fit" }));
     fireEvent.click(screen.getByRole("button", { name: /Central Object, entity Object/ }));
     fireEvent.keyDown(canvas, { key: "Escape" });
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Most connected" })).toBeVisible());
+    await waitFor(() => expect(screen.queryByLabelText("Selected Object")).not.toBeInTheDocument());
+    expect(screen.queryByLabelText("Graph summary")).not.toBeInTheDocument();
     unmount();
 
     mockGraph({ ...graph, node_count: 0, connection_count: 0, nodes: [], edges: [] });

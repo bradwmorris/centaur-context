@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError } from "./api";
 
 type InlineEditorProps = {
@@ -20,6 +20,7 @@ export function InlineEditor({ label, value, onSave, onReload, multiline = false
   const [draft, setDraft] = useState(value);
   const [state, setState] = useState<"idle" | "dirty" | "saving" | "saved" | "error" | "conflict">("idle");
   const [error, setError] = useState("");
+  const [editorMinHeight, setEditorMinHeight] = useState(0);
   const confirmedRef = useRef(value);
   const draftRef = useRef(value);
   const savingRef = useRef(false);
@@ -37,6 +38,14 @@ export function InlineEditor({ label, value, onSave, onReload, multiline = false
   useEffect(() => {
     if (editing) inputRef.current?.focus();
   }, [editing]);
+
+  useLayoutEffect(() => {
+    if (!editing || !multiline) return;
+    const input = inputRef.current;
+    if (!(input instanceof HTMLTextAreaElement)) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.max(editorMinHeight, input.scrollHeight)}px`;
+  }, [draft, editing, editorMinHeight, multiline]);
 
   const commit = async (candidate = draftRef.current) => {
     const next = candidate;
@@ -118,7 +127,10 @@ export function InlineEditor({ label, value, onSave, onReload, multiline = false
   const classes = `inline-editor ${multiline ? "multiline" : "singleline"} ${className}`.trim();
 
   if (!editing) return <div className={classes} role={heading ? "heading" : undefined} aria-level={heading ? 1 : undefined}>
-    <button type="button" className="inline-editor-view" onClick={() => setEditing(true)} aria-label={`Edit ${label}`}>
+    <button type="button" className="inline-editor-view" onClick={(event) => {
+      if (multiline) setEditorMinHeight(Math.ceil(event.currentTarget.getBoundingClientRect().height));
+      setEditing(true);
+    }} aria-label={`Edit ${label}`}>
       <span>{confirmed || placeholder || `Add ${label}`}</span>
     </button>
     <span className="sr-only" role="status" aria-live="polite">{state === "saved" ? `${label} saved` : ""}</span>
@@ -127,7 +139,7 @@ export function InlineEditor({ label, value, onSave, onReload, multiline = false
   const common = { ref: inputRef as never, value: draft, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => change(event.target.value), onKeyDown: keyDown, onBlur: () => void commit(), "aria-label": label, maxLength, placeholder };
   return <div className={classes} data-state={state} role={heading ? "heading" : undefined} aria-level={heading ? 1 : undefined}>
     <div className="inline-editor-control">
-      {multiline ? <textarea {...common} rows={Math.min(12, Math.max(3, draft.split("\n").length + 1))} /> : <input {...common} />}
+      {multiline ? <textarea {...common} rows={1} style={{ minHeight: editorMinHeight || undefined }} /> : <input {...common} />}
       <button type="button" className="inline-editor-save" onMouseDown={(event) => event.preventDefault()} onClick={() => void commit()} aria-label={`Save ${label}`} disabled={state === "saving"}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h8.5L13.5 4v9.5h-11v-11Z"/><path d="M5 2.5v4h5v-4M5 13.5V9h6v4.5"/></svg>
       </button>

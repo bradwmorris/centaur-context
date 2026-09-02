@@ -15,7 +15,7 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/objects");
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const path = String(input);
-    if (path.includes("/api/v2/connection-graph")) return envelope({ fingerprint: "graph", node_count: 0, connection_count: 0, nodes: [], edges: [] });
+    if (path.includes("/api/v2/connection-graph")) return envelope({ fingerprint: "graph", node_count: 3, connection_count: 2, nodes: [{ id: source.id, kind: "source", title: source.title }, { id: chat.id, kind: "chat", title: chat.title }, { id: "other-1", kind: "entity", title: "Other" }], edges: [{ id: "edge-1", source_object_id: chat.id, target_object_id: source.id, kind: "about", description: "Chat is about source" }, { id: "edge-2", source_object_id: chat.id, target_object_id: "other-1", kind: "involves", description: "Chat involves other" }] });
     if (path.includes("/api/v2/runs")) return envelope([{ id: "run-1", parent_run_id: null, kind: "intake", status: "completed", actor_type: "centaur_agent", actor_id: "workflow-enyu-source-ingestion", chat_object_id: chat.id, primary_object_id: source.id, idempotency_key: "run-1", input: {}, trace: [], result: { counts: { objects: 0, connections: 6 }, object_ids: [source.id] }, consulted_object_ids: [], error: null, verdict: "unreviewed", review_notes: null, reviewed_by: null, reviewed_at: null, available_at: null, started_at: now, completed_at: now, created_at: now, updated_at: now }]);
     if (path.includes("/api/v2/object-visuals")) return envelope([{ object_id: chat.id, source_provider: "slack", users }]);
     if (path.includes("/api/v2/objects?")) return envelope([source, chat]);
@@ -57,10 +57,12 @@ describe("minimal canonical UI", () => {
     expect(await screen.findByText(source.title)).toBeVisible();
     const row = container.querySelector(".record")!;
     expect(Array.from(row.children).slice(1).map((node) => node.className)).toEqual([
-      "record-kind", "record-id", "record-title", "record-source", "record-users", "description-snippet", "",
+      "record-kind", "record-id", "record-main", "description-snippet", "",
     ]);
+    expect(Array.from(row.querySelector(".record-main")!.children).map((node) => node.className)).toEqual(["record-title", "record-source", "record-users"]);
     fireEvent.change(screen.getByRole("combobox", { name: "Sort Objects" }), { target: { value: "connections" } });
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("sort=connections"), expect.anything()));
+    await waitFor(() => expect(container.querySelector(".record-title strong")).toHaveTextContent(chat.title));
   });
 
   it("refreshes only resources used by the current route", async () => {
