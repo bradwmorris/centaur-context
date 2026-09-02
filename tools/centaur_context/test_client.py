@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -273,3 +274,15 @@ def test_specialized_writes_never_fall_back_to_the_read_token(monkeypatch, opera
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError):
         operation(client(lambda _: response({})))
+
+
+def test_tool_manifest_declares_every_specialized_write_credential():
+    manifest = (Path(__file__).with_name("pyproject.toml")).read_text()
+    for name in [
+        "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN",
+        "CENTAUR_CONTEXT_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN",
+        "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN",
+    ]:
+        assert f'name = "{name}"' in manifest
