@@ -1,13 +1,15 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import type { ListSort } from "./api";
 import { DescriptionSnippet } from "./DescriptionSnippet";
-import { ConnectionGraphWorkspace } from "./ConnectionGraph";
+import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
-import { AttributionStack, ObjectContext, ObjectTypeBadge, SourceBadge, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { InlineEditor } from "./InlineEditor";
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
+import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
@@ -41,10 +43,15 @@ export default function App() {
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<ListSort>("recent");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "done" | "error">("idle");
+  const requestGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     if (section === "schema" || (section === "connections" && !connectionId)) {
       setLoading(false);
       setError(null);
@@ -54,21 +61,32 @@ export default function App() {
     setError(null);
     try {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
-      const objectQuery = section === "runs" ? "" : query;
-      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals] = await Promise.all([api.objects(objectQuery, objectKind), api.tasks(), api.sources(section === "sources" ? query : ""), api.notes(section === "notes" ? query : ""), section === "themes" ? api.themes() : Promise.resolve([]), section === "runs" ? api.runs() : Promise.resolve([]), api.objectVisuals()]);
-      setObjects(nextObjects);
-      setTasks(nextTasks);
-      setSources(nextSources.items);
-      setNotes(nextNotes.items);
-      setThemes(nextThemes);
-      setRuns(nextRuns);
+      const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs";
+      const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
+        needsObjects ? api.objects(selectedId || section === "runs" ? "" : query, objectKind, sort) : Promise.resolve(null),
+        section === "tasks" ? api.tasks(sort) : Promise.resolve(null),
+        section === "sources" ? api.sources(selectedId ? "" : query, sort) : Promise.resolve(null),
+        section === "notes" ? api.notes(selectedId ? "" : query, sort) : Promise.resolve(null),
+        section === "themes" ? api.themes(sort) : Promise.resolve(null),
+        section === "runs" && !selectedId ? api.runs() : Promise.resolve(null),
+        api.objectVisuals(),
+        sort === "connections" && isObjectBackedSection(section) ? api.connectionGraph() : Promise.resolve(null),
+      ]);
+      if (generation !== requestGeneration.current) return;
+      if (nextObjects) setObjects(sortWithGraphFallback(nextObjects, densityGraph));
+      if (nextTasks) setTasks(sortWithGraphFallback(nextTasks, densityGraph));
+      if (nextSources) setSources(sortWithGraphFallback(nextSources.items, densityGraph));
+      if (nextNotes) setNotes(sortWithGraphFallback(nextNotes.items, densityGraph));
+      if (nextThemes) setThemes(sortWithGraphFallback(nextThemes, densityGraph));
+      if (nextRuns) setRuns(nextRuns);
       setVisuals(nextVisuals);
     } catch (cause) {
+      if (generation !== requestGeneration.current) return;
       setError(message(cause));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [query, section, connectionId]);
+  }, [query, section, selectedId, connectionId, sort, refreshKey]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute(window.location.pathname));
@@ -78,14 +96,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    requestGeneration.current += 1;
+  }, [section, selectedId, connectionId, query, sort, refreshKey]);
+
+  useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 150);
     return () => window.clearTimeout(timeout);
   }, [load]);
 
+  useEffect(() => {
+    if (refreshState !== "refreshing" || loading) return;
+    setRefreshState(error ? "error" : "done");
+    const timeout = window.setTimeout(() => setRefreshState("idle"), 1400);
+    return () => window.clearTimeout(timeout);
+  }, [error, loading, refreshState]);
+
   const selectSection = (next: Section) => {
     setCreateOpen(false);
     setQuery("");
+    setSort("recent");
     navigate(sectionPath(next));
+  };
+
+  const refresh = async () => {
+    if (refreshState === "refreshing") return;
+    setRefreshState("refreshing");
+    setLoading(true);
+    setRefreshKey((value) => value + 1);
   };
 
   const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, runs, query);
@@ -128,16 +165,20 @@ export default function App() {
             <button className="path-root" onClick={() => navigate(sectionPath(section))}>{sectionLabel}</button>
             {(selectedId || connectionId) && <><span>›</span><strong>{connectionId ? `Connection ${shortId(connectionId)}` : section === "schema" ? selectedId : selectedItem ? itemTitle(selectedItem, objects) : shortId(selectedId ?? "")}</strong></>}
           </div>
+          <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={refreshState === "refreshing"} aria-label="Refresh current view">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 5.5A5.5 5.5 0 1 0 13 11"/><path d="M13.2 2.5v3.2H10"/></svg><span>{refreshState === "refreshing" ? "Refreshing…" : refreshState === "done" ? "Updated" : refreshState === "error" ? "Retry refresh" : "Refresh"}</span>
+          </button>
         </header>
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
             <div className="list-toolbar">
               {section !== "tasks" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
+              {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={(event) => setSort(event.target.value as ListSort)}><option value="recent">Recently added</option><option value="connections">Most connected</option></select></label>}
               <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
             </div>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
@@ -145,16 +186,21 @@ export default function App() {
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
-                  <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                  {"actor_type" in item ? <span className="object-id-pill">ID: {shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}
-                  <span className="record-title"><strong>{itemTitle(item, objects)}</strong><span className="record-badges">{"actor_type" in item ? <><span className="visual-badge run-type-badge">↻ {runType(item, objects)}</span><StateBadge state={item.status} /></> : <><ObjectTypeBadge kind={itemObjectKind(item)} />{"status" in item && <TaskStatusBadge status={item.status} />}</>}</span><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /><DescriptionSnippet description={itemDescription(item, objects)} /></span>
-                  <time>{relative(item.updated_at)}</time>
+                  <span className="record-kind">{"actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
+                  <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
+                  <span className="record-main">
+                    <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
+                    <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
+                    <span className="record-users"><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /></span>
+                  </span>
+                  <DescriptionSnippet description={itemDescription(item, objects)} />
+                  <time>{relative(item.created_at)}</time>
                 </div>
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} /> : section === "runs" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}
         </div>
       </section>
@@ -170,6 +216,20 @@ export default function App() {
 }
 
 type ListItem = SharedObject | Task | Source | NoteSummary | Theme | Run;
+
+function sortWithGraphFallback<T extends Exclude<ListItem, Run>>(items: T[], graph: ConnectionGraphSnapshot | null): T[] {
+  if (!graph) return items;
+  const degree = new Map<string, number>();
+  for (const edge of graph.edges) {
+    degree.set(edge.source_object_id, (degree.get(edge.source_object_id) ?? 0) + 1);
+    degree.set(edge.target_object_id, (degree.get(edge.target_object_id) ?? 0) + 1);
+  }
+  return [...items].sort((left, right) =>
+    (degree.get(canonicalObjectId(right)) ?? 0) - (degree.get(canonicalObjectId(left)) ?? 0)
+    || right.created_at.localeCompare(left.created_at)
+    || canonicalObjectId(right).localeCompare(canonicalObjectId(left))
+  );
+}
 
 function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], runs: Run[], query: string): ListItem[] {
   if (section === "schema" || section === "connections") return [];
@@ -241,29 +301,52 @@ function runOutcome(run: Run, objects: SharedObject[] | RunObject[]) {
   return `${run.actor_type}:${run.actor_id} · ${run.verdict}`;
 }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
+function isObjectBackedSection(section: Section) { return !["connections", "runs", "schema"].includes(section); }
 function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | undefined { return section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
+
+function useSerializedSave() {
+  const chain = useRef<Promise<void>>(Promise.resolve());
+  return useCallback(<T,>(operation: () => Promise<T>) => {
+    const result = chain.current.then(operation, operation);
+    chain.current = result.then(() => undefined, () => undefined);
+    return result;
+  }, []);
+}
 
 function NavButton({ active, compact, icon, label, onClick }: { active: boolean; compact: boolean; icon: string; label: string; onClick: () => void }) {
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
 }
 
-function ThemeDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; refreshKey: number; onChanged: () => Promise<void> }) {
   const [theme, setTheme] = useState<Theme | null>(null);
   const [assigned, setAssigned] = useState<SharedObject[]>([]);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    void Promise.all([api.theme(id), api.themeObjects(id)])
-      .then(([nextTheme, nextAssigned]) => { if (active) { setTheme(nextTheme); setAssigned(nextAssigned); } })
-      .catch((cause) => { if (active) setError(message(cause)); });
-    return () => { active = false; };
+  const revision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
+  const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
+    try { const [nextTheme, nextAssigned] = await Promise.all([api.theme(id), api.themeObjects(id)]); if (generation !== loadGeneration.current) return; revision.current = nextTheme.revision; setTheme(nextTheme); setAssigned(nextAssigned); setError(null); }
+    catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
   }, [id]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
   if (!theme) return <DetailLoading error={error} />;
   const themeObject = objects.find((item) => item.id === id);
+  const saveObjectField = async (field: "title" | "description", value: string) => {
+    return serialize(async () => {
+      const updated = await api.updateObject(id, { expected_revision: revision.current, [field]: value });
+      revision.current = updated.revision;
+      setTheme((existing) => existing ? { ...existing, [field]: updated[field], revision: updated.revision, updated_at: updated.updated_at } : existing);
+      await onChanged();
+      return updated[field];
+    });
+  };
   return <div className="record-page"><div className="record-primary">
-    <h1 className="detail-title">{theme.title}</h1><p className="detail-description">{theme.description}</p>
-    <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
+    <InlineEditor label="Theme title" value={theme.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveObjectField("title", value)} onReload={load} />
+    <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Object ID"><ObjectId id={theme.object_id} label={false} navigate /></Property><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
+    <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={2000} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
     <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
+    <FocusedObjectGraph objectId={theme.object_id} objectTitle={theme.title} refreshKey={refreshKey} />
     {themeObject && <Provenance value={themeObject.provenance} />}
   </div></div>;
 }
@@ -278,7 +361,7 @@ function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (i
       onCreated(await api.createTheme({ title: String(data.get("title")), slug: String(data.get("slug")), description: String(data.get("description")), protected: true, provenance: { source_type: "human", note: "Approved and created in Centaur Context" } }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
-  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.theme} aria-label="Theme description" /><DescriptionHelp id="new-theme-description-help" kind="theme" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
+  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.theme} aria-label="Theme description" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
@@ -301,8 +384,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} aria-describedby="new-object-description-help" />
-    <DescriptionHelp id="new-object-description-help" kind={kind} />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} />
     {kind === "entity" && <Field label="Entity kind"><select name="entity_kind" defaultValue="person"><option value="person">Person</option><option value="organization">Organization</option><option value="product">Product</option><option value="project">Project</option><option value="publication">Publication</option><option value="place">Place</option><option value="concept">Concept</option><option value="other">Other</option></select></Field>}
     {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
     {error && <p className="form-error">{error}</p>}
@@ -320,8 +402,7 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.task} aria-label="Task description" aria-describedby="new-task-description-help" />
-    <DescriptionHelp id="new-task-description-help" kind="task" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.task} aria-label="Task description" />
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
@@ -344,8 +425,7 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
-    <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" aria-describedby="new-note-description-help" />
-    <DescriptionHelp id="new-note-description-help" kind="note" />
+    <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" />
     <Field label="Content"><textarea className="create-body" name="content" rows={14} required placeholder="Write plain text or Markdown…" aria-label="Note content" /></Field>
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><Field label="Format"><select name="content_format" aria-label="Note content format" defaultValue="markdown"><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Field><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create note"}</button></div></div>
@@ -371,8 +451,7 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   };
   return <CreateModal title="New source" onClose={onCancel}><form className="create-form source-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Source title" aria-label="Source title" />
-    <textarea className="create-body" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.source} aria-label="Source description" aria-describedby="new-source-description-help" />
-    <DescriptionHelp id="new-source-description-help" kind="source" />
+    <textarea className="create-body" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.source} aria-label="Source description" />
     <div className="source-fields">
       <Field label="Kind"><select name="source_kind" aria-label="Source kind">{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
       <Field label="Canonical URL"><input name="canonical_uri" type="url" maxLength={2048} placeholder="https://…" /></Field>
@@ -390,34 +469,39 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   </form></CreateModal>;
 }
 
-function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [source, setSource] = useState<Source | null>(null);
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const revision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const [nextSource, nextObject, nextConnections, nextEvents, nextArtifacts] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.artifacts(id)]);
-      setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setError(null);
-    } catch (cause) { setError(message(cause)); }
-  }, [id]);
+      if (generation !== loadGeneration.current) return;
+      revision.current = nextSource.revision; setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setError(null);
+    } catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
+  }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!source || !object) return <DetailLoading error={error} />;
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget); setError(null);
-    try {
-      await api.updateSource(id, {
-        expected_revision: source.revision, title: String(data.get("title")), description: String(data.get("description")), protected: source.protected,
-      });
-      await Promise.all([load(), onChanged()]);
-    } catch (cause) { setError(conflictMessage(cause)); }
+  const saveField = async (field: "title" | "description", value: string) => {
+    return serialize(async () => {
+      const updated = await api.updateSource(id, { expected_revision: revision.current, [field]: value });
+      revision.current = updated.revision; setSource(updated);
+      setObject((current) => current ? { ...current, title: updated.title, description: updated.description, revision: updated.revision, updated_at: updated.updated_at } : current);
+      await onChanged(); return updated[field];
+    });
   };
   return <div className="record-page"><div className="record-primary">
-    <form className="detail-form source-detail-form" onSubmit={save}>
-      <div className="detail-heading"><ObjectId id={source.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Source title" defaultValue={source.title} key={`${source.object_id}-${source.revision}-title`} /></div>
+    <div className="detail-form source-detail-form">
+      <InlineEditor label="Source title" value={source.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveField("title", value)} onReload={load} />
       <section className="properties-block" aria-label="Source properties"><h2>Properties</h2><div className="properties-grid">
+        <Property label="Object ID"><ObjectId id={source.object_id} label={false} navigate /></Property>
         <Property label="Kind"><ObjectTypeBadge kind="source" /> <span className="property-value-wrap">{source.source_kind.replaceAll("_", " ")}</span></Property>
         <Property label="Canonical URL">{source.canonical_uri ? <a href={source.canonical_uri} target="_blank" rel="noreferrer">{source.canonical_uri}</a> : "Not set"}</Property>
         <Property label="Byline"><span className="property-value-wrap">{source.byline ?? "Not set"}</span></Property>
@@ -428,13 +512,11 @@ function SourceDetail({ id, objects, visuals, onChanged }: { id: string; objects
         <Property label="Original media type">{source.original_media_type ?? "Not set"}</Property>
         <Property label="Original artifact reference"><span className="property-value-wrap">{source.original_artifact_reference ?? "Not set"}</span></Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Source description" aria-describedby="source-description-help" defaultValue={source.description} key={`${source.object_id}-${source.revision}-description`} rows={4} placeholder={descriptionExamples.source} />
-      <DescriptionHelp id="source-description-help" kind="source" />
-      <button className="secondary save-button">Save changes</button>
-    </form>
+      <InlineEditor label="Source description" value={source.description} multiline required maxLength={2000} placeholder={descriptionExamples.source} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
+    </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={source.current_artifact_id} onCreated={load} />
-    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={source.provenance} />
   </div></div>;
@@ -488,77 +570,89 @@ function ArtifactSummary({ artifact }: { artifact: Artifact | undefined }) {
   return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.capture_outcome} · {artifact.semantic_indexing_enabled ? "semantic indexing enabled" : "lexical only"} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}{artifact.capture_reason ? ` · ${artifact.capture_reason}` : ""}</p>;
 }
 
-function NoteDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [note, setNote] = useState<Note | null>(null);
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const revision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const [nextNote, nextObject, nextConnections, nextEvents] = await Promise.all([api.note(id), api.object(id), api.connections(id), api.events(id)]);
-      setNote(nextNote); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null);
-    } catch (cause) { setError(message(cause)); }
-  }, [id]);
+      if (generation !== loadGeneration.current) return;
+      revision.current = nextNote.revision; setNote(nextNote); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null);
+    } catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
+  }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!note || !object) return <DetailLoading error={error} />;
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget); setError(null);
+  const saveField = async (field: "title" | "content", value: string) => {
+    return serialize(async () => {
+      const updated = await api.updateNote(id, { expected_revision: revision.current, [field]: value });
+      revision.current = updated.revision; setNote(updated);
+      setObject((current) => current ? { ...current, title: updated.title, revision: updated.revision, updated_at: updated.updated_at } : current);
+      await onChanged(); return updated[field];
+    });
+  };
+  const saveFormat = async (value: Note["content_format"]) => {
     try {
-      await api.updateNote(id, {
-        expected_revision: note.revision,
-        title: String(data.get("title")),
-        description: String(data.get("description")),
-        content: String(data.get("content")),
-        content_format: String(data.get("content_format")),
-        protected: note.protected,
-      });
-      await Promise.all([load(), onChanged()]);
+      const updated = await serialize(() => api.updateNote(id, { expected_revision: revision.current, content_format: value }));
+      revision.current = updated.revision;
+      setNote(updated);
+      await onChanged();
     } catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page"><div className="record-primary">
-    <form className="detail-form note-detail-form" onSubmit={save}>
-      <div className="detail-heading"><ObjectId id={note.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Note title" defaultValue={note.title} key={`${note.object_id}-${note.revision}-title`} /><AttributionStack users={visuals.get(note.object_id)?.users ?? []} /></div>
+    <div className="detail-form note-detail-form">
+      <InlineEditor label="Note title" value={note.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveField("title", value)} onReload={load} />
       <section className="properties-block" aria-label="Note properties"><h2>Properties</h2><div className="properties-grid">
+        <Property label="Object ID"><ObjectId id={note.object_id} label={false} navigate /></Property>
         <Property label="Type"><ObjectTypeBadge kind="note" /></Property>
         <Property label="Users">{(visuals.get(note.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(note.object_id)?.users ?? []} /> : "None"}</Property>
-        <Property label="Format"><select name="content_format" aria-label="Note content format" defaultValue={note.content_format} key={`${note.object_id}-${note.revision}-format`}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
+        <Property label="Format"><select aria-label="Note content format" value={note.content_format} onChange={(event) => void saveFormat(event.target.value as Note["content_format"])}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
         <Property label="Updated">{relative(note.updated_at)}</Property>
       </div></section>
-      <textarea className="body-input" name="description" required maxLength={2000} aria-label="Note description" defaultValue={note.description} key={`${note.object_id}-${note.revision}-description`} rows={3} />
-      <Section title="Content"><textarea className="note-content note-content-editor" name="content" aria-label="Note content" required maxLength={100000} defaultValue={note.content} key={`${note.object_id}-${note.revision}-content`} rows={16} /></Section>
-      <button className="secondary save-button">Save note</button>
-    </form>
+      <Section title="Content"><InlineEditor label="Note content" value={note.content} multiline required maxLength={100000} placeholder="Write plain text or Markdown…" className="note-content-editor" onSave={(value) => saveField("content", value)} onReload={load} /></Section>
+    </div>
     {error && <p className="form-error">{error}</p>}
-    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={note.provenance} />
   </div></div>;
 }
 
-function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [item, setItem] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const revision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
   const load = useCallback(async () => {
-    try { const [nextItem, nextConnections, nextEvents] = await Promise.all([api.object(id), api.connections(id), api.events(id)]); setItem(nextItem); setConnections(nextConnections); setEvents(nextEvents); setError(null); }
-    catch (cause) { setError(message(cause)); }
-  }, [id]);
+    const generation = ++loadGeneration.current;
+    try { const [nextItem, nextConnections, nextEvents] = await Promise.all([api.object(id), api.connections(id), api.events(id)]); if (generation !== loadGeneration.current) return; revision.current = nextItem.revision; setItem(nextItem); setConnections(nextConnections); setEvents(nextEvents); setError(null); }
+    catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
+  }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!item) return <DetailLoading error={error} />;
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { setItem(await api.updateObject(id, { expected_revision: item.revision, title: String(data.get("title")), description: String(data.get("description")), protected: item.protected })); await Promise.all([load(), onChanged()]); }
-    catch (cause) { setError(conflictMessage(cause)); }
+  const saveField = async (field: "title" | "description", value: string) => {
+    return serialize(async () => {
+      const updated = await api.updateObject(id, { expected_revision: revision.current, [field]: value });
+      revision.current = updated.revision; setItem(updated); await onChanged(); return updated[field];
+    });
   };
   return <div className="record-page">
     <div className="record-primary">
-      <form className="detail-form" onSubmit={save}>
-        <div className="detail-heading"><ObjectId id={item.id} rowPill navigate /><input className="title-input" name="title" aria-label="Object title" defaultValue={item.title} key={`${item.id}-${item.revision}-title`} /></div>
+      <div className="detail-form">
+        <InlineEditor label="Object title" value={item.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveField("title", value)} onReload={load} />
         <section className="properties-block" aria-label="Object properties">
           <h2>Properties</h2>
           <div className="properties-grid">
+            <Property label="Object ID"><ObjectId id={item.id} label={false} navigate /></Property>
             <Property label="Type"><ObjectTypeBadge kind={item.kind} /></Property>
             <Property label="Source">{visuals.get(item.id)?.source_provider ? <SourceBadge provider={visuals.get(item.id)?.source_provider} /> : textValue(item.provenance.source_type, "Unspecified")}</Property>
             <Property label="Users">{(visuals.get(item.id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(item.id)?.users ?? []} /> : "None"}</Property>
@@ -566,21 +660,19 @@ function ObjectDetail({ id, objects, visuals, onChanged }: { id: string; objects
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Object description" aria-describedby="object-description-help" defaultValue={item.description} key={`${item.id}-${item.revision}-description`} rows={4} placeholder={descriptionExamples[item.kind]} />
-        <DescriptionHelp id="object-description-help" kind={item.kind} />
-        <button className="secondary save-button">Save changes</button>
-      </form>
+        <InlineEditor label="Object description" value={item.description} multiline required maxLength={2000} placeholder={descriptionExamples[item.kind]} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
+      </div>
       {error && <p className="form-error">{error}</p>}
-      {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} />}
-      {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} />}
-      <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+      {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
+      {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
+      <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} includeThread />
       <Provenance value={item.provenance} />
     </div>
   </div>;
 }
 
-function UserIdentityPanel({ id, visual }: { id: string; visual: ObjectVisual | undefined }) {
+function UserIdentityPanel({ id, visual, refreshKey }: { id: string; visual: ObjectVisual | undefined; refreshKey: number }) {
   const [user, setUser] = useState<User | null>(null);
   const [identities, setIdentities] = useState<ExternalIdentity[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -590,14 +682,14 @@ function UserIdentityPanel({ id, visual }: { id: string; visual: ObjectVisual | 
       .then(([nextUser, nextIdentities]) => { if (active) { setUser(nextUser); setIdentities(nextIdentities); } })
       .catch((cause) => { if (active) setError(message(cause)); });
     return () => { active = false; };
-  }, [id]);
+  }, [id, refreshKey]);
   return <Section title="Identity">
     {error && <p className="form-error">{error}</p>}
     {user && <div className="properties-block compact-properties"><div className="properties-grid"><Property label="Object ID"><ObjectId id={user.object_id} label={false} /><ObjectContext visual={visual} /></Property><Property label="User kind"><span className="user-kind-label">{user.user_kind === "agent" ? "Agent" : "Human"}</span></Property>{identities.map((identity) => <div className="identity" key={identity.id}><SourceBadge provider={identity.provider} /><strong>{identity.display_name ?? identity.provider_user_id}</strong><small>{identity.workspace_id || "Default workspace"} · {identity.provider_user_id}</small><ObjectId id={user.object_id} compact /></div>)}{identities.length === 0 && <p className="muted">No external identities.</p>}</div></div>}
   </Section>;
 }
 
-function ChatTranscript({ id, visuals }: { id: string; visuals: Map<string, ObjectVisual> }) {
+function ChatTranscript({ id, visuals, refreshKey }: { id: string; visuals: Map<string, ObjectVisual>; refreshKey: number }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -606,7 +698,7 @@ function ChatTranscript({ id, visuals }: { id: string; visuals: Map<string, Obje
       .then((items) => { if (active) setMessages(items); })
       .catch((cause) => { if (active) setError(message(cause)); });
     return () => { active = false; };
-  }, [id]);
+  }, [id, refreshKey]);
   return <Section title="Messages">
     {error && <p className="form-error">{error}</p>}
     <div className="chat-transcript">
@@ -624,16 +716,36 @@ function ActivityTimeline({ events, visuals }: { events: ObjectEvent[]; visuals:
   return <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><strong>{event.action.replaceAll("_", " ")}</strong><span className="event-actor">{event.actor_type}:{event.actor_id}</span>{event.target_type === "object" ? <><ObjectId id={event.target_id} linkPill /><ObjectContext visual={visuals.get(event.target_id)} /></> : <ConnectionId id={event.target_id} label={false} compact />}<time>{relative(event.created_at)}</time></div>)}</div></Section>;
 }
 
-function Connections({ object, objects, visuals, connections, onCreated }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void> }) {
+function Connections({ object, objects, visuals, connections, onCreated, refreshKey }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void>; refreshKey: number }) {
   const [open, setOpen] = useState(false); const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
     try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), description: String(data.get("description")), protected: data.get("protected") === "on", provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
     catch (cause) { setError(message(cause)); }
   };
-  return <Section title="Relationships" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
-    {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-    <div className="connections">{connections.map((connection) => <article className="connection" key={connection.id}><ConnectionFlow connection={connection} objects={objects} visuals={visuals} /></article>)}{connections.length === 0 && <p className="muted">No explained relationships yet.</p>}</div>
-  </Section>;
+  return <>
+    <Section title="Related Objects" action={<button className="text-button" onClick={() => setOpen((value) => !value)}>+ Connect</button>}>
+      {open && <form className="connection-form" onSubmit={submit}><select name="kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
+      <div className="connections related-object-list">{connections.map((connection) => <RelatedObjectRow currentObjectId={object.id} connection={connection} objects={objects} visuals={visuals} key={connection.id} />)}{connections.length === 0 && <p className="muted">No related Objects.</p>}</div>
+    </Section>
+    <FocusedObjectGraph objectId={object.id} objectTitle={object.title} refreshKey={refreshKey} />
+  </>;
+}
+
+function RelatedObjectRow({ currentObjectId, connection, objects, visuals }: { currentObjectId: string; connection: Connection; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+  const outbound = connection.source_object_id === currentObjectId;
+  const relatedId = outbound ? connection.target_object_id : connection.source_object_id;
+  const related = objects.find((item) => item.id === relatedId);
+  return <article className="related-object-row">
+    {related ? <ObjectTypeBadge kind={related.kind} compact /> : <span />}
+    <ObjectId id={relatedId} rowPill />
+    <span className="related-object-copy">
+      <a className="related-object-title" href={detailPath("objects", relatedId)}>{related?.title ?? shortId(relatedId)}</a>
+      <span className="related-object-description" title={connection.description}>{connection.description}</span>
+    </span>
+    <ObjectContext visual={visuals.get(relatedId)} />
+    <span className="related-object-meaning"><span title={outbound ? "Outbound from this Object" : "Inbound to this Object"}>{outbound ? "→" : "←"}</span> {connection.kind.replaceAll("_", " ")}</span>
+    <a className="related-connection-link" href={detailPath("connections", connection.id)} aria-label={`Open connection ${connection.id}`}>Connection</a>
+  </article>;
 }
 
 function ConnectionFlow({ connection, objects, visuals }: { connection: Connection; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
@@ -648,81 +760,100 @@ function ConnectionFlow({ connection, objects, visuals }: { connection: Connecti
   return <div className="connection-flow">{endpoint(connection.source_object_id, source, "Source")}<span className="connection-arrow" aria-label="connects to">→</span>{endpoint(connection.target_object_id, target, "Target")}</div>;
 }
 
-function TaskDetail({ id, objects, visuals, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [task, setTask] = useState<Task | null>(null);
   const [object, setObject] = useState<SharedObject | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const revision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const [nextTask, nextObject, nextConnections, nextEvents] = await Promise.all([api.task(id), api.object(id), api.connections(id), api.events(id)]);
-      setTask(nextTask); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null);
-    } catch (cause) { setError(message(cause)); }
-  }, [id]);
+      if (generation !== loadGeneration.current) return;
+      revision.current = nextTask.revision; setTask(nextTask); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null);
+    } catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
+  }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!task || !object) return <DetailLoading error={error} />;
-  const save = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    const status = String(data.get("status"));
-    const blockedReason = optional(data, "blocked_reason");
-    const issueUrl = optional(data, "github_issue_url");
-    const brief = optional(data, "brief_markdown");
-    try { await api.updateTask(id, { expected_revision: task.revision, title: String(data.get("title")), description: String(data.get("description")), protected: task.protected, status, priority: String(data.get("priority")), agent_suitable: data.get("agent_suitable") === "on", blocked_reason: status === "blocked" ? blockedReason : undefined, clear_blocked_reason: status !== "blocked", github_issue_url: issueUrl, clear_github_issue_url: !issueUrl, brief_markdown: brief, clear_brief_markdown: !brief }); await Promise.all([load(), onChanged()]); }
+  const saveFields = async (changes: Record<string, unknown>) => {
+    return serialize(async () => {
+      const updated = await api.updateTask(id, { expected_revision: revision.current, ...changes });
+      revision.current = updated.revision; setTask(updated);
+      setObject((current) => current ? { ...current, title: updated.title, revision: updated.revision, updated_at: updated.updated_at } : current);
+      await onChanged(); return updated;
+    });
+  };
+  const saveText = async (field: "title" | "brief_markdown", value: string) => {
+    const updated = await saveFields(field === "brief_markdown" ? { brief_markdown: value || undefined, clear_brief_markdown: !value } : { title: value });
+    return field === "brief_markdown" ? updated.brief_markdown ?? "" : updated.title;
+  };
+  const saveProperty = async (changes: Record<string, unknown>) => {
+    try { await saveFields(changes); }
     catch (cause) { setError(conflictMessage(cause)); }
   };
   return <div className="record-page">
     <div className="record-primary">
-      <form className="detail-form" onSubmit={save}>
-        <div className="detail-heading"><ObjectId id={task.object_id} rowPill navigate /><input className="title-input" name="title" aria-label="Task title" defaultValue={task.title} key={`${task.object_id}-${task.revision}-title`} /></div>
+      <div className="detail-form">
+        <InlineEditor label="Task title" value={task.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveText("title", value)} onReload={load} />
         <section className="properties-block" aria-label="Task properties">
           <h2>Properties</h2>
           <div className="properties-grid">
+            <Property label="Object ID"><ObjectId id={task.object_id} label={false} navigate /></Property>
             <Property label="Type"><ObjectTypeBadge kind="task" /></Property>
             <Property label="Source">{visuals.get(task.object_id)?.source_provider ? <SourceBadge provider={visuals.get(task.object_id)?.source_provider} /> : textValue(task.provenance.source_type, "Unspecified")}</Property>
             <Property label="Users">{(visuals.get(task.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(task.object_id)?.users ?? []} /> : "None"}</Property>
-            <Field label="Status"><select name="status" defaultValue={task.status} key={`${task.object_id}-${task.revision}-status`}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
-            <Property label="Agent suitability"><label className="check"><input type="checkbox" name="agent_suitable" defaultChecked={task.agent_suitable} key={`${task.object_id}-${task.revision}-suitable`} /> Suitable</label></Property>
-            <Property label="Priority"><select name="priority" defaultValue={task.priority} key={`${task.object_id}-${task.revision}-priority`}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></Property>
+            <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
+            <Property label="Agent suitability"><label className="check"><input type="checkbox" checked={task.agent_suitable} onChange={(event) => void saveProperty({ agent_suitable: event.target.checked })} /> Suitable</label></Property>
+            <Property label="Priority"><span className="property-value-wrap">{task.priority}</span></Property>
             <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
             <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
             <Property label="Completed">{task.completed_at ? new Date(task.completed_at).toLocaleString() : "Not complete"}</Property>
-            <Field label="Blocked reason"><input name="blocked_reason" maxLength={2000} defaultValue={task.blocked_reason ?? ""} key={`${task.object_id}-${task.revision}-blocked`} /></Field>
-            <Field label="GitHub issue"><input name="github_issue_url" type="url" maxLength={2000} defaultValue={task.github_issue_url ?? ""} key={`${task.object_id}-${task.revision}-issue`} placeholder="https://github.com/owner/repo/issues/123" /></Field>
+            <Property label="Blocked reason"><span className="property-value-wrap">{task.blocked_reason ?? "None"}</span></Property>
+            <Property label="GitHub issue">{safeGithubUrl(task.github_issue_url) ? <a href={safeGithubUrl(task.github_issue_url)!} target="_blank" rel="noopener noreferrer">Open issue</a> : "None"}</Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <textarea className="body-input" name="description" required maxLength={2000} aria-label="Task description" aria-describedby="task-description-help" defaultValue={task.description} key={`${task.object_id}-${task.revision}-description`} rows={4} placeholder={descriptionExamples.task} />
-        <Field label="Requirement brief"><textarea name="brief_markdown" maxLength={100000} defaultValue={task.brief_markdown ?? ""} key={`${task.object_id}-${task.revision}-brief`} rows={10} placeholder="Scope, constraints, acceptance criteria, and verification…" /></Field>
-        <DescriptionHelp id="task-description-help" kind="task" />
-        <button className="secondary save-button">Save changes</button>
-      </form>
+        <Section title="Brief"><InlineEditor label="Task brief" value={task.brief_markdown ?? ""} multiline maxLength={100000} placeholder="Scope, constraints, acceptance criteria, and verification…" className="detail-body-editor task-brief-editor" onSave={(value) => saveText("brief_markdown", value)} onReload={load} /></Section>
+      </div>
       {error && <p className="form-error">{error}</p>}
-      <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} />
+      <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} />
       <Provenance value={task.provenance} />
     </div>
   </div>;
 }
 
-function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void> }) {
+function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reviewRevision = useRef(0);
+  const loadGeneration = useRef(0);
+  const serialize = useSerializedSave();
   const load = useCallback(async () => {
-    try { setDetail(await api.run(id)); setError(null); }
-    catch (cause) { setError(message(cause)); }
-  }, [id]);
+    const generation = ++loadGeneration.current;
+    try { const next = await api.run(id); if (generation !== loadGeneration.current) return; reviewRevision.current = Number((next.run.result.review_revision as number | undefined) ?? 0); setDetail(next); setError(null); }
+    catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
+  }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!detail) return <DetailLoading error={error} />;
   const { run, children, objects, events } = detail;
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setBusy(true); setError(null);
-    const data = new FormData(event.currentTarget);
-    try {
-      const revision = Number((run.result.review_revision as number | undefined) ?? 0);
-      await api.reviewRun(id, { verdict: String(data.get("verdict")) as RunVerdict, notes: optional(data, "notes"), expected_revision: revision });
-      await load();
-    } catch (cause) { setError(conflictMessage(cause)); }
+  const saveReview = async (verdict: RunVerdict, notes: string | null) => {
+    return serialize(async () => {
+      const updated = await api.reviewRun(id, { verdict, notes, expected_revision: reviewRevision.current });
+      reviewRevision.current = Number((updated.result.review_revision as number | undefined) ?? reviewRevision.current + 1);
+      setDetail((current) => current ? { ...current, run: updated } : current);
+      await onChanged(); return updated;
+    });
+  };
+  const chooseVerdict = async (verdict: "pass" | "fail") => {
+    setBusy(true); setError(null);
+    try { await saveReview(verdict, run.review_notes); }
+    catch (cause) { setError(conflictMessage(cause)); }
     finally { setBusy(false); }
   };
   const undo = async () => {
@@ -739,7 +870,7 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
   const outcome = runOutcome(run, objects);
   const metrics = runMetrics(run);
   return <div className="record-page"><div className="record-primary eval-detail">
-    <div className="detail-heading run-heading"><span className="object-id-pill">Run ID: {shortId(run.id)}</span><h1 className="detail-title">{title}</h1><AttributionStack users={chatVisual?.users ?? []} /></div>
+    <div className="detail-heading run-heading"><h1 className="detail-title">{title}</h1></div>
     <p className="detail-description">{outcome}</p>
     <section className="run-metrics" aria-label="Run summary">
       <RunMetric label="Duration" value={metrics.duration} />
@@ -749,6 +880,7 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
       <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
     </section>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Run ID"><span className="object-id-pill">{shortId(run.id)}</span></Property>
       <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
       <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
       {primary && <Property label="Primary Object"><a className="run-object-title" href={detailPath("objects", primary.object_id)}>{primary.title}</a><ObjectTypeBadge kind={primary.kind} /><ObjectId id={primary.object_id} compact /></Property>}
@@ -756,13 +888,13 @@ function RunDetailView({ id, visuals, onChanged }: { id: string; visuals: Map<st
       {run.chat_object_id && <Property label="Originating Chat"><a href={detailPath("objects", run.chat_object_id)}>Open Slack conversation</a><ObjectId id={run.chat_object_id} compact /></Property>}<Property label="Technical actor">{run.actor_type}:{run.actor_id}</Property><Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
     </div></section>
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
-    <form className="eval-annotation" onSubmit={save}><label className="eval-review-field"><span>Verdict</span><select name="verdict" aria-label="Verdict" defaultValue={run.verdict}>{["unreviewed", "pass", "mixed", "fail"].map((value) => <option key={value}>{value}</option>)}</select></label><label className="eval-review-field eval-review-notes"><span>Review notes</span><input name="notes" aria-label="Review notes" maxLength={4000} defaultValue={run.review_notes ?? ""} /></label><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></form>
+    <section className="eval-annotation" aria-label="Run review"><div className="verdict-segments" role="group" aria-label="Review verdict"><button type="button" className={run.verdict === "pass" ? "active pass" : "pass"} disabled={busy} aria-pressed={run.verdict === "pass"} onClick={() => void chooseVerdict("pass")}>Pass</button><button type="button" className={run.verdict === "fail" ? "active fail" : "fail"} disabled={busy} aria-pressed={run.verdict === "fail"} onClick={() => void chooseVerdict("fail")}>Fail</button>{!(["pass", "fail"] as string[]).includes(run.verdict) && <span className={`eval-verdict ${run.verdict}`}>Legacy: {run.verdict}</span>}</div><InlineEditor label="Review notes" value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add review notes" className="review-notes-editor" onSave={async (value) => { const updated = await saveReview(run.verdict, value || null); return updated.review_notes ?? ""; }} onReload={load} /></section>
     {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
     <Section title="Execution trace"><div className="run-trace-list">{run.trace.map((entry, index) => <RunTraceEntry entry={entry} index={index} key={textValue(entry.id, String(index))} />)}{run.trace.length === 0 && <p className="run-empty-trace">No detailed trace was recorded for this run.</p>}</div></Section>
     <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
     {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{children.map((child) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
-    <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectId id={object.object_id} compact /><ObjectContext visual={visuals.get(object.object_id)} /></article>)}</div></Section>
-    <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><div><strong>{item.action} {item.target_type}</strong><p>revision {item.from_revision ?? "new"} → {item.to_revision}</p>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} />}</div></article>)}</div></Section>
+    <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} compact /><ObjectId id={object.object_id} compact /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectContext visual={visuals.get(object.object_id)} /></article>)}{objects.length === 0 && <p className="muted">No related Objects.</p>}</div></Section>
+    <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><strong>{item.action} {item.target_type}</strong><span>revision {item.from_revision ?? "new"} → {item.to_revision}</span>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} compact />}{item.reversible && <span className="change-state">reversible</span>}</article>)}</div></Section>
   </div></div>;
 }
 
@@ -831,7 +963,7 @@ function formatDuration(milliseconds: number) {
   return `${minutes}m ${seconds}s`;
 }
 
-function ConnectionDetail({ id, objects, visuals }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual> }) {
+function ConnectionDetail({ id, objects, visuals, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; refreshKey: number }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -840,7 +972,7 @@ function ConnectionDetail({ id, objects, visuals }: { id: string; objects: Share
       .then((item) => { if (active) setConnection(item); })
       .catch((cause) => { if (active) setError(message(cause)); });
     return () => { active = false; };
-  }, [id]);
+  }, [id, refreshKey]);
   if (!connection) return <DetailLoading error={error} />;
   return <div className="record-page"><div className="record-primary">
     <h1 className="detail-title">{connection.kind.replaceAll("_", " ")}</h1>
@@ -884,13 +1016,17 @@ function CreateModal({ title, onClose, children }: { title: string; onClose: () 
   </div>;
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="field"><span>{label}</span>{children}</label>; }
-function DescriptionHelp({ id, kind }: { id: string; kind: ObjectKind }) { return <p className="description-help" id={id}>Describe this specific {kind} directly. Example: “{descriptionExamples[kind]}”</p>; }
 function Property({ label, children }: { label: string; children: React.ReactNode }) { return <div className="property"><span>{label}</span><div>{children}</div></div>; }
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) { return <section className="detail-section"><header><h3>{title}</h3>{action}</header>{children}</section>; }
 function DetailLoading({ error }: { error: string | null }) { return <div className="blank-state"><span>◇</span><h2>{error ? "Could not load" : "Loading"}</h2><p>{error ?? "Reading the shared record…"}</p></div>; }
 function relative(value: string) { const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000); if (seconds < 60) return "now"; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return `${Math.floor(seconds / 86400)}d ago`; }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : "Something went wrong."; }
 function conflictMessage(cause: unknown) { return cause instanceof ApiError && cause.status === 409 ? "This record changed elsewhere. Refresh before saving again." : message(cause); }
+function safeGithubUrl(value: string | null) {
+  if (!value) return null;
+  try { const url = new URL(value); return url.protocol === "https:" && url.hostname.toLowerCase() === "github.com" ? url.href : null; }
+  catch { return null; }
+}
 function finishCreate(section: Section, id: string, load: () => Promise<void>, setCreateOpen: (open: boolean) => void) { setCreateOpen(false); navigate(detailPath(section, id)); void load(); }
 function shortId(value: string) { return value.length > 12 ? `${value.slice(0, 8)}…` : value; }
 function textValue(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value : fallback; }

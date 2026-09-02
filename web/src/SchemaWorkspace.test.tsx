@@ -44,13 +44,13 @@ describe("dynamic schema refresh", () => {
     window.history.replaceState({}, "", "/schema/tasks/rows");
     vi.mocked(api.schema).mockResolvedValueOnce(initial).mockResolvedValue(changed);
     vi.mocked(api.schemaRows).mockResolvedValue({ schema_fingerprint: "first", table: "tasks", rows: [], next_cursor: null, page_size: 50 });
-    render(<SchemaWorkspace selectedTable="tasks" />);
+    const view = render(<SchemaWorkspace selectedTable="tasks" refreshKey={0} />);
     expect(await screen.findByRole("heading", { name: "Tasks" })).toBeVisible();
     expect(window.location.pathname).toBe("/schema/tasks/rows");
     expect(screen.getByRole("link", { name: "← Schema map" })).toHaveAttribute("href", "/schema");
     expect(screen.queryByRole("navigation", { name: "Schema tables" })).not.toBeInTheDocument();
 
-    window.dispatchEvent(new Event("focus"));
+    view.rerender(<SchemaWorkspace selectedTable="tasks" refreshKey={1} />);
     await waitFor(() => expect(window.location.pathname).toBe("/schema"));
     expect(screen.queryByRole("heading", { name: "Schema map" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Tasks subtype/ })).not.toBeInTheDocument();

@@ -27,6 +27,95 @@ async fn test_pool() -> Option<PgPool> {
     )
 }
 
+#[tokio::test]
+async fn object_lists_use_stable_recent_and_active_connection_density_ordering() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let token = format!("density{}", Uuid::new_v4().simple());
+    let zero = Uuid::new_v4();
+    let one = Uuid::new_v4();
+    let two = Uuid::new_v4();
+    let outside = Uuid::new_v4();
+    let indexes: Vec<String> = sqlx::query_scalar("SELECT indexname FROM pg_indexes WHERE schemaname='public' AND indexname = ANY($1) ORDER BY indexname")
+        .bind(vec!["connections_active_source_idx".to_owned(), "connections_active_target_idx".to_owned(), "objects_active_created_idx".to_owned(), "objects_active_kind_created_idx".to_owned()])
+        .fetch_all(&pool).await.unwrap();
+    assert_eq!(indexes.len(), 4);
+    let mut tx = pool.begin().await.unwrap();
+    for (id, title, created_at) in [
+        (zero, format!("{token} zero"), "2099-01-03T00:00:00Z"),
+        (one, format!("{token} one"), "2099-01-02T00:00:00Z"),
+        (two, format!("{token} two"), "2099-01-01T00:00:00Z"),
+        (
+            outside,
+            "density ordering endpoint".to_owned(),
+            "2098-01-01T00:00:00Z",
+        ),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at) VALUES($1,'entity',$2,'List ordering contract','system','list-test','system','list-test','{}',$3::timestamptz,$3::timestamptz)")
+            .bind(id).bind(title).bind(created_at).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'concept')")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    for (source, kind, archived) in [
+        (one, "related_to", false),
+        (two, "related_to", false),
+        (two, "involves", false),
+        (zero, "related_to", true),
+    ] {
+        sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,archived_at) VALUES($1,$2,$3,$4,'List density edge','system','list-test','system','list-test','{}',CASE WHEN $5 THEN now() ELSE NULL END)")
+            .bind(Uuid::new_v4()).bind(source).bind(kind).bind(outside).bind(archived).execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let filter = |sort, cursor, limit| db::ObjectListFilter {
+        query: Some(token.clone()),
+        kind: Some("entity".to_owned()),
+        lifecycle: Some("active".to_owned()),
+        cursor,
+        limit,
+        sort,
+        text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+    };
+    let recent = db::list_objects(&pool, filter(db::ListSort::Recent, None, 10))
+        .await
+        .unwrap();
+    assert_eq!(
+        recent.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![zero, one, two]
+    );
+    sqlx::query("UPDATE objects SET updated_at='2100-01-01T00:00:00Z' WHERE id=$1")
+        .bind(two)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let unchanged = db::list_objects(&pool, filter(db::ListSort::Recent, None, 10))
+        .await
+        .unwrap();
+    assert_eq!(
+        unchanged.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![zero, one, two]
+    );
+
+    let first = db::list_objects(&pool, filter(db::ListSort::Connections, None, 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        first.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![two, one]
+    );
+    let second = db::list_objects(&pool, filter(db::ListSort::Connections, Some(one), 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        second.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![zero]
+    );
+}
+
 async fn migrated_pool() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgPool)> {
     let pool = test_pool().await?;
     let guard = DB_TEST_LOCK.lock().await;

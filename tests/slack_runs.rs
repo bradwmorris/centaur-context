@@ -60,10 +60,12 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
     );
 
     let note_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
     sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'note','Captured result','A durable result created during the synthetic Slack interaction.','system','test','system','test','{}')")
-        .bind(note_id).execute(&pool).await.unwrap();
+        .bind(note_id).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO notes(object_id,content,content_format) VALUES($1,'Synthetic note body.','markdown')")
-        .bind(note_id).execute(&pool).await.unwrap();
+        .bind(note_id).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 
     let human = json!({
         "provider_message_id":interaction,

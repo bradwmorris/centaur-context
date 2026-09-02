@@ -85,6 +85,11 @@ export function connectionPath(id: string): string {
   return `/connections/${encodeURIComponent(id)}`;
 }
 
+export function connectionsPath(objectId?: string): string {
+  if (!objectId) return "/connections";
+  return `/connections?${new URLSearchParams({ object: objectId })}`;
+}
+
 export function navigate(path: string, replace = false): void {
   if (`${window.location.pathname}${window.location.search}` === path) return;
   window.history[replace ? "replaceState" : "pushState"]({}, "", path);

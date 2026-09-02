@@ -268,6 +268,8 @@ pub struct NoteSearchResult {
     pub content_format: String,
     pub excerpt: String,
     #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 
@@ -623,12 +625,19 @@ pub struct ArtifactEmbeddingChunk {
 }
 
 #[derive(Clone, Debug)]
+pub enum ListSort {
+    Recent,
+    Connections,
+}
+
+#[derive(Clone, Debug)]
 pub struct ObjectListFilter {
     pub query: Option<String>,
     pub kind: Option<String>,
     pub lifecycle: Option<String>,
     pub cursor: Option<Uuid>,
     pub limit: i64,
+    pub sort: ListSort,
     pub text_search_config: crate::config::TextSearchConfig,
 }
 
@@ -638,6 +647,7 @@ pub struct SourceListFilter {
     pub source_kind: Option<String>,
     pub cursor: Option<Uuid>,
     pub limit: i64,
+    pub sort: ListSort,
 }
 
 #[derive(Clone, Debug)]
@@ -645,6 +655,7 @@ pub struct NoteListFilter {
     pub query: Option<String>,
     pub cursor: Option<Uuid>,
     pub limit: i64,
+    pub sort: ListSort,
 }
 
 #[derive(Clone, Debug)]
@@ -771,6 +782,8 @@ pub struct TaskListFilter {
     pub status: Option<String>,
     pub agent_suitable: Option<bool>,
     pub limit: i64,
+    pub cursor: Option<Uuid>,
+    pub sort: ListSort,
 }
 
 #[derive(Clone, Debug)]
@@ -845,41 +858,69 @@ pub async fn ready(pool: &PgPool) -> Result<(), DbError> {
     }
 }
 
+fn push_active_connection_count(query: &mut QueryBuilder<'_, Postgres>, object_id: &str) {
+    query
+        .push("((SELECT count(*) FROM connections list_source_connection WHERE list_source_connection.archived_at IS NULL AND list_source_connection.source_object_id=")
+        .push(object_id)
+        .push(")+(SELECT count(*) FROM connections list_target_connection WHERE list_target_connection.archived_at IS NULL AND list_target_connection.target_object_id=")
+        .push(object_id)
+        .push("))");
+}
+
+fn push_object_list_cursor(query: &mut QueryBuilder<'_, Postgres>, cursor: Uuid, sort: &ListSort) {
+    query.push(" AND (");
+    if matches!(sort, ListSort::Connections) {
+        push_active_connection_count(query, "o.id");
+        query.push(",");
+    }
+    query.push("o.created_at,o.id) < (SELECT ");
+    if matches!(sort, ListSort::Connections) {
+        push_active_connection_count(query, "cursor_object.id");
+        query.push(",");
+    }
+    query
+        .push("cursor_object.created_at,cursor_object.id FROM objects cursor_object WHERE cursor_object.id=")
+        .push_bind(cursor)
+        .push(")");
+}
+
+fn push_object_list_order(query: &mut QueryBuilder<'_, Postgres>, sort: &ListSort) {
+    query.push(" ORDER BY ");
+    if matches!(sort, ListSort::Connections) {
+        push_active_connection_count(query, "o.id");
+        query.push(" DESC,");
+    }
+    query.push("o.created_at DESC,o.id DESC");
+}
+
 pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec<Object>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
-        "SELECT id,kind,title,description,protected,CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,revision,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at,archived_at FROM objects WHERE true",
+        "SELECT o.id,o.kind,o.title,o.description,o.protected,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.created_by_type,o.created_by_id,o.updated_by_type,o.updated_by_id,o.provenance,o.created_at,o.updated_at,o.archived_at FROM objects o WHERE true",
     );
-    let kind_scoped = filter.kind.is_some();
     if let Some(kind) = filter.kind {
-        query.push(" AND kind = ").push_bind(kind);
+        query.push(" AND o.kind = ").push_bind(kind);
     }
     if let Some(cursor) = filter.cursor {
-        if !kind_scoped {
-            return Err(DbError::Validation(ValidationError::Unsupported {
-                field: "cursor",
-                value: "Object cursors require a kind filter".to_owned(),
-            }));
-        }
-        query.push(" AND id > ").push_bind(cursor);
+        push_object_list_cursor(&mut query, cursor, &filter.sort);
     }
     if let Some(lifecycle) = filter.lifecycle {
         if lifecycle == "active" {
-            query.push(" AND archived_at IS NULL");
+            query.push(" AND o.archived_at IS NULL");
         } else {
-            query.push(" AND archived_at IS NOT NULL");
+            query.push(" AND o.archived_at IS NOT NULL");
         }
     }
     if let Some(search) = filter.query {
         query.push(" AND ");
         if filter.text_search_config == crate::config::TextSearchConfig::SIMPLE {
-            query.push("search_document");
+            query.push("o.search_document");
         } else {
             query
                 .push("(setweight(to_tsvector(")
                 .push_bind(filter.text_search_config.as_str())
-                .push("::regconfig, coalesce(title,'')), 'A') || setweight(to_tsvector(")
+                .push("::regconfig, coalesce(o.title,'')), 'A') || setweight(to_tsvector(")
                 .push_bind(filter.text_search_config.as_str())
-                .push("::regconfig, coalesce(description,'')), 'B'))");
+                .push("::regconfig, coalesce(o.description,'')), 'B'))");
         }
         query
             .push(" @@ websearch_to_tsquery(")
@@ -888,11 +929,7 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
             .push_bind(search)
             .push(")");
     }
-    if kind_scoped {
-        query.push(" ORDER BY id");
-    } else {
-        query.push(" ORDER BY updated_at DESC, id");
-    }
+    push_object_list_order(&mut query, &filter.sort);
     query.push(" LIMIT ").push_bind(filter.limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
@@ -938,12 +975,20 @@ const THEME_SELECT: &str = r#"SELECT o.id AS object_id,o.title,o.description,t.s
        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,o.created_at,o.updated_at
 FROM themes t JOIN objects o ON o.id=t.object_id"#;
 
-pub async fn list_themes(pool: &PgPool) -> Result<Vec<Theme>, DbError> {
-    Ok(sqlx::query_as(&format!(
-        "{THEME_SELECT} WHERE o.archived_at IS NULL ORDER BY o.title,o.id"
-    ))
-    .fetch_all(pool)
-    .await?)
+pub async fn list_themes(
+    pool: &PgPool,
+    sort: ListSort,
+    cursor: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<Theme>, DbError> {
+    let mut query =
+        QueryBuilder::<Postgres>::new(format!("{THEME_SELECT} WHERE o.archived_at IS NULL"));
+    if let Some(cursor) = cursor {
+        push_object_list_cursor(&mut query, cursor, &sort);
+    }
+    push_object_list_order(&mut query, &sort);
+    query.push(" LIMIT ").push_bind(limit);
+    Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
 pub async fn get_theme(pool: &PgPool, id: Uuid) -> Result<Theme, DbError> {
@@ -1043,17 +1088,18 @@ pub async fn list_notes(
 ) -> Result<Vec<NoteSearchResult>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
         r#"SELECT o.id AS object_id,o.title,o.description,
-        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.updated_at
+        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.created_at,o.updated_at
         FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(cursor) = filter.cursor {
-        query.push(" AND o.id>").push_bind(cursor);
+        push_object_list_cursor(&mut query, cursor, &filter.sort);
     }
     if let Some(search) = filter.query {
         query.push(" AND to_tsvector('simple',concat_ws(' ',o.title,o.description,n.content)) @@ websearch_to_tsquery('simple',")
             .push_bind(search).push(")");
     }
-    query.push(" ORDER BY o.id LIMIT ").push_bind(filter.limit);
+    push_object_list_order(&mut query, &filter.sort);
+    query.push(" LIMIT ").push_bind(filter.limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
@@ -1479,7 +1525,7 @@ pub async fn list_sources(
         query.push(" AND s.source_kind=").push_bind(kind);
     }
     if let Some(cursor) = filter.cursor {
-        query.push(" AND o.id>").push_bind(cursor);
+        push_object_list_cursor(&mut query, cursor, &filter.sort);
     }
     if let Some(search) = filter.query {
         query.push(
@@ -1488,7 +1534,8 @@ pub async fn list_sources(
         .push_bind(search)
         .push(")");
     }
-    query.push(" ORDER BY o.id LIMIT ").push_bind(filter.limit);
+    push_object_list_order(&mut query, &filter.sort);
+    query.push(" LIMIT ").push_bind(filter.limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
@@ -2312,7 +2359,7 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
            t.completed_at,t.github_issue_url,t.brief_markdown,
-           o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE true"#,
+           o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(status) = filter.status {
         query.push(" AND t.status=").push_bind(status);
@@ -2322,9 +2369,11 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
             .push(" AND t.agent_suitable=")
             .push_bind(agent_suitable);
     }
-    query
-        .push(" ORDER BY o.updated_at DESC,o.id LIMIT ")
-        .push_bind(filter.limit);
+    if let Some(cursor) = filter.cursor {
+        push_object_list_cursor(&mut query, cursor, &filter.sort);
+    }
+    push_object_list_order(&mut query, &filter.sort);
+    query.push(" LIMIT ").push_bind(filter.limit);
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
