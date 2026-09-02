@@ -51,4 +51,26 @@ describe("minimal canonical UI", () => {
     expect(button).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("region", { name: "Connections graph" })).toBeVisible();
   });
+
+  it("renders canonical row slots in order and sends server-side sort choices", async () => {
+    const { container } = render(<App />);
+    expect(await screen.findByText(source.title)).toBeVisible();
+    const row = container.querySelector(".record")!;
+    expect(Array.from(row.children).slice(1).map((node) => node.className)).toEqual([
+      "record-kind", "record-id", "record-title", "record-source", "record-users", "description-snippet", "",
+    ]);
+    fireEvent.change(screen.getByRole("combobox", { name: "Sort Objects" }), { target: { value: "connections" } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("sort=connections"), expect.anything()));
+  });
+
+  it("refreshes only resources used by the current route", async () => {
+    render(<App />);
+    await screen.findByText(source.title);
+    vi.mocked(fetch).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh current view" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v2/objects?"), expect.anything()));
+    const paths = vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+    expect(paths.some((path) => path.includes("/api/v2/object-visuals"))).toBe(true);
+    expect(paths.some((path) => /\/api\/v2\/(tasks|sources|notes|themes|runs)/.test(path))).toBe(false);
+  });
 });

@@ -12,7 +12,7 @@ interface DragState { pointerId: number; clientX: number; clientY: number; x: nu
 
 const initialTransform: Transform = { x: 0, y: 0, scale: 1 };
 
-export function ConnectionGraphWorkspace() {
+export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: number }) {
   const [graph, setGraph] = useState<ConnectionGraphSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -21,19 +21,22 @@ export function ConnectionGraphWorkspace() {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [transform, setTransform] = useState<Transform>(initialTransform);
   const drag = useRef<DragState | null>(null);
+  const loadGeneration = useRef(0);
 
   const load = useCallback(() => {
+    const generation = ++loadGeneration.current;
     setLoading(true);
     setError(null);
     void api.connectionGraph()
       .then((snapshot) => {
+        if (generation !== loadGeneration.current) return;
         setGraph(snapshot);
         setSelection((current) => selectionExists(current, snapshot) ? current : null);
       })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "The graph could not be loaded."))
-      .finally(() => setLoading(false));
+      .catch((cause) => { if (generation === loadGeneration.current) setError(cause instanceof Error ? cause.message : "The graph could not be loaded."); })
+      .finally(() => { if (generation === loadGeneration.current) setLoading(false); });
   }, []);
-  useEffect(() => load(), [load]);
+  useEffect(() => load(), [load, refreshKey]);
 
   const layout = useMemo(
     () => layoutConnectionGraph(graph?.nodes ?? [], graph?.edges ?? []),

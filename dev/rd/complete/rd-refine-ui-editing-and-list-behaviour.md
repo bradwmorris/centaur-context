@@ -1,8 +1,9 @@
-# 8 — RD: Refine UI Editing, Details, Lists, and Refresh
+# RD: Refine UI Editing, Details, Lists, and Refresh
 
-**Status:** `scoped`
+**Status:** `complete`
 **Created:** 2026-09-02
 **Rebased:** 2026-09-02 on `e0c55b2` (`feat: add universal interaction runs and trace UI (#79)`)
+**GitHub Issue:** [#81](https://github.com/bradwmorris/centaur-context/issues/81)
 
 ## Execution Plan
 
@@ -33,10 +34,10 @@ Connections and Schema retain their graph/raw-table-specific ordering.
 
 ## What We Are Doing
 
-- [ ] Deliver all 11 requested UI and functionality updates consistently across
+- [x] Deliver all 11 requested UI and functionality updates consistently across
   every applicable list and opened-record page, rather than patching individual
   examples.
-- [ ] Prove that editing persists reliably, refresh reveals new server data,
+- [x] Prove that editing persists reliably, refresh reveals new server data,
   default and density ordering are correct, and dense/long content remains clean
   at desktop and narrow widths.
 
@@ -253,34 +254,48 @@ Connections and Schema retain their graph/raw-table-specific ordering.
 
 ## Checks
 
-- [ ] UI tests cover all list families and semantic slot order; exact type codes;
+- [x] UI tests cover all list families and semantic slot order; exact type codes;
   source icon domain/kind resolution and broken fallback; related rows in both
   Connection directions; heading metadata separation; two-line title bounds;
   Note/Task body rules; compact Run controls, mutations, and trace rows; and
   preservation of root/child Runs, metrics, outcome, related roles, and expanded
   technical evidence.
-- [ ] Editor tests use fake timers and deferred responses to prove debounce,
+- [x] Editor tests use fake timers and deferred responses to prove debounce,
   blur/manual save, keyboard behavior, no-op suppression, write serialization,
   latest-draft wins, returned-revision advancement, retry, `409` preservation,
   accessible status, and stale-response protection.
-- [ ] Rust API/database tests prove accepted/rejected sort values, recent creation
+- [x] Rust API/database tests prove accepted/rejected sort values, recent creation
   ordering after later edits, density counts excluding archived Connections,
   deterministic ties, zero-degree inclusion, search/kind behavior, and stable
   pagination with no duplicates or omissions.
-- [ ] Refresh tests prove only current-route resources reload, detail auxiliaries
+- [x] Refresh tests prove only current-route resources reload, detail auxiliaries
   and visuals update, existing content remains during loading, drafts survive,
   duplicate/stale requests cannot win, and failures remain recoverable.
-- [ ] Browser verification at 1440, 1024, 820, 640, and 320 px covers long titles,
+- [x] Browser verification at 1440, 1024, 820, 640, and 320 px covers long titles,
   UUIDs, descriptions, source URLs, missing icons, many users, high-density rows,
   keyboard/focus behavior, and no overlap or page-level horizontal overflow.
-- [ ] Query plans are inspected on representative recent/density datasets; any
+- [x] Query plans are inspected on representative recent/density datasets; any
   migration has a disposable-database contract test.
-- [ ] The landed universal interaction/Run regressions remain green, including
+- [x] The landed universal interaction/Run regressions remain green, including
   `tests/slack_runs.rs`, Run tree/detail database coverage, workflow trace API
   authorization, current and legacy trace fixtures, and root-only Run listing.
-- [ ] `npm --prefix web test`, `npm --prefix web run type-check`, and
+- [x] `npm --prefix web test`, `npm --prefix web run type-check`, and
   `npm --prefix web run build` pass.
-- [ ] All repository-root verification commands and `git diff --check` pass.
+- [x] All repository-root verification commands and `git diff --check` pass.
+
+## Verification Results
+
+- 49 Vitest checks passed; editor coverage includes debounce, manual/keyboard
+  save, no-op suppression, serialization/coalescing, retry, and conflict draft
+  preservation.
+- The full Rust, clippy, formatting, production build, Python compile, and 15
+  Python client checks passed. Database list ordering and the Slack Run contract
+  also passed against a disposable pgvector-backed `centaur_context_test` database.
+- `EXPLAIN` confirmed the recent list uses `objects_active_created_idx`; density
+  uses the active Object index plus bounded source- and target-endpoint index
+  lookups. No canonical or external database was queried.
+- Browser checks at 1440, 1024, 820, 640, and 320 px found no page-level
+  horizontal overflow; Refresh and sorting remained visible at every width.
 
 ## Approval Boundary
 

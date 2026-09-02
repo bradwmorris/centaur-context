@@ -539,16 +539,26 @@ fn normalize_thread_key(value: &str) -> Option<String> {
 #[derive(Debug, Deserialize)]
 struct ThemeListQuery {
     slug: Option<String>,
+    sort: Option<String>,
+    cursor: Option<Uuid>,
+    limit: Option<i64>,
 }
 
 async fn list_themes(
     State(state): State<AppState>,
     Query(query): Query<ThemeListQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let sort = list_sort(query.sort)?;
     let data = if let Some(slug) = query.slug {
         vec![db::get_theme_by_slug(&state.pool, &crate::domain::theme_slug(slug)?).await?]
     } else {
-        db::list_themes(&state.pool).await?
+        db::list_themes(
+            &state.pool,
+            sort,
+            query.cursor,
+            bounded_object_limit(query.limit),
+        )
+        .await?
     };
     Ok(Json(json!({"data":data})))
 }
@@ -699,6 +709,7 @@ struct SourceListQuery {
     source_kind: Option<String>,
     cursor: Option<Uuid>,
     limit: Option<i64>,
+    sort: Option<String>,
 }
 
 async fn source_page(state: &AppState, query: SourceListQuery) -> Result<Value, ApiError> {
@@ -713,6 +724,7 @@ async fn source_page(state: &AppState, query: SourceListQuery) -> Result<Value, 
                 .transpose()?,
             cursor: query.cursor,
             limit: limit + 1,
+            sort: list_sort(query.sort)?,
         },
     )
     .await?;
@@ -1148,6 +1160,7 @@ struct NoteListQuery {
     q: Option<String>,
     cursor: Option<Uuid>,
     limit: Option<i64>,
+    sort: Option<String>,
 }
 
 async fn note_page(state: &AppState, query: NoteListQuery) -> Result<Value, ApiError> {
@@ -1158,6 +1171,7 @@ async fn note_page(state: &AppState, query: NoteListQuery) -> Result<Value, ApiE
             query: optional_text(query.q, "q", 1000)?,
             cursor: query.cursor,
             limit: limit + 1,
+            sort: list_sort(query.sort)?,
         },
     )
     .await?;
@@ -1292,6 +1306,7 @@ struct ObjectListQuery {
     lifecycle: Option<String>,
     cursor: Option<Uuid>,
     limit: Option<i64>,
+    sort: Option<String>,
 }
 
 async fn list_objects(
@@ -1314,6 +1329,7 @@ async fn list_objects(
             lifecycle,
             cursor: query.cursor,
             limit: bounded_object_limit(query.limit),
+            sort: list_sort(query.sort)?,
             text_search_config: state.text_search_config,
         },
     )
@@ -1573,6 +1589,8 @@ struct TaskListQuery {
     #[serde(alias = "agent_eligible")]
     agent_suitable: Option<bool>,
     limit: Option<i64>,
+    sort: Option<String>,
+    cursor: Option<Uuid>,
 }
 
 async fn list_tasks(
@@ -1589,6 +1607,8 @@ async fn list_tasks(
             status,
             agent_suitable: query.agent_suitable,
             limit: bounded_limit(query.limit),
+            cursor: query.cursor,
+            sort: list_sort(query.sort)?,
         },
     )
     .await?;
@@ -2060,6 +2080,16 @@ fn bounded_object_limit(limit: Option<i64>) -> i64 {
     limit.unwrap_or(50).clamp(1, 500)
 }
 
+fn list_sort(value: Option<String>) -> Result<db::ListSort, ApiError> {
+    match value.as_deref().unwrap_or("recent") {
+        "recent" => Ok(db::ListSort::Recent),
+        "connections" => Ok(db::ListSort::Connections),
+        _ => Err(ApiError::BadRequest(
+            "sort must be recent or connections".to_owned(),
+        )),
+    }
+}
+
 fn idempotency_key(
     headers: &HeaderMap,
     required: bool,
@@ -2214,7 +2244,8 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_limit, bounded_object_limit, inferred_publication_precision};
+    use super::{bounded_limit, bounded_object_limit, inferred_publication_precision, list_sort};
+    use crate::db::ListSort;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     #[test]
@@ -2230,5 +2261,15 @@ mod tests {
         let instant = OffsetDateTime::parse("2026-08-30T00:00:01Z", &Rfc3339).unwrap();
         assert_eq!(inferred_publication_precision(day), "day");
         assert_eq!(inferred_publication_precision(instant), "instant");
+    }
+
+    #[test]
+    fn list_sort_defaults_and_fails_closed() {
+        assert!(matches!(list_sort(None).unwrap(), ListSort::Recent));
+        assert!(matches!(
+            list_sort(Some("connections".into())).unwrap(),
+            ListSort::Connections
+        ));
+        assert!(list_sort(Some("updated".into())).is_err());
     }
 }

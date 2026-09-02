@@ -1,45 +1,42 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { interceptNavigation, objectPath, navigate, schemaPath, schemaRowPath, schemaView } from "./routing";
 import type { SchemaForeignKey, SchemaRowPage, SchemaSnapshot, SchemaTable } from "./types";
 
 interface Props {
   selectedTable: string | null;
+  refreshKey?: number;
 }
 
 const countFormatter = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 
-export function SchemaWorkspace({ selectedTable }: Props) {
+export function SchemaWorkspace({ selectedTable, refreshKey = 0 }: Props) {
   const [snapshot, setSnapshot] = useState<SchemaSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
   const mode = schemaView(window.location.pathname);
 
   const refresh = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const next = await api.schema();
+      if (generation !== loadGeneration.current) return;
       setSnapshot(next);
       setError(null);
       if (selectedTable && !next.tables.some((table) => table.name === selectedTable)) {
         navigate(schemaPath());
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The schema could not be loaded.");
+      if (generation === loadGeneration.current) setError(cause instanceof Error ? cause.message : "The schema could not be loaded.");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [selectedTable]);
 
   useEffect(() => {
     void refresh();
-    const onFocus = () => void refresh();
-    window.addEventListener("focus", onFocus);
-    const interval = window.setInterval(() => void refresh(), 60_000);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.clearInterval(interval);
-    };
-  }, [refresh]);
+  }, [refresh, refreshKey]);
 
   const table = snapshot?.tables.find((item) => item.name === selectedTable) ?? null;
   return <section className="schema-workspace" aria-label="Database schema">

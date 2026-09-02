@@ -8,6 +8,8 @@ interface ErrorEnvelope {
   error?: { code?: string; message?: string };
 }
 
+export type ListSort = "recent" | "connections";
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -61,17 +63,18 @@ export const api = {
   schemaProfile(table: string) {
     return request<SchemaProfile>(`/api/v2/schema/tables/${encodeURIComponent(table)}/profile`);
   },
-  async objects(query = "", kind?: string) {
+  async objects(query = "", kind?: string, sort: ListSort = "recent") {
     const items: SharedObject[] = [];
     let cursor: string | undefined;
     do {
       const params = new URLSearchParams({ lifecycle: "active", limit: "500" });
       if (query.trim()) params.set("q", query.trim());
       if (kind) params.set("kind", kind);
+      params.set("sort", sort);
       if (cursor) params.set("cursor", cursor);
       const page = await request<SharedObject[]>(`/api/v2/objects?${params}`);
       items.push(...page);
-      cursor = kind && page.length === 500 ? page.at(-1)?.id : undefined;
+      cursor = page.length === 500 ? page.at(-1)?.id : undefined;
     } while (cursor);
     return items;
   },
@@ -138,8 +141,17 @@ export const api = {
   undoRun(id: string) {
     return request<Record<string, unknown>>(`/api/v2/runs/${id}/undo`, write("POST", {}));
   },
-  tasks() {
-    return request<Task[]>("/api/v2/tasks");
+  async tasks(sort: ListSort = "recent") {
+    const items: Task[] = [];
+    let cursor: string | undefined;
+    do {
+      const params = new URLSearchParams({ sort, limit: "100" });
+      if (cursor) params.set("cursor", cursor);
+      const page = await request<Task[]>(`/api/v2/tasks?${params}`);
+      items.push(...page);
+      cursor = page.length === 100 ? page.at(-1)?.object_id : undefined;
+    } while (cursor);
+    return items;
   },
   task(id: string) {
     return request<Task>(`/api/v2/tasks/${id}`);
@@ -150,10 +162,17 @@ export const api = {
   updateTask(id: string, body: Record<string, unknown>) {
     return request<Task>(`/api/v2/tasks/${id}`, write("PATCH", body));
   },
-  sources(query = "") {
-    const params = new URLSearchParams({ limit: "100" });
-    if (query.trim()) params.set("q", query.trim());
-    return request<SourcePage>(`/api/v2/sources?${params}`);
+  async sources(query = "", sort: ListSort = "recent") {
+    const items: Source[] = [];
+    let cursor: string | null = null;
+    do {
+      const params = new URLSearchParams({ limit: "100", sort });
+      if (query.trim()) params.set("q", query.trim());
+      if (cursor) params.set("cursor", cursor);
+      const page = await request<SourcePage>(`/api/v2/sources?${params}`);
+      items.push(...page.items); cursor = page.next_cursor;
+    } while (cursor);
+    return { items, next_cursor: null };
   },
   source(id: string) {
     return request<Source>(`/api/v2/sources/${id}`);
@@ -177,10 +196,17 @@ export const api = {
   embeddingStatus() {
     return request<EmbeddingStatus>("/api/v2/embeddings/status");
   },
-  notes(query = "") {
-    const params = new URLSearchParams({ limit: "100" });
-    if (query.trim()) params.set("q", query.trim());
-    return request<NotePage>(`/api/v2/notes?${params}`);
+  async notes(query = "", sort: ListSort = "recent") {
+    const items: NotePage["items"] = [];
+    let cursor: string | null = null;
+    do {
+      const params = new URLSearchParams({ limit: "100", sort });
+      if (query.trim()) params.set("q", query.trim());
+      if (cursor) params.set("cursor", cursor);
+      const page = await request<NotePage>(`/api/v2/notes?${params}`);
+      items.push(...page.items); cursor = page.next_cursor;
+    } while (cursor);
+    return { items, next_cursor: null };
   },
   note(id: string) {
     return request<Note>(`/api/v2/notes/${id}`);
@@ -191,8 +217,17 @@ export const api = {
   createNote(body: Record<string, unknown>) {
     return request<Note>("/api/v2/notes", write("POST", body));
   },
-  themes() {
-    return request<Theme[]>("/api/v2/themes");
+  async themes(sort: ListSort = "recent") {
+    const items: Theme[] = [];
+    let cursor: string | undefined;
+    do {
+      const params = new URLSearchParams({ sort, limit: "500" });
+      if (cursor) params.set("cursor", cursor);
+      const page = await request<Theme[]>(`/api/v2/themes?${params}`);
+      items.push(...page);
+      cursor = page.length === 500 ? page.at(-1)?.object_id : undefined;
+    } while (cursor);
+    return items;
   },
   theme(id: string) {
     return request<Theme>(`/api/v2/themes/${id}`);

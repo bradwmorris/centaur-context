@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { AttributionList, AttributionStack, ObjectTypeBadge, SourceBadge, TaskStatusBadge } from "./RecordVisuals";
+import { AttributionList, AttributionStack, ObjectTypeBadge, SourceBadge, SourceSiteIcon, TaskStatusBadge } from "./RecordVisuals";
 
 const user = {
   object_id: "11111111-1111-4111-8111-111111111111",
@@ -23,6 +23,24 @@ describe("record visual language", () => {
     }
     expect(screen.getByText("Memory")).toHaveTextContent("✦Memory");
     expect(screen.getByText("Blocked")).toHaveTextContent("!Blocked");
+  });
+
+  it("uses fixed accessible compact type codes", () => {
+    render(<>{(["task", "chat", "user", "entity", "memory", "source", "note", "theme"] as const).map((kind) => <ObjectTypeBadge kind={kind} compact key={kind} />)}</>);
+    for (const [name, code] of [["Task", "TAS"], ["Chat", "CHA"], ["User", "USE"], ["Entity", "ENT"], ["Memory", "MEM"], ["Source", "SOU"], ["Note", "NOT"], ["Theme", "THE"]]) {
+      expect(screen.getByLabelText(name)).toHaveTextContent(code);
+    }
+  });
+
+  it("resolves built-in source sites and removes broken generic favicons", () => {
+    const { container } = render(<><SourceSiteIcon sourceKind="video" canonicalUri="https://youtube.com/watch?v=1" /><SourceSiteIcon sourceKind="social_post" canonicalUri="https://x.com/centaur/status/1" /><SourceSiteIcon sourceKind="paper" canonicalUri={null} /><SourceSiteIcon sourceKind="article" canonicalUri="https://example.test/story" /></>);
+    expect(container.querySelector('[title="YouTube"] svg')).toBeVisible();
+    expect(container.querySelector('[title="X"] svg')).toBeVisible();
+    expect(container.querySelector('[title="Paper archive"]')).toBeVisible();
+    const favicon = container.querySelector('img[src="https://example.test/favicon.ico"]')!;
+    expect(favicon).toBeVisible();
+    fireEvent.error(favicon);
+    expect(container.querySelector('img[src="https://example.test/favicon.ico"]')).not.toBeInTheDocument();
   });
 
   it("uses an accessible Slack source icon", () => {

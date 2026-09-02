@@ -231,6 +231,7 @@ export interface NoteSummary {
   revision: number;
   content_format: "plain_text" | "markdown";
   excerpt: string;
+  created_at: string;
   updated_at: string;
 }
 
