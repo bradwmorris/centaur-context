@@ -826,10 +826,10 @@ class CentaurContextClient:
         principal_id: str | None = None,
         thread_key: str | None = None,
         *,
-        attempts: int = 12,
+        attempts: int = 36,
         interval_seconds: float = 5,
     ) -> dict[str, Any]:
-        """Wait for intake readiness inside one externally visible tool call."""
+        """Wait up to three minutes for intake readiness in one visible tool call."""
         if attempts < 1 or attempts > 60:
             raise ValueError("attempts must be between 1 and 60")
         if interval_seconds < 0 or interval_seconds > 30:

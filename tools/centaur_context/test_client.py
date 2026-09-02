@@ -214,6 +214,22 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     assert task_payload["derived_from_source_object_ids"] == ["source-1"]
 
 
+def test_source_intake_wait_allows_long_transcripts_to_finish_after_twelve_polls():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"ready": len(requests) >= 13})
+
+    result = privileged_client(handler).source_intake_wait(
+        {"version": "centaur-context-source-intake-v3"},
+        interval_seconds=0,
+    )
+
+    assert result["ready"] is True
+    assert len(requests) == 13
+
+
 @pytest.mark.parametrize(
     "operation",
     [
