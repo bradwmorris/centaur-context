@@ -318,3 +318,13 @@ First reset manifest (generated 2026-09-02):
   and an explicit URL. The next take must begin with the approved surgical
   reset and prove the normal five-message wording resolves the step-4 target
   without correction.
+
+Next reset manifest after the diagnostic take:
+
+- SHA-256: `b7c44095b19c3bdfd9970e2ef94f01495341da4546215437668ff809bf4bcae7`
+- Exact fixture closure: 2 Objects, 12 Connections, 6 Runs, 1 Artifact, 15
+  Embeddings, 15 Run-owned Events, and 15 Events targeting fixture records.
+- The closure contains only Source `60a93eb0-5250-5074-9e2a-5b9550e53b7b`
+  and Note `2f890c6d-328b-4ea2-95e5-c8f0572a883c`; shared RSI targets survive.
+- This hash has not been executed and requires fresh approval because the graph
+  changed during the diagnostic retries.
