@@ -1612,6 +1612,9 @@ struct CreateTaskRequest {
     due_at: Option<String>,
     github_issue_url: Option<String>,
     brief_markdown: Option<String>,
+    originating_chat_object_id: Option<Uuid>,
+    #[serde(default)]
+    derived_from_source_object_ids: Vec<Uuid>,
 }
 
 fn default_task_status() -> String {
@@ -1654,6 +1657,8 @@ async fn create_task(
             completed_at: (status == "done").then(OffsetDateTime::now_utc),
             github_issue_url: github_issue_url(input.github_issue_url)?,
             brief_markdown: optional_text(input.brief_markdown, "brief_markdown", 100_000)?,
+            originating_chat_object_id: input.originating_chat_object_id,
+            derived_from_source_object_ids: input.derived_from_source_object_ids,
         },
         &key,
     )

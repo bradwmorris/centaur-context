@@ -787,6 +787,8 @@ pub struct NewTask {
     pub completed_at: Option<OffsetDateTime>,
     pub github_issue_url: Option<String>,
     pub brief_markdown: Option<String>,
+    pub originating_chat_object_id: Option<Uuid>,
+    pub derived_from_source_object_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2346,9 +2348,17 @@ pub async fn create_task(
     idempotency_key: &str,
 ) -> Result<Task, DbError> {
     if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+        reconcile_existing_task_links(pool, actor, id, &input, idempotency_key).await?;
         return get_task(pool, id).await;
     }
     validate_object_description(&input.title, &input.description)?;
+    let originating_chat_object_id = validate_note_links(
+        pool,
+        actor,
+        input.originating_chat_object_id,
+        &input.derived_from_source_object_ids,
+    )
+    .await?;
     if (input.status == "blocked") != input.blocked_reason.is_some() {
         return Err(DbError::Invalid(
             "blocked_reason is required exactly when status is blocked".into(),
@@ -2392,7 +2402,7 @@ pub async fn create_task(
     .bind(&input.brief_markdown)
     .execute(&mut *tx)
     .await?;
-    insert_event(
+    let run_id = insert_event(
         &mut tx,
         actor,
         "task",
@@ -2405,8 +2415,197 @@ pub async fn create_task(
         json!({"title": input.title, "status": input.status}),
     )
     .await?;
+    let mut connection_ids = Vec::new();
+    let mut sequence = 2_i64;
+    if let Some(chat_object_id) = originating_chat_object_id {
+        let connection_id = insert_note_connection(
+            &mut tx,
+            actor,
+            chat_object_id,
+            "about",
+            id,
+            "This conversation requested creation of the resulting Task.",
+            &input.provenance,
+        )
+        .await?;
+        insert_event_for_run(
+            &mut tx,
+            run_id,
+            sequence,
+            actor,
+            "connection",
+            connection_id,
+            chat_object_id,
+            "connected",
+            None,
+            None,
+            1,
+        )
+        .await?;
+        connection_ids.push(connection_id);
+        sequence += 1;
+    }
+    for source_object_id in &input.derived_from_source_object_ids {
+        let connection_id = insert_note_connection(
+            &mut tx,
+            actor,
+            id,
+            "derived_from",
+            *source_object_id,
+            "This Task follows up on the linked Source.",
+            &input.provenance,
+        )
+        .await?;
+        insert_event_for_run(
+            &mut tx,
+            run_id,
+            sequence,
+            actor,
+            "connection",
+            connection_id,
+            id,
+            "connected",
+            None,
+            None,
+            1,
+        )
+        .await?;
+        connection_ids.push(connection_id);
+        sequence += 1;
+    }
+    sqlx::query(
+        r#"UPDATE runs
+           SET chat_object_id=$2,primary_object_id=$3,
+               result=result||jsonb_build_object('connection_ids',$4::uuid[]),updated_at=now()
+           WHERE id=$1"#,
+    )
+    .bind(run_id)
+    .bind(originating_chat_object_id)
+    .bind(id)
+    .bind(&connection_ids)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     get_task(pool, id).await
+}
+
+async fn reconcile_existing_task_links(
+    pool: &PgPool,
+    actor: &ActorContext,
+    task_object_id: Uuid,
+    input: &NewTask,
+    idempotency_key: &str,
+) -> Result<(), DbError> {
+    let chat_object_id = validate_note_links(
+        pool,
+        actor,
+        input.originating_chat_object_id,
+        &input.derived_from_source_object_ids,
+    )
+    .await?;
+    let mut requested = Vec::new();
+    if let Some(chat_id) = chat_object_id {
+        requested.push((
+            chat_id,
+            "about",
+            task_object_id,
+            "This conversation requested creation of the resulting Task.",
+        ));
+    }
+    for source_id in &input.derived_from_source_object_ids {
+        requested.push((
+            task_object_id,
+            "derived_from",
+            *source_id,
+            "This Task follows up on the linked Source.",
+        ));
+    }
+    let mut missing = Vec::new();
+    for item in requested {
+        let exists: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(SELECT 1 FROM connections
+               WHERE source_object_id=$1 AND kind=$2 AND target_object_id=$3
+                 AND archived_at IS NULL)"#,
+        )
+        .bind(item.0)
+        .bind(item.1)
+        .bind(item.2)
+        .fetch_one(pool)
+        .await?;
+        if !exists {
+            missing.push(item);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let run_id = Uuid::new_v4();
+    let reconciliation_key = format!("{idempotency_key}:task-links-v1");
+    sqlx::query(
+        r#"INSERT INTO runs
+           (id,kind,status,actor_type,actor_id,chat_object_id,primary_object_id,
+            idempotency_key,input,result,completed_at)
+           VALUES ($1,'mutation','completed',$2,$3,$4,$5,$6,$7,$8,now())"#,
+    )
+    .bind(run_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(chat_object_id)
+    .bind(task_object_id)
+    .bind(format!(
+        "{}:{}:{}",
+        actor.actor_type, actor.actor_id, reconciliation_key
+    ))
+    .bind(json!({
+        "centaur_thread_key":actor.centaur_thread_key,
+        "centaur_execution_id":actor.centaur_execution_id,
+        "target_type":"object",
+        "target_id":task_object_id,
+        "action":"linked"
+    }))
+    .bind(json!({"affected_object_ids":[task_object_id]}))
+    .execute(&mut *tx)
+    .await?;
+
+    let mut connection_ids = Vec::new();
+    for (index, (source_id, kind, target_id, description)) in missing.into_iter().enumerate() {
+        let connection_id = insert_note_connection(
+            &mut tx,
+            actor,
+            source_id,
+            kind,
+            target_id,
+            description,
+            &input.provenance,
+        )
+        .await?;
+        insert_event_for_run(
+            &mut tx,
+            run_id,
+            index as i64 + 1,
+            actor,
+            "connection",
+            connection_id,
+            source_id,
+            "connected",
+            None,
+            None,
+            1,
+        )
+        .await?;
+        connection_ids.push(connection_id);
+    }
+    sqlx::query(
+        "UPDATE runs SET result=result||jsonb_build_object('connection_ids',$2::uuid[]) WHERE id=$1",
+    )
+    .bind(run_id)
+    .bind(&connection_ids)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn update_task(

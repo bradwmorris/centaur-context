@@ -131,6 +131,8 @@ def create_task(
     agent_suitable: bool = False,
     brief_markdown: str | None = None,
     provenance_json: str = "{}",
+    originating_chat_object_id: str | None = None,
+    derived_from_source_object_id: list[str] | None = None,
     idempotency_key: str = "",
 ) -> None:
     """Create an open Task using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
@@ -148,6 +150,8 @@ def create_task(
             agent_suitable=agent_suitable,
             brief_markdown=brief_markdown,
             provenance=provenance,
+            originating_chat_object_id=originating_chat_object_id,
+            derived_from_source_object_ids=derived_from_source_object_id,
             idempotency_key=idempotency_key,
         )
     )
@@ -302,6 +306,8 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("--agent-suitable", action="store_true")
     command.add_argument("--brief-markdown")
     command.add_argument("--provenance-json", default="{}")
+    command.add_argument("--originating-chat-object-id")
+    command.add_argument("--derived-from-source-object-id", action="append")
     command.add_argument("--idempotency-key", required=True)
 
     for name in (

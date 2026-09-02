@@ -645,6 +645,8 @@ class CentaurContextClient:
         agent_suitable: bool = False,
         brief_markdown: str | None = None,
         provenance: dict[str, Any] | None = None,
+        originating_chat_object_id: str | None = None,
+        derived_from_source_object_ids: list[str] | None = None,
         idempotency_key: str,
     ) -> dict[str, Any]:
         """Create an open Task with the separate, narrowly scoped write credential."""
@@ -680,6 +682,8 @@ class CentaurContextClient:
             "priority": priority,
             "agent_suitable": bool(agent_suitable),
             "provenance": provenance or {},
+            "originating_chat_object_id": _clean(originating_chat_object_id),
+            "derived_from_source_object_ids": derived_from_source_object_ids or [],
         }
         if due_at:
             payload["due_at"] = due_at

@@ -139,6 +139,8 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         title="Follow up on research",
         description="A bounded follow-up Task created through the narrow write listener.",
         brief_markdown="Review the captured evidence.",
+        originating_chat_object_id="chat-1",
+        derived_from_source_object_ids=["source-1"],
         idempotency_key="task-1",
     )
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
@@ -174,6 +176,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     note_payload = json.loads(requests[0].content)
     assert note_payload["originating_chat_object_id"] == "chat-1"
     assert note_payload["derived_from_source_object_ids"] == ["source-1"]
+    task_payload = json.loads(requests[1].content)
+    assert task_payload["originating_chat_object_id"] == "chat-1"
+    assert task_payload["derived_from_source_object_ids"] == ["source-1"]
 
 
 @pytest.mark.parametrize(
