@@ -27,7 +27,10 @@ def uuid(value: str) -> str:
 
 
 def run(*args: str) -> str:
-    completed = subprocess.run(args, check=True, text=True, capture_output=True)
+    completed = subprocess.run(args, text=True, capture_output=True)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"command failed ({completed.returncode}): {detail}")
     return completed.stdout.strip()
 
 
@@ -65,6 +68,7 @@ def manifest(namespace: str, pod: str, object_ids: list[str]) -> dict[str, Any]:
             WITH RECURSIVE seed AS (
               SELECT DISTINCT r.id FROM runs r LEFT JOIN object_events e ON e.run_id=r.id
               WHERE r.primary_object_id IN ({ids})
+                 OR r.chat_object_id IN ({ids})
                  OR (e.target_type='object' AND e.target_id IN ({ids}))
                  OR (e.target_type='connection' AND e.target_id IN ({connection_sql}))
             ), selected(id) AS (
@@ -150,7 +154,7 @@ def delete(namespace: str, pod: str, value: dict[str, Any]) -> None:
     psql(namespace, pod, f"""
         BEGIN;
         SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='30s';
-        LOCK TABLE objects,connections,sources,notes,tasks,chats,users,entities,memories,themes,artifacts,embeddings,runs,object_events IN SHARE ROW EXCLUSIVE MODE;
+        LOCK TABLE objects,connections,sources,notes,tasks,chats,chat_messages,users,entities,memories,themes,artifacts,embeddings,runs,object_events IN SHARE ROW EXCLUSIVE MODE;
         ALTER TABLE artifacts DISABLE TRIGGER artifacts_are_immutable;
         ALTER TABLE object_events DISABLE TRIGGER object_events_are_immutable;
         DELETE FROM object_events WHERE run_id IN ({runs})
@@ -159,6 +163,9 @@ def delete(namespace: str, pod: str, value: dict[str, Any]) -> None:
         DELETE FROM connections WHERE id IN ({connections});
         DELETE FROM runs WHERE id IN ({runs});
         DELETE FROM embeddings WHERE object_id IN ({ids});
+        UPDATE chats SET curated_through_message_id=NULL,
+          curation_queued_through_message_id=NULL WHERE object_id IN ({ids});
+        DELETE FROM chat_messages WHERE chat_object_id IN ({ids});
         DELETE FROM sources WHERE object_id IN ({ids});
         DELETE FROM notes WHERE object_id IN ({ids});
         DELETE FROM tasks WHERE object_id IN ({ids});
