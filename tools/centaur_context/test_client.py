@@ -231,6 +231,37 @@ def test_source_intake_wait_allows_long_transcripts_to_finish_after_twelve_polls
     assert len(requests) == 13
 
 
+def test_create_note_accepts_documented_provenance_on_first_request():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"object_id": "note-1"})
+
+    result = privileged_client(handler).create_note(
+        title="Recursive self-improvement",
+        description="A source-grounded note.",
+        content="Evidence",
+        provenance={"source_type": "slack", "source_ref": "1700000000.000001"},
+        derived_from_source_object_ids=["source-1"],
+        idempotency_key="1700000000.000001",
+    )
+
+    assert result["object_id"] == "note-1"
+    assert len(requests) == 1
+
+
+def test_create_note_rejects_undocumented_passage_provenance_before_request():
+    with pytest.raises(ValueError, match="passage_end, passage_start"):
+        privileged_client(lambda _: response({})).create_note(
+            title="Recursive self-improvement",
+            description="A source-grounded note.",
+            content="Evidence",
+            provenance={"passage_start": 1, "passage_end": 2},
+            idempotency_key="note-invalid-provenance",
+        )
+
+
 @pytest.mark.parametrize(
     "operation",
     [

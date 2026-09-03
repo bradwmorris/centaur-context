@@ -26,6 +26,21 @@ RESEARCH_MUTATION_TOKEN_NAME = "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN"
 EXTERNAL_ACTION_TOKEN_NAME = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN"
 MAX_SOURCE_CONTENT_WINDOW = 20_000
 MAX_NOTE_CONTENT = 100_000
+PROVENANCE_KEYS = frozenset({"source_type", "source_ref", "note", "publication_allowed"})
+
+
+def _validated_provenance(value: dict[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("provenance must be a JSON object")
+    unknown = sorted(set(value) - PROVENANCE_KEYS)
+    if unknown:
+        allowed = ", ".join(sorted(PROVENANCE_KEYS))
+        raise ValueError(
+            f"unsupported provenance keys: {', '.join(unknown)}; accepted keys: {allowed}"
+        )
+    return value
 
 
 class _UrllibResponse:
@@ -643,8 +658,7 @@ class CentaurContextClient:
             raise ValueError("content must be at most 100000 characters")
         if content_format not in {"markdown", "plain_text"}:
             raise ValueError("content_format must be markdown or plain_text")
-        if provenance is not None and not isinstance(provenance, dict):
-            raise ValueError("provenance must be a JSON object")
+        provenance = _validated_provenance(provenance)
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
         if len(idempotency_key) > 200:
@@ -657,7 +671,7 @@ class CentaurContextClient:
                 "description": description,
                 "content": content,
                 "content_format": content_format,
-                "provenance": provenance or {},
+                "provenance": provenance,
                 "originating_chat_object_id": _clean(originating_chat_object_id),
                 "derived_from_source_object_ids": derived_from_source_object_ids or [],
             },
@@ -701,8 +715,7 @@ class CentaurContextClient:
             raise ValueError("priority must be low, medium, high, or urgent")
         if len(brief_markdown) > MAX_NOTE_CONTENT:
             raise ValueError("brief_markdown must be at most 100000 characters")
-        if provenance is not None and not isinstance(provenance, dict):
-            raise ValueError("provenance must be a JSON object")
+        provenance = _validated_provenance(provenance)
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
         if len(idempotency_key) > 200:
@@ -713,7 +726,7 @@ class CentaurContextClient:
             "status": "todo",
             "priority": priority,
             "agent_suitable": bool(agent_suitable),
-            "provenance": provenance or {},
+            "provenance": provenance,
             "originating_chat_object_id": _clean(originating_chat_object_id),
             "derived_from_source_object_ids": derived_from_source_object_ids or [],
         }

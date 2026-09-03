@@ -103,7 +103,7 @@ def create_note(
     derived_from_source_object_id: list[str] | None = None,
     idempotency_key: str = "",
 ) -> None:
-    """Create a Note using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
+    """Create a Note. Provenance accepts source_type, source_ref, note, publication_allowed."""
     try:
         provenance = json.loads(provenance_json)
     except json.JSONDecodeError as exc:
@@ -291,12 +291,25 @@ def _build_parser() -> argparse.ArgumentParser:
     command = commands.add_parser("read-note")
     command.add_argument("note_id")
 
-    command = commands.add_parser("create-note")
+    command = commands.add_parser(
+        "create-note",
+        description=(
+            "Create a Note. --provenance-json accepts only source_type, source_ref, "
+            "note, and publication_allowed."
+        ),
+    )
     command.add_argument("title")
     command.add_argument("--description", required=True)
     command.add_argument("--content", required=True)
     command.add_argument("--content-format", default="markdown")
-    command.add_argument("--provenance-json", default="{}")
+    command.add_argument(
+        "--provenance-json",
+        default="{}",
+        help=(
+            'JSON object using only source_type, source_ref, note, publication_allowed; '
+            'example: {"source_type":"slack","source_ref":"1700000000.000001"}'
+        ),
+    )
     command.add_argument("--originating-chat-object-id")
     command.add_argument("--derived-from-source-object-id", action="append")
     command.add_argument("--idempotency-key", required=True)
