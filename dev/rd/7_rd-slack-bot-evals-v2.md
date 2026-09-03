@@ -693,6 +693,16 @@ from a newly approved surgical reset and complete the exact five messages once,
 without intervention. Two consecutive clean-reset passes remain the acceptance
 bar.
 
+Candidate 6 reset preview (not executed):
+
+- Manifest SHA-256:
+  `bcab64f8137a8598974374c48b87ce201f663b56008b374a0b208142e5c4baad`.
+- Exact database closure: the 2 current Slack Chats, Source, Note, 15
+  Connections, 14 Runs, 1 Artifact, 17 embeddings, 20 Run-owned Events, and 20
+  Events targeting fixture records. Shared Objects remain outside the Object
+  deletion set. The corresponding Slack roots are `1788433478.117559` and
+  `1788433650.580309`; deletion awaits explicit approval of this exact preview.
+
 ## Video Narration Notes
 
 1. Add the podcast once; ingestion owns transcript processing, canonical Source
