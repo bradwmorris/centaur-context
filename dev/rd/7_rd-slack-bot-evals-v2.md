@@ -12,14 +12,13 @@ branches from RD #78 before execution begins.
 
 **Basis checked:** RD #78 live Slack evidence; interaction and workflow Runs;
 Source/Note read, write, and linkage contracts; retrieval and Run UI; local
-Kubernetes deployment. The Source currently exists as Object
-`c364005f-4cc9-58d2-8ed7-8ed4bce24460`; its identity and full dependency set
-must be verified before each reset.
+Kubernetes deployment. The fixture identity and full dependency set must be
+verified before each reset.
 
 **Current execution:** Candidate fixes are implemented on Issue #80 branches.
-Step 5's exact Object is selected from step 4 during each run. The first
-approved reset and one diagnostic take are complete; a new clean reset and two
-consecutive clean takes are still required.
+Two resets, one diagnostic take, and one functional rerun are complete. The
+latest rerun exposed remaining routing and efficiency defects, so it is not a
+clean pass. Two consecutive clean takes are still required.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -158,12 +157,6 @@ The step-5 command therefore creates or reuses the requested Note-to-Object
 Connection through the same path used by ingestion. The acceptance test must
 also ask Rez to add an already-ingested relationship and prove the result is one
 canonical Connection with both origins/evidence retained—not two edges.
-
-Before the next take, also fix the `read-artifact` client contract, align Rez's
-prompt with its granted tools, make Curator no-op reconciliation successful,
-reduce readiness polling, and provide batch/richer retrieval reads. Runs must
-record sanitized subcommands, error classes, duration, and disaggregated usage
-so headline tool and token counts are interpretable.
 
 ## Reset Contract
 
@@ -326,5 +319,53 @@ Next reset manifest after the diagnostic take:
   Embeddings, 15 Run-owned Events, and 15 Events targeting fixture records.
 - The closure contains only Source `60a93eb0-5250-5074-9e2a-5b9550e53b7b`
   and Note `2f890c6d-328b-4ea2-95e5-c8f0572a883c`; shared RSI targets survive.
-- This hash has not been executed and requires fresh approval because the graph
-  changed during the diagnostic retries.
+- Brad approved this exact hash and the reset completed successfully before the
+  next take.
+
+## Functional Rerun — 2026-09-03
+
+- Workflow `01a063f8-6d0a-726b-b950-f53a6cf876f0` created Source
+  `5b870a30-7257-55ca-b9cb-bb51d6a1f333` with ten links and 14 ready embeddings.
+- The source answer and recent-RSI retrieval were useful and grounded. Note
+  `738920bb-ea04-4fa3-88da-a6c49dbee50e` was created with its two intended
+  initial links.
+- The unmentioned step-3 reply did not dispatch to Rez. A tagged retry was
+  required, so the fixed five-message script did not pass unchanged.
+- Step 5 resolved the cited Ryan Greenblatt Source
+  `ee67e8c4-c7ea-5231-8626-9f76da35b7ba`, not decoy
+  `fc63ac35-8340-56db-a5e0-9064f28cb046`, and created exactly one Connection
+  `41220a6f-aa9e-4589-bd31-abb8268ca3f3`.
+
+## Surgical Efficiency Fixes — Next Candidate
+
+1. **Route thread replies once.** After Rez answers a thread, dispatch later
+   human replies in that thread to Rez without requiring another mention.
+   Mentioned replies must deduplicate by Slack message timestamp.
+2. **Make the stored Source authoritative.** Resolve it from the current
+   Chat/ingestion receipt and read its artifact. Do not invoke
+   `company_context`, global tool discovery, web search, or YouTube when that
+   complete artifact answers the question.
+3. **Remove ingestion refetches.** The analysis worker already has the transcript.
+   Remove its search tools or prohibit refetching; never send a placeholder key.
+4. **Stop help-command discovery.** Put exact `read-source`, `read-artifact`,
+   `create-note`, and `enyu-context-mutate connect` forms in Rez's instructions.
+   A normal take must contain no `centaur-tools list` or `--help` calls.
+5. **Align Note provenance.** Document accepted keys in CLI help and the Note
+   template. Add a regression proving the first create request is
+   valid; no rejected `passage_start`/`passage_end` retry is allowed.
+6. **Trust mutation receipts.** Treat successful create/mutation responses as
+   authoritative. Re-read only after an ambiguous response, conflict, or
+   explicit verification request.
+7. **Compact between Slack turns.** Preserve Slack-visible messages and a small
+   state record containing Source, Note, and selected-candidate IDs; exclude old
+   help text, transcripts, and tool output from later model inputs.
+8. **Use one rich RSI retrieval.** Step 4 should return titles, IDs, canonical
+   URLs, excerpts, and recency in one bounded result so step 5 can reuse the
+   selected ID without searching again.
+9. **Keep step 5 deterministic.** Read the Note and exact cited Source once,
+   then invoke the zero-model mutation workflow once with message-scoped
+   idempotency. Require one terminal receipt, one edge, and zero decoy edges.
+10. **Set trace acceptance limits.** Step 2 permits bounded Source/artifact
+    reads; step 3 one Note create; step 4 one rich retrieval; step 5 two reads
+    and one trigger. Any discovery call, schema retry, refetch, or failed tool
+    call fails the take even when the final answer is correct.
