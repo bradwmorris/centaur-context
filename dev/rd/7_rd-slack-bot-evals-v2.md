@@ -744,15 +744,44 @@ This is tracked as infrastructure noise rather than a clean-pass failure.
 Candidate 6 is the first complete clean-reset acceptance pass; one consecutive
 clean pass remains.
 
-Candidate 7 reset preview (not executed):
+## Candidate 7 Failure And Capacity Fix — 2026-09-04
 
-- Manifest SHA-256:
+- Brad approved manifest
   `baac2a1038077fff71d87d76d598c4c88332c770860c9bcca04b8506ac829620`.
-- Exact database closure: Candidate 6's 2 Chats, Source, Note, 12 Connections,
-  11 Runs, 1 Artifact, 17 embeddings, 17 Run-owned Events, and 17 Events
-  targeting fixture records. Shared Objects are outside the Object deletion
-  set. The corresponding Slack roots are `1788438664.546669` and
-  `1788438897.149659`; deletion awaits explicit approval of this exact preview.
+  The exact reset completed, both prior Slack roots were deleted, the canonical
+  URL count returned to zero, and all four shared RSI Objects survived.
+- Step 1 ran at Slack root `1788470712.207459`. Workflow
+  `01a06929-c53c-7c1f-87e6-fca26c6d2882` created Source
+  `ed5ca1df-db32-541b-984e-4c91e066df0c`, complete transcript Artifact
+  `a2c65150-a94c-5d95-a1c0-3b37b6305375`, 14/14 ready embeddings, and the same
+  five useful initial links. There was no redundant Task, and step 2 waited for
+  terminal readiness.
+- Steps 2–4 in Slack thread `1788470876.631939` passed without intervention.
+  Step 2 used the exact Source and transcript. Step 3 message
+  `1788470921.778849` created Note
+  `43bb870e-c8e3-48c0-b777-35e707ca3b7a` with exactly the Source and Chat
+  provenance links. Step 4 message `1788470959.548019` returned the same two
+  direct RSI Sources with IDs.
+- The first exact step-5 message `1788470996.464809` failed before model work:
+  `sandbox running capacity exceeded during cold_create: running=5,
+  max_running=4`. This take is not a clean acceptance pass.
+- Root cause was deterministic configuration mismatch. Fresh-per-turn Slack
+  sessions create one sandbox per action, while the local overlay protected
+  every completed sandbox from pressure eviction for 300 seconds under a hard
+  limit of four. A five-step flow could therefore exhaust capacity before its
+  oldest completed sandbox became eligible.
+- Enyu commit `eb1c331` sets the local overlay's
+  `sandboxHotIdleGraceSecs: 30` while retaining the four-sandbox hard limit.
+  This reclaims completed work instead of masking the issue by raising the
+  limit. All 20 overlay tests and Helm rendering pass; Helm revision 125 is
+  healthy with the value active.
+- A diagnostic retry at Slack timestamp `1788471185.522349` proved the fix.
+  Capacity pressure paused the completed step-1 sandbox, admitted the new turn
+  with `running_before=4`, and workflow
+  `01a06930-ec49-7a61-bb93-a978ef564ba8` created Connection
+  `b8e730fe-e2ce-4c3e-a5e3-13d9e25c4e81` from the Note to the first returned
+  RSI target. This confirms the repair but does not convert Candidate 7 into a
+  clean pass. Candidate 6 remains the only clean acceptance pass.
 
 ## Video Narration Notes
 
