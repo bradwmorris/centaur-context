@@ -15,11 +15,12 @@ Source/Note read, write, and linkage contracts; retrieval and Run UI; local
 Kubernetes deployment. The fixture identity and full dependency set must be
 verified before each reset.
 
-**Current execution:** Candidate 4 is implemented, tested, and deployed from
-Issue #80 branches. Candidate 3 completed all five user-visible actions but
-failed the efficiency bar and created one redundant Curator Task. The next
-exact reset manifest is prepared below and requires approval before Candidate 4
-can be tested. Two consecutive clean takes are still required.
+**Current execution:** Candidate 4 completed all five actions and proved the
+bounded recipes, Note creation, retrieval, and Connection mutation. The take
+also exposed and fixed artifact-read authorization, optional UUID
+serialization, Note-to-Chat linkage instructions, and sandbox-capacity
+headroom. Because those fixes were applied during the take, a clean reset and
+two consecutive clean post-fix takes are still required.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -559,7 +560,7 @@ calls discovering tools instead of following the bounded five-step recipes.
   persona-injection integration test passes; all 69 Enyu tests plus 15 subtests
   pass; Helm renders successfully; and `git diff --check` passes.
 
-Candidate 4 reset manifest (generated 2026-09-03; not executed):
+Candidate 4 reset manifest (generated and executed 2026-09-03):
 
 - SHA-256: `ada5077db1dab337f17f547039bac77f9cebc06db6a2d54216d5fc41fd72b2eb`
 - Exact closure: 3 Objects, 12 Connections, 7 Runs, 1 Artifact, 16 embeddings,
@@ -568,8 +569,66 @@ Candidate 4 reset manifest (generated 2026-09-03; not executed):
   redundant Task `97934cf5-82d5-4f18-8638-c9f7e959ce48`, and Note
   `63829ae4-b3d8-4e26-ac04-3431923c3087`. Pre-existing RSI Objects survive;
   only this take's Connections to them are included.
-- This exact hash requires fresh approval before deletion. Any intervening state
-  change invalidates it and requires a new dry run.
+- Brad approved this exact hash, and the transaction removed the stated closure
+  while preserving the shared RSI Objects.
+
+## Candidate 4 Take And Surgical Fixes — 2026-09-03
+
+- The first post-reset ingestion attempt failed before Source creation because
+  the local lab used the short `centaur-iron-proxy:latest` image name. The exact
+  failed Slack/DB closure was deleted after approval. Enyu commit `16b1715`
+  selects the cached GHCR repository; the clean step-1 root is
+  `1788430463.597139`.
+- Step 1 completed through workflow `01a066c3-a580-757d-a1ff-d678b9cf3fd5`.
+  Source `74c0dd73-de79-56e8-9d48-9bb9d4952e30` has one complete transcript,
+  14 embeddings, and the five desired initial links: Sarah Guo, Invest Like the
+  Best, Conviction, Agents, and the originating Slack Chat. There is one active
+  canonical Source for the URL and no redundant ingestion Task.
+- Steps 2–5 used Slack thread `1788430649.955449`. Step 2 found the exact Source
+  with one search, but its one bounded Artifact read failed because the narrow
+  grant omitted `/api/v2/artifacts/*`. Enyu commit `7e880f2` adds only the v1/v2
+  Artifact GET paths; a live read of artifact
+  `304c00cc-00aa-5fe7-b118-bc7e683304b4` now succeeds.
+- Step 3 initially hit leaked sandbox capacity, then exposed a client contract
+  bug: omitted `originating_chat_object_id` was serialized as `""`, causing HTTP
+  422. Context commit `66a8b47` preserves JSON `null` for omitted optional Note
+  and Task UUIDs, with 21 client tests passing. Enyu commits `6a8ea58` and
+  `e9bf8a3` reduce the warm pool from three to one under the unchanged total
+  limit of four and preserve the pinned API image structure. After deployment,
+  one create call produced Note `719f301a-fb21-4118-8683-a6fadb81fe73`.
+- The created Note has the correct `derived_from` Source link but no Chat link.
+  The persona had incorrectly claimed that link was automatic while omitting
+  the argument. Enyu commit `7e880f2` now requires the trusted Context packet's
+  `Current Slack Chat Object ID` via `--originating-chat-object-id`, so both
+  links are created in the Note transaction on the next take.
+- Step 4 used exactly one `search-sources` call and returned the two strongest
+  direct RSI Sources plus two clearly labelled adjacent Sources, all with IDs
+  and URLs. Step 5 read the exact Note and RSI Simulator Source once each, then
+  triggered one mutation. Workflow `01a066d5-35bf-705c-a537-3b8937b26dd1`
+  created exactly one `related_to` Connection,
+  `ec47eb97-3671-4c77-a6d1-350e4f5ea458`; no ingestion relationship was
+  duplicated.
+- Helm revision 123 is deployed from the feature worktrees. Repo cache pins
+  Centaur `ee7792d2`, Enyu `7e880f2`, and Context `66a8b47`. The protected
+  `/Users/bradleymorris/Desktop/dev/centaur` checkout was not changed.
+
+Successful-path model usage and substantive tools:
+
+| Step | Run | Total / cache-read tokens | Substantive tools |
+| --- | --- | ---: | ---: |
+| 1 | `206e587e-07ea-4244-ab70-7a8109f386d2` | 27,440 / 26,880 | 1 |
+| 2 | `266d77f8-9fe2-420e-960a-41e178f38ce2` | 28,241 / 27,648 | 2, one failed |
+| 3 | `a396dee7-02ca-4740-b3d4-dcc31b969e7b` | 27,992 / 26,752 | 1 |
+| 4 | `96bf254a-866a-45e3-83c8-7b71ddece236` | 30,684 / 26,880 | 1 |
+| 5 | `c67c667b-ab80-443b-8e64-92f65b51bafd` | 30,086 / 28,032 | 3 |
+
+The UI's large token number is accurate as total model input, but 136,192 of
+the 144,443 successful-path tokens were cache reads. Only 7,395 input tokens
+were not cache reads, plus 856 output tokens. Tool tracing currently undercounts
+commands chained in one shell invocation, so the sandbox shim audit is the
+authoritative step-5 count. The take is functional but not clean because two
+capacity attempts and one pre-fix 422 attempt remain in the Slack thread; do not
+use it as the final video take.
 
 ## Video Narration Notes
 
