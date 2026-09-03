@@ -15,11 +15,11 @@ Source/Note read, write, and linkage contracts; retrieval and Run UI; local
 Kubernetes deployment. The fixture identity and full dependency set must be
 verified before each reset.
 
-**Current execution:** Candidate fixes are implemented on Issue #80 branches.
-The latest complete five-step attempt exposed remaining provenance, thread
-context, and efficiency defects, so it is not a clean pass. Candidate 3 fixes
-are implemented and awaiting deployment plus a newly approved surgical reset.
-Two consecutive clean takes are still required.
+**Current execution:** Candidate 4 is implemented, tested, and deployed from
+Issue #80 branches. Candidate 3 completed all five user-visible actions but
+failed the efficiency bar and created one redundant Curator Task. The next
+exact reset manifest is prepared below and requires approval before Candidate 4
+can be tested. Two consecutive clean takes are still required.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -467,10 +467,11 @@ Candidate 2 reset manifest (generated and executed 2026-09-03):
    `message.channels` and `message.groups`, matching the live Rez repair and
    preventing an app reinstall from regressing unmentioned thread replies.
 
-Candidate 3 is not yet a passing take. It must be committed, deployed from the
-three feature worktrees, then exercised from a fresh exact reset manifest. The
-expanded fixture now includes the canonical Source, Curator duplicate Source,
-assistant-derived Memory, and Note, so the old reset hash must not be reused.
+Candidate 3 was not yet a passing take at this checkpoint. It had to be
+committed, deployed from the three feature worktrees, then exercised from a
+fresh exact reset manifest. The expanded fixture included the canonical Source,
+Curator duplicate Source, assistant-derived Memory, and Note, so the old reset
+hash could not be reused.
 
 Candidate 3 deployment and reset checkpoint:
 
@@ -491,6 +492,95 @@ Candidate 3 deployment and reset checkpoint:
   `a7308830-6b00-4f15-b8b7-f0290ac3a827`, assistant-derived Memory
   `f8f305f6-86e4-45c4-abc0-e4193d9bcadf`, and Note
   `c418dbf6-208e-4ced-ba9f-d234cefefbda`.
-- This deletion set is larger than the prior approved manifest. It has not been
-  executed and requires fresh approval of this exact hash under the reset
-  contract.
+- This deletion set was larger than the prior approved manifest. Brad approved
+  the exact hash and the reset completed before the Candidate 3 take.
+
+## Candidate 3 Take — 2026-09-03
+
+- The approved reset manifest
+  `448d463bb81057bb955f119b6472ef952ed9f693e80596ca4253be723b369e58`
+  executed successfully.
+- Step 1 ran at Slack root `1788421657.150639`. Workflow
+  `01a0663d-4a36-7ce4-ad09-4071b6792c43` created Source
+  `c0296c58-cb79-5c29-8e09-d8c1c06327f9`, one Artifact, 14 Source
+  embeddings, and eight useful ingestion Connections. This preserves the good
+  related-Object behavior and confirms Rez still routes Source creation through
+  ingestion.
+- The Curator incorrectly created redundant Task
+  `97934cf5-82d5-4f18-8638-c9f7e959ce48` (run
+  `415feec6-0abc-4a91-b7f3-506bd63f2d35`) by restating the already-completed
+  ingestion command. No duplicate Source was created.
+- Steps 2–5 ran in Slack thread `1788421897.373899`. Step 2 returned the correct
+  transcript-grounded answer with the 12:43 passage. Step 3 created Note
+  `63829ae4-b3d8-4e26-ac04-3431923c3087` with only the intended `derived_from`
+  Source link and Chat `about` link. Step 4 returned four useful recent RSI
+  ideas, though the visible response omitted their Object IDs.
+- The exact step-5 wording, `@Rez (enyu researcher) can you link our new note to
+  these items`, succeeded without a corrective user message. Workflow
+  `01a06647-d5e6-7d1d-88be-5c7eb0eeb1b5` created exactly one Connection,
+  `0a46db2a-74c6-4ce3-88be-25974228fecb`, from the new Note to existing Note
+  `70a7ce79-e61e-53b3-80f3-b759f35ad252`. It did not recreate ingestion links.
+
+Exact parent-run efficiency evidence:
+
+| Step | Run | Input / output tokens | Tool calls / failures |
+| --- | --- | ---: | ---: |
+| 2 | `c57dc643-3d1f-4eac-b423-ccffc0002ea3` | 31,187 / 193 | 13 / 4 |
+| 3 | `9e63a9f5-cf97-4448-afbd-3951f8aa8dc3` | 28,217 / 51 | 5 / 0 |
+| 4 | `bd8d92e0-b8ac-4d15-84ca-e7a787491fff` | 40,648 / 190 | 18 / 0 |
+| 5 | `53d0dfe6-ca70-4c7b-9f1d-f9db3ddb7b83` | 44,165 / 67 | 19 / 2 |
+
+The user-visible flow is now functional, but this is not a clean efficiency
+pass. The live sandbox set `AGENT_PERSONA=researcher` and
+`CENTAUR_PERSONA_SOURCE_PATH`, yet its Codex `thread/start` request did not
+include the persona prompt. Rez therefore saw generic instructions and spent
+calls discovering tools instead of following the bounded five-step recipes.
+
+## Candidate 4 Implementation And Deployment — 2026-09-03
+
+- Context commit `1c080873a660fa8858d7d4eadd19f062e2591f34` deterministically
+  rejects Curator Tasks that merely restate an explicit Source-ingestion
+  command. The prefilter and reconciliation backstop prevent the redundant Task
+  without changing ingestion's initial related Objects or Connections.
+- Centaur commit `ee7792d21014294191029aa86f20955dca32c32a` reads the selected
+  persona's `PROMPT.md` and injects it as Codex `developerInstructions` at
+  `thread/start`. A configured missing or empty prompt fails closed rather than
+  silently falling back to the generic agent.
+- Enyu deployment commit `f60cf7c` pins those two revisions and sandbox image
+  `centaur-agent:rd80-rsi-flow`. Follow-up commits `4f50ac0`, `3081fa0`, and
+  `e3e862f` wire the existing private-overlay token and make the unchanged local
+  console image deterministic. Commit `a2e93aa` updates the deployment-pin
+  regression.
+- Helm revision 118 is deployed. The repo cache is ready at Centaur
+  `ee7792d2`, Enyu `2f2653e6`, and Context `1c080873`; Rez, Ed, API, Console,
+  and Context are healthy. The Context UI returns HTTP 200 at
+  `http://127.0.0.1:8180/objects`.
+- Verification: 12 focused Context Curator tests pass; the focused Centaur
+  persona-injection integration test passes; all 69 Enyu tests plus 15 subtests
+  pass; Helm renders successfully; and `git diff --check` passes.
+
+Candidate 4 reset manifest (generated 2026-09-03; not executed):
+
+- SHA-256: `ada5077db1dab337f17f547039bac77f9cebc06db6a2d54216d5fc41fd72b2eb`
+- Exact closure: 3 Objects, 12 Connections, 7 Runs, 1 Artifact, 16 embeddings,
+  16 Run-owned Events, and 16 Events targeting fixture records.
+- The only Objects are Source `c0296c58-cb79-5c29-8e09-d8c1c06327f9`,
+  redundant Task `97934cf5-82d5-4f18-8638-c9f7e959ce48`, and Note
+  `63829ae4-b3d8-4e26-ac04-3431923c3087`. Pre-existing RSI Objects survive;
+  only this take's Connections to them are included.
+- This exact hash requires fresh approval before deletion. Any intervening state
+  change invalidates it and requires a new dry run.
+
+## Video Narration Notes
+
+1. Add the podcast once; ingestion owns transcript processing, canonical Source
+   creation, embeddings, and initial related Objects.
+2. Ask Rez a grounded question; show the Slack answer and the Source/Artifact
+   used in the UI.
+3. Ask for a Note; show that the Note is durably linked to both the Source and
+   the Slack conversation.
+4. Ask for other recent RSI work; show retrieval across existing Objects and
+   preserve the returned IDs for the next action.
+5. Ask Rez to link the new Note to the most relevant returned Object; show the
+   single idempotent Connection in the UI and explain that it does not duplicate
+   ingestion-created relationships.
