@@ -471,3 +471,26 @@ Candidate 3 is not yet a passing take. It must be committed, deployed from the
 three feature worktrees, then exercised from a fresh exact reset manifest. The
 expanded fixture now includes the canonical Source, Curator duplicate Source,
 assistant-derived Memory, and Note, so the old reset hash must not be reused.
+
+Candidate 3 deployment and reset checkpoint:
+
+- Context commit `7791c9ab6d8387707ae397993f4b58af91aa3d16`, Centaur
+  commit `e907441306c985c588cfba350f8f6204524fb30a`, and Enyu content
+  commit `2f2653e60e277b81ab54c17773d3f74b815f4fb2` are pushed. Enyu
+  deployment commits `a02ed88` and `002491f` pin those revisions and preserve
+  the existing 5 GiB Postgres claim instead of attempting an unrelated resize.
+- Candidate Slackbot and Context images were rebuilt from their feature
+  worktrees and loaded into the local `centaur-lab` cluster. Helm revision 112
+  is deployed and the Rez, Ed, and Enyu Context rollouts are healthy.
+- New dry-run manifest SHA-256:
+  `448d463bb81057bb955f119b6472ef952ed9f693e80596ca4253be723b369e58`.
+- Exact expanded closure: 4 Objects, 10 Connections, 6 Runs, 1 Artifact, 17
+  embeddings, 15 Run-owned Events, and 15 Events targeting fixture records.
+  The four Objects are canonical Source
+  `fb3b4e29-929d-5099-a961-fb97a1d8f3ab`, duplicate Curator Source
+  `a7308830-6b00-4f15-b8b7-f0290ac3a827`, assistant-derived Memory
+  `f8f305f6-86e4-45c4-abc0-e4193d9bcadf`, and Note
+  `c418dbf6-208e-4ced-ba9f-d234cefefbda`.
+- This deletion set is larger than the prior approved manifest. It has not been
+  executed and requires fresh approval of this exact hash under the reset
+  contract.
