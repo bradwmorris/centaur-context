@@ -1284,6 +1284,7 @@ async fn lock_run(
 struct MessageEvidence {
     id: Uuid,
     sender_kind: String,
+    content: String,
 }
 
 async fn load_message_window(
@@ -1291,7 +1292,7 @@ async fn load_message_window(
     run: &CuratorRun,
 ) -> Result<HashMap<Uuid, MessageEvidence>, CuratorError> {
     let messages: Vec<MessageEvidence> = sqlx::query_as(
-        r#"SELECT m.id,u.user_kind AS sender_kind FROM chat_messages m
+        r#"SELECT m.id,u.user_kind AS sender_kind,m.content FROM chat_messages m
            JOIN users u ON u.object_id=m.sender_user_object_id
            WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
              (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
@@ -1342,8 +1343,42 @@ fn validate_human_grounded_objects(
                 item.kind
             )));
         }
+        if item.kind == "task"
+            && evidence
+                .iter()
+                .any(|message| is_source_ingestion_request(&message.content))
+        {
+            return Err(CuratorError::Invalid(
+                "Source-ingestion requests are workflow commands, not durable Tasks".into(),
+            ));
+        }
     }
     Ok(())
+}
+
+fn is_source_ingestion_request(content: &str) -> bool {
+    let content = content.to_ascii_lowercase();
+    let explicit_ingestion = ["ingest", "import", "capture"]
+        .iter()
+        .any(|term| content.contains(term));
+    let names_source_material = [
+        "source",
+        "conversation",
+        "url",
+        "link",
+        "file",
+        "video",
+        "podcast",
+        "http://",
+        "https://",
+    ]
+    .iter()
+    .any(|term| content.contains(term));
+    let add_source = content.contains("add")
+        && ["source", "url", "file", "http://", "https://"]
+            .iter()
+            .any(|term| content.contains(term));
+    (explicit_ingestion && names_source_material) || add_source
 }
 
 fn drop_disallowed_worker_creates(
@@ -1353,6 +1388,13 @@ fn drop_disallowed_worker_creates(
     let human_message_ids = messages
         .iter()
         .filter(|message| message.sender_kind == "human")
+        .map(|message| message.id)
+        .collect::<HashSet<_>>();
+    let ingestion_request_ids = messages
+        .iter()
+        .filter(|message| {
+            message.sender_kind == "human" && is_source_ingestion_request(&message.content)
+        })
         .map(|message| message.id)
         .collect::<HashSet<_>>();
     let dropped = plan
@@ -1366,6 +1408,11 @@ fn drop_disallowed_worker_creates(
                             .supporting_message_ids
                             .iter()
                             .any(|id| !human_message_ids.contains(id))))
+                || (item.kind == "task"
+                    && item
+                        .supporting_message_ids
+                        .iter()
+                        .any(|id| ingestion_request_ids.contains(id)))
         })
         .map(|item| item.client_id.clone())
         .collect::<HashSet<_>>();
@@ -2212,7 +2259,7 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source and do not create a Task that restates the request; the dedicated ingestion workflow owns and executes that command. Tasks require task.confirmed=true and may be created or updated only for an explicit durable instruction or commitment that remains actionable after the current bot or workflow finishes. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -2699,6 +2746,13 @@ mod tests {
         }
     }
 
+    fn worker_message_with_content(id: Uuid, sender_kind: &str, content: &str) -> WorkerMessage {
+        WorkerMessage {
+            content: content.into(),
+            ..worker_message(id, sender_kind)
+        }
+    }
+
     fn created_object(
         client_id: &str,
         kind: &str,
@@ -2763,6 +2817,75 @@ mod tests {
     }
 
     #[test]
+    fn worker_filter_drops_tasks_that_restate_source_ingestion_commands() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("ingestion-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "can you add this conversation as source https://youtu.be/example",
+            )],
+        );
+
+        assert_eq!(dropped, vec!["ingestion-task"]);
+        assert!(plan.create_objects.is_empty());
+    }
+
+    #[test]
+    fn worker_filter_keeps_a_distinct_durable_task() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("durable-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "Please review the research brief by Friday",
+            )],
+        );
+
+        assert!(dropped.is_empty());
+        assert_eq!(plan.create_objects.len(), 1);
+    }
+
+    #[test]
+    fn worker_filter_does_not_treat_every_add_link_request_as_ingestion() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("link-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "Please add the launch link to the briefing task",
+            )],
+        );
+
+        assert!(dropped.is_empty());
+        assert_eq!(plan.create_objects.len(), 1);
+    }
+
+    #[test]
     fn reconcile_guard_rejects_any_curator_source() {
         let message_id = Uuid::new_v4();
         let plan = ReconciliationPlan {
@@ -2776,6 +2899,7 @@ mod tests {
             MessageEvidence {
                 id: message_id,
                 sender_kind: "human".into(),
+                content: "add this URL as a source https://example.com".into(),
             },
         )]);
 
