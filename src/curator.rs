@@ -497,8 +497,10 @@ async fn reconcile_owned(
             .await?;
     }
 
-    let message_ids = load_message_window(&mut tx, &run).await?;
+    let message_window = load_message_window(&mut tx, &run).await?;
+    let message_ids = message_window.keys().copied().collect::<HashSet<_>>();
     validate_message_refs(&plan, &message_ids)?;
+    validate_human_grounded_objects(&plan, &message_window)?;
     let mut created = HashMap::new();
     let mut changed_objects = HashMap::new();
     let mut sequence = 0_i32;
@@ -1278,12 +1280,19 @@ async fn lock_run(
     .ok_or(CuratorError::NotFound)
 }
 
+#[derive(Debug, FromRow)]
+struct MessageEvidence {
+    id: Uuid,
+    sender_kind: String,
+}
+
 async fn load_message_window(
     tx: &mut Transaction<'_, Postgres>,
     run: &CuratorRun,
-) -> Result<HashSet<Uuid>, CuratorError> {
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT m.id FROM chat_messages m
+) -> Result<HashMap<Uuid, MessageEvidence>, CuratorError> {
+    let messages: Vec<MessageEvidence> = sqlx::query_as(
+        r#"SELECT m.id,u.user_kind AS sender_kind FROM chat_messages m
+           JOIN users u ON u.object_id=m.sender_user_object_id
            WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
              (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
              AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3)
@@ -1294,12 +1303,88 @@ async fn load_message_window(
     .bind(run.last_message_id)
     .fetch_all(&mut **tx)
     .await?;
-    if ids.len() != run.message_count as usize {
+    if messages.len() != run.message_count as usize {
         return Err(CuratorError::Invalid(
             "curator run message window no longer matches its recorded count".into(),
         ));
     }
-    Ok(ids.into_iter().collect())
+    Ok(messages
+        .into_iter()
+        .map(|message| (message.id, message))
+        .collect())
+}
+
+fn validate_human_grounded_objects(
+    plan: &ReconciliationPlan,
+    messages: &HashMap<Uuid, MessageEvidence>,
+) -> Result<(), CuratorError> {
+    for item in &plan.create_objects {
+        if item.kind == "source" {
+            return Err(CuratorError::Invalid(
+                "Source creation is ingestion-only; the curator cannot create Sources".into(),
+            ));
+        }
+        if !matches!(item.kind.as_str(), "memory" | "task") {
+            continue;
+        }
+        let evidence = item
+            .supporting_message_ids
+            .iter()
+            .filter_map(|id| messages.get(id))
+            .collect::<Vec<_>>();
+        if evidence.is_empty()
+            || evidence
+                .iter()
+                .any(|message| message.sender_kind != "human")
+        {
+            return Err(CuratorError::Invalid(format!(
+                "curator-created {} Objects must be supported only by human-authored messages",
+                item.kind
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn drop_disallowed_worker_creates(
+    plan: &mut ReconciliationPlan,
+    messages: &[WorkerMessage],
+) -> Vec<String> {
+    let human_message_ids = messages
+        .iter()
+        .filter(|message| message.sender_kind == "human")
+        .map(|message| message.id)
+        .collect::<HashSet<_>>();
+    let dropped = plan
+        .create_objects
+        .iter()
+        .filter(|item| {
+            item.kind == "source"
+                || (matches!(item.kind.as_str(), "memory" | "task")
+                    && (item.supporting_message_ids.is_empty()
+                        || item
+                            .supporting_message_ids
+                            .iter()
+                            .any(|id| !human_message_ids.contains(id))))
+        })
+        .map(|item| item.client_id.clone())
+        .collect::<HashSet<_>>();
+    if dropped.is_empty() {
+        return Vec::new();
+    }
+    plan.create_objects
+        .retain(|item| !dropped.contains(&item.client_id));
+    plan.create_connections.retain(|connection| {
+        !object_ref_uses_client(&connection.source, &dropped)
+            && !object_ref_uses_client(&connection.target, &dropped)
+    });
+    let mut dropped = dropped.into_iter().collect::<Vec<_>>();
+    dropped.sort();
+    dropped
+}
+
+fn object_ref_uses_client(reference: &ObjectRef, client_ids: &HashSet<String>) -> bool {
+    matches!(reference, ObjectRef::Created { client_id } if client_ids.contains(client_id))
 }
 
 fn validate_message_refs(
@@ -1937,6 +2022,21 @@ pub async fn run_worker(
                 worker_context(&pool, embeddings.as_ref(), text_search_config, &run).await?;
             let mut plan =
                 request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
+            let dropped = drop_disallowed_worker_creates(&mut plan, &messages);
+            if !dropped.is_empty() {
+                crate::runs::append_curator_trace(
+                    &pool,
+                    run.id,
+                    "deterministic_filter",
+                    json!({"dropped_create_client_ids": dropped}),
+                )
+                .await
+                .map_err(|trace_error| {
+                    CuratorError::Invalid(format!(
+                        "curator deterministic-filter trace failed: {trace_error}"
+                    ))
+                })?;
+            }
             if let Err(error) = validate_plan(&mut plan) {
                 crate::runs::append_curator_trace(
                     &pool,
@@ -2586,6 +2686,106 @@ impl IntoResponse for CuratorApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn worker_message(id: Uuid, sender_kind: &str) -> WorkerMessage {
+        WorkerMessage {
+            id,
+            provider_message_id: id.to_string(),
+            sender_user_object_id: Uuid::new_v4(),
+            sender_title: sender_kind.into(),
+            sender_kind: sender_kind.into(),
+            content: "supporting message".into(),
+            source_created_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    fn created_object(
+        client_id: &str,
+        kind: &str,
+        supporting_message_ids: Vec<Uuid>,
+    ) -> CreateObject {
+        CreateObject {
+            client_id: client_id.into(),
+            kind: kind.into(),
+            title: format!("{kind} title"),
+            description: format!("A concrete {kind} description with enough grounded context."),
+            supporting_message_ids,
+            entity_kind: None,
+            task: None,
+            memory: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn worker_filter_drops_sources_and_their_connections() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("duplicate-source", "source", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![CreateConnection {
+                source: ObjectRef::Created {
+                    client_id: "duplicate-source".into(),
+                },
+                kind: "derived_from".into(),
+                target: ObjectRef::Existing {
+                    object_id: Uuid::new_v4(),
+                },
+                description: "Derived from the conversation.".into(),
+                supporting_message_ids: vec![human_id],
+            }],
+            update_connections: vec![],
+        };
+
+        let dropped =
+            drop_disallowed_worker_creates(&mut plan, &[worker_message(human_id, "human")]);
+
+        assert_eq!(dropped, vec!["duplicate-source"]);
+        assert!(plan.create_objects.is_empty());
+        assert!(plan.create_connections.is_empty());
+    }
+
+    #[test]
+    fn worker_filter_drops_assistant_derived_memories() {
+        let agent_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("assistant-memory", "memory", vec![agent_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped =
+            drop_disallowed_worker_creates(&mut plan, &[worker_message(agent_id, "agent")]);
+
+        assert_eq!(dropped, vec!["assistant-memory"]);
+        assert!(plan.create_objects.is_empty());
+    }
+
+    #[test]
+    fn reconcile_guard_rejects_any_curator_source() {
+        let message_id = Uuid::new_v4();
+        let plan = ReconciliationPlan {
+            create_objects: vec![created_object("source", "source", vec![message_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+        let messages = HashMap::from([(
+            message_id,
+            MessageEvidence {
+                id: message_id,
+                sender_kind: "human".into(),
+            },
+        )]);
+
+        assert!(
+            validate_human_grounded_objects(&plan, &messages)
+                .unwrap_err()
+                .to_string()
+                .contains("ingestion-only")
+        );
+    }
 
     #[test]
     fn plan_allows_work_without_a_memory() {

@@ -16,9 +16,10 @@ Kubernetes deployment. The fixture identity and full dependency set must be
 verified before each reset.
 
 **Current execution:** Candidate fixes are implemented on Issue #80 branches.
-Two resets, one diagnostic take, and one functional rerun are complete. The
-latest rerun exposed remaining routing and efficiency defects, so it is not a
-clean pass. Two consecutive clean takes are still required.
+The latest complete five-step attempt exposed remaining provenance, thread
+context, and efficiency defects, so it is not a clean pass. Candidate 3 fixes
+are implemented and awaiting deployment plus a newly approved surgical reset.
+Two consecutive clean takes are still required.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -397,7 +398,7 @@ Next reset manifest after the diagnostic take:
   `fresh_session_per_turn_enabled=true`; the editor retains both defaults as
   false. The Context UI is live at `http://127.0.0.1:8180/objects`.
 
-Candidate 2 reset manifest (generated 2026-09-03; not yet executed):
+Candidate 2 reset manifest (generated and executed 2026-09-03):
 
 - SHA-256: `9fd1f8effef9dbbb379560b7705f83066cd7860d1bb33a48ecbaaaaf2ada7f09`
 - Exact fixture closure: 2 Objects, 13 Connections, 7 Runs, 1 Artifact, 15
@@ -405,5 +406,68 @@ Candidate 2 reset manifest (generated 2026-09-03; not yet executed):
 - The only Objects are Source `5b870a30-7257-55ca-b9cb-bb51d6a1f333`
   and Note `738920bb-ea04-4fa3-88da-a6c49dbee50e`. Shared RSI targets,
   including Source `ee67e8c4-c7ea-5231-8626-9f76da35b7ba`, survive.
-- This hash differs from the prior approved manifest and therefore requires a
-  fresh exact approval before deletion and the next five-step take.
+- Brad approved this exact hash and the reset completed successfully before the
+  Candidate 2 take.
+
+## Candidate 2 Take — 2026-09-03
+
+- Step 1 ran in Slack root `1788417818.785919`. Workflow
+  `01a06602-ad00-74e4-8b79-d522878d7e0d` created canonical Source
+  `fb3b4e29-929d-5099-a961-fb97a1d8f3ab`, one Artifact, 14 ready embeddings,
+  and five useful ingestion Connections. The terminal receipt arrived only
+  after readiness; this preserved the desired ingestion extraction behavior.
+- Steps 2–5 ran in Slack thread `1788418028.442589`. Step 2 answered the RSI
+  question accurately with the stored transcript and a 12:43 citation, but
+  consumed 337,898 cumulative provider tokens. It made three help calls, one
+  failed oversized Artifact read, and seven 20,000-character chunk reads.
+- The Curator then double-dipped. It created duplicate Source
+  `a7308830-6b00-4f15-b8b7-f0290ac3a827` from Rez's answer and Memory
+  `f8f305f6-86e4-45c4-abc0-e4193d9bcadf` supported only by that assistant
+  answer. Step 3 consequently created Note
+  `c418dbf6-208e-4ced-ba9f-d234cefefbda` against the duplicate Source rather
+  than canonical ingestion Source `fb3b4e29-929d-5099-a961-fb97a1d8f3ab`.
+- The first unmentioned step-3 message did not dispatch because the live Rez
+  Slack app subscribed only to `app_mention`. The undelivered message was
+  deleted, `message.channels` and `message.groups` were enabled in Slack, and
+  the identical message then dispatched. Both app manifests now declare those
+  events and have a regression assertion.
+- Step 3 used 134,636 cumulative tokens and performed two avoidable help calls
+  before one successful Note create. Step 4 returned four useful RSI items and
+  selected the 15%-versus-9% calibration result, but used 313,672 cumulative
+  tokens across tool listing, four help/discovery calls, and four searches. Its
+  visible answer omitted Object IDs required by the next turn.
+- Step 5 used 222,376 cumulative tokens and created no Connection. Rez tried a
+  direct Slack thread read, received `invalid_auth`, then repeated discovery and
+  broad Context search before asking Bradley to restate the targets.
+- Root cause: fresh-per-turn Slack context deliberately excluded Rez's own
+  visible replies. The new turn therefore contained prior human prompts but not
+  Rez's step-4 answer, making “these items” impossible to resolve. This take is
+  a failure even though steps 1–4 produced useful visible output.
+
+## Candidate 3 Implementation — 2026-09-03
+
+1. **Retain visible assistant state.** Fresh-per-turn Rez sessions now rebuild
+   from both human messages and Rez's visible Slack replies through the current
+   trigger. Stateful sessions continue excluding self messages so history is
+   not duplicated. A focused Slack emulator regression proves both behaviors.
+2. **Make Source ownership deterministic.** The Curator can no longer create a
+   Source under any circumstances; Source creation remains ingestion-only.
+   Worker plans drop Source proposals and dependent Connections before normal
+   plan validation, producing a no-op instead of a second model attempt.
+3. **Reject assistant-derived durable claims.** Curator Memory and Task creates
+   must cite only human-authored messages. Assistant-derived proposals and
+   their dependent Connections are dropped before reconciliation, with a
+   deterministic-filter trace; direct reconciliation retains a validation
+   backstop.
+4. **Make the bounded recipes prominent.** Rez's top-level prompt now states
+   that one RSI turn performs one substantive recipe and must never begin with
+   tool listing, help, Slack-history, or alternate-search commands. Visible
+   answers must include Object IDs needed by the next turn.
+5. **Persist normal thread events.** Both Rez and Ed Slack manifests include
+   `message.channels` and `message.groups`, matching the live Rez repair and
+   preventing an app reinstall from regressing unmentioned thread replies.
+
+Candidate 3 is not yet a passing take. It must be committed, deployed from the
+three feature worktrees, then exercised from a fresh exact reset manifest. The
+expanded fixture now includes the canonical Source, Curator duplicate Source,
+assistant-derived Memory, and Note, so the old reset hash must not be reused.
