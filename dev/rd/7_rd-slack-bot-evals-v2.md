@@ -738,11 +738,11 @@ without failure. Step 5's asynchronous mutation is represented by its separate
 completed mutation run because the parent trace does not enumerate commands
 chained inside a shell invocation.
 
-One background Curator run after step 1 failed on an upstream HTTP 503. It
-created no Object or Connection and did not affect the five-step flow. This is
-tracked as infrastructure noise rather than a clean-pass failure. Candidate 6
-is the first complete clean-reset acceptance pass; one consecutive clean pass
-remains.
+Two background Curator runs, after steps 1 and 5, failed on upstream HTTP 503s.
+They created no Object or Connection and did not affect the five-step flow.
+This is tracked as infrastructure noise rather than a clean-pass failure.
+Candidate 6 is the first complete clean-reset acceptance pass; one consecutive
+clean pass remains.
 
 Candidate 7 reset preview (not executed):
 
