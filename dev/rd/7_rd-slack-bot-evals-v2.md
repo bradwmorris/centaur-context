@@ -15,12 +15,13 @@ Source/Note read, write, and linkage contracts; retrieval and Run UI; local
 Kubernetes deployment. The fixture identity and full dependency set must be
 verified before each reset.
 
-**Current execution:** Candidate 4 completed all five actions and proved the
-bounded recipes, Note creation, retrieval, and Connection mutation. The take
-also exposed and fixed artifact-read authorization, optional UUID
-serialization, Note-to-Chat linkage instructions, and sandbox-capacity
-headroom. Because those fixes were applied during the take, a clean reset and
-two consecutive clean post-fix takes are still required.
+**Current execution:** Candidate 8 completed the exact five-message flow once
+from a verified clean reset after the sandbox-capacity repair. Source
+ingestion, grounded answering, Note creation, RSI retrieval, and the requested
+Connection all succeeded without correction or retry. Candidate 7 failed
+between the earlier Candidate 6 clean pass and Candidate 8, so the strict
+two-consecutive-clean-takes acceptance bar still requires one more clean reset
+and pass.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -783,15 +784,82 @@ clean pass remains.
   RSI target. This confirms the repair but does not convert Candidate 7 into a
   clean pass. Candidate 6 remains the only clean acceptance pass.
 
-Candidate 8 reset preview (not executed):
+## Candidate 8 — Clean Post-Capacity-Fix Pass 1 — 2026-09-04
 
-- Manifest SHA-256:
+- Brad approved exact reset manifest
   `91b830479c2717df3f5cf49c98dbe714b9743581bf9d270bd669eff26714621c`.
-- Exact database closure: Candidate 7's 2 Chats, Source, Note, 12 Connections,
-  13 Runs, 1 Artifact, 17 embeddings, 17 Run-owned Events, and 17 Events
-  targeting fixture records. Shared Objects remain outside the Object deletion
-  set. The corresponding Slack roots are `1788470712.207459` and
-  `1788470876.631939`; deletion awaits explicit approval of this exact preview.
+  The trusted reset deleted Candidate 7's 2 Chats, Source, Note, 12
+  Connections, 13 Runs, 1 Artifact, 17 embeddings, 17 Run-owned Events, and
+  17 Events targeting fixture records. Slack roots `1788470712.207459` and
+  `1788470876.631939` were then deleted. The canonical podcast URL count was
+  zero, the four eval Objects were absent, and all four shared RSI Objects
+  survived before the new take began.
+- Step 1 ran once at Slack root `1788476706.973779`. Workflow
+  `01a06985-53ed-7dae-9a8a-39f1e7563af8` reached terminal `completed` before
+  step 2 and created Source `a07f3777-1f63-53ef-a99a-f68661d22ba4`, complete
+  transcript Artifact `38abf414-b1ae-5027-ae45-2729b93c348c`, and 14/14
+  completed embeddings. There is one canonical Source and no redundant Task.
+  Ingestion preserved useful automatic links to Sarah Guo, Conviction, Agents,
+  Invest Like the Best, OpenAI, Anthropic, and the originating Slack Chat.
+- Steps 2–5 ran exactly once in Slack thread `1788476877.214639`. Step 2's
+  answer at `1788476895.493779` used one Source search and one Artifact read,
+  directly summarized Guo's RSI claim, timeline skepticism, and concern about
+  researcher agency, and cited the new Source ID. Step 3 message
+  `1788476926.612789` created Note
+  `75d8e54a-53c9-4e8b-a955-bf8ab84428b1` with exactly two initial links:
+  Chat `about` Note and Note `derived_from` Source.
+- Step 4 message `1788476968.220399` used one search and returned RSI Simulator
+  `8d3ff281-1ae0-53e4-973d-153b56f6da3c` first, followed by The Economics of
+  Recursive Self-Improvement
+  `46f174c1-38ef-5958-a3de-a8238fe8f174`, both with IDs and concise relevance
+  explanations.
+- The exact tagged step-5 message `1788477007.726579` succeeded on its first
+  attempt. Rez selected the first-ranked RSI Simulator, queued workflow run
+  `01a06989-d7f0-7eb6-a42c-0aaf0e9923b6`, and mutation run
+  `3326a5e4-dfd8-45ff-9427-0d372db3ce55` created exactly one `related_to`
+  Connection, `5faeb5d4-8575-4877-b201-814b80537ff4`, from the new Note to
+  RSI Simulator. No duplicate Source or ingestion Connection exists.
+
+Clean-pass parent-run efficiency:
+
+| Step | Run | Input / cache-read / uncached | Output | Traced tools |
+| --- | --- | ---: | ---: | ---: |
+| 1 | `0d96755b-4348-41c3-80ba-a80347c7e084` | 27,751 / 27,392 / 359 | 51 | 2 |
+| 2 | `12deaf07-44b7-484e-b756-9b07a76bf47e` | 33,544 / 27,776 / 5,768 | 188 | 2 |
+| 3 | `509d2625-5a3e-4daf-89a0-ab78e80ca600` | 27,819 / 26,624 / 1,195 | 49 | 1 |
+| 4 | `28a987a8-7ab6-4b5e-831a-700007d168d1` | 30,186 / 26,880 / 3,306 | 312 | 1 |
+| 5 | `32a249ce-e064-422e-941e-af2e124cc9dc` | 29,678 / 29,184 / 494 | 58 | 4 |
+
+Across the five Slack parent runs, gross input was 148,978 tokens. Of that,
+137,856 (92.5%) were cache reads, leaving 11,122 fresh input tokens plus 658
+output tokens. The separate ingestion workflow used 42,583 input tokens,
+including 9,984 cache-read tokens, 665 output tokens, one research model call,
+and five deterministic pipeline calls. A roughly 71k headline for step 1 is
+therefore expected when a UI rolls the 27,802-token Slack parent and
+43,248-token workflow together; it is accurate gross context usage, not 71k of
+fresh prompt material or usage per tool call.
+
+The capacity repair behaved as intended under real pressure. On step 5 the API
+saw `running_before=5`, paused the completed step-1 sandbox after the 30-second
+idle grace, and admitted the new sandbox. No capacity rejection or
+`cold_create` failure occurred. Earlier steps also reclaimed idle or warm
+sandboxes when needed rather than raising the four-sandbox hard limit.
+
+Two background Curator runs observed during and just after the take failed
+after upstream HTTP 503 retries. They created no Object or Connection and did
+not affect the five requested actions; this remains infrastructure noise worth
+separate reliability work. A post-pass reset dry-run snapshot at 09:11 Sydney
+time produced manifest
+`52bb292440dc94caf7d973044617048af4d6f8ac7101a9fa6bc9257e0a9d54d6`:
+2 Chats, 1 Source, 1 Note, 14 Connections, 11 Runs, 1 Artifact, 17 embeddings,
+19 Run-owned Events, and 19 Events targeting fixture records. The snapshot is
+evidence only and was not executed; Curator retries can add Runs and therefore
+change a later reset manifest.
+
+Candidate 8 is a complete clean pass and the first clean pass after the latest
+capacity fix. It does not make Candidates 6 and 8 consecutive because
+Candidate 7 failed between them. One more clean reset and uninterrupted pass is
+required to satisfy the RD's strict acceptance wording.
 
 ## Video Narration Notes
 
