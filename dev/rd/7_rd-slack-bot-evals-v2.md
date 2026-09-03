@@ -744,6 +744,16 @@ tracked as infrastructure noise rather than a clean-pass failure. Candidate 6
 is the first complete clean-reset acceptance pass; one consecutive clean pass
 remains.
 
+Candidate 7 reset preview (not executed):
+
+- Manifest SHA-256:
+  `baac2a1038077fff71d87d76d598c4c88332c770860c9bcca04b8506ac829620`.
+- Exact database closure: Candidate 6's 2 Chats, Source, Note, 12 Connections,
+  11 Runs, 1 Artifact, 17 embeddings, 17 Run-owned Events, and 17 Events
+  targeting fixture records. Shared Objects are outside the Object deletion
+  set. The corresponding Slack roots are `1788438664.546669` and
+  `1788438897.149659`; deletion awaits explicit approval of this exact preview.
+
 ## Video Narration Notes
 
 1. Add the podcast once; ingestion owns transcript processing, canonical Source
