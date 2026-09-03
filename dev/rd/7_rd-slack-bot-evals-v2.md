@@ -656,11 +656,12 @@ use it as the final video take.
   Self-Improvement `46f174c1-38ef-5958-a3de-a8238fe8f174`.
 - The first exact step-5 attempt at `1788434099.648799` failed safely instead
   of guessing: Rez lacked the current triggering message timestamp required
-  for mutation idempotency. Centaur commit
-  `344ff40e96d6f1a38d32150e853ebeccecef876f` now includes the exact trigger
+  for mutation idempotency. Centaur follow-up PR commit
+  `c1d778195335304888f079aa74a33d5d5636b869` now includes the exact trigger
   timestamp in the trusted per-turn Context packet and explicitly forbids
-  substituting the thread-root timestamp. Enyu commit `b0a43a7` pins that fix;
-  Helm revision 124 is healthy. Focused Slack tests (4) and type checking pass;
+  substituting the thread-root timestamp. Enyu commit `47dfee6` pins that
+  landable commit. Healthy Helm revision 124 runs the content-identical
+  pre-cherry-pick build `344ff40e`; focused Slack tests (4), type checking, and
   all 20 Enyu overlay tests pass.
 - Retrying the identical fifth message at `1788434562.939289` succeeded.
   Workflow `01a06702-3310-71e6-bb3f-df887416dc5c` and Context mutation run
