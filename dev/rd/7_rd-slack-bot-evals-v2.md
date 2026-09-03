@@ -693,15 +693,56 @@ from a newly approved surgical reset and complete the exact five messages once,
 without intervention. Two consecutive clean-reset passes remain the acceptance
 bar.
 
-Candidate 6 reset preview (not executed):
+## Candidate 6 — Clean Acceptance Pass 1 — 2026-09-03
 
-- Manifest SHA-256:
+- Brad approved manifest
   `bcab64f8137a8598974374c48b87ce201f663b56008b374a0b208142e5c4baad`.
-- Exact database closure: the 2 current Slack Chats, Source, Note, 15
-  Connections, 14 Runs, 1 Artifact, 17 embeddings, 20 Run-owned Events, and 20
-  Events targeting fixture records. Shared Objects remain outside the Object
-  deletion set. The corresponding Slack roots are `1788433478.117559` and
-  `1788433650.580309`; deletion awaits explicit approval of this exact preview.
+  The trusted reset deleted exactly the prior take's 2 Chats, Source, Note, 15
+  Connections, 14 Runs, 1 Artifact, 17 embeddings, and associated Events. The
+  two Slack roots were deleted, the canonical URL count returned to zero, and
+  all four shared RSI Objects survived.
+- Step 1 ran at Slack root `1788438664.546669`. Workflow
+  `01a06740-bee7-740c-bc96-eaec8733357f` completed before step 2 and created
+  Source `657f69fe-6b3f-5de6-816f-46437863b4e0`, complete transcript Artifact
+  `b58951b6-a276-5d67-b4a0-444e050d3634`, and 14/14 ready embeddings. The
+  Source has the expected five useful initial links: Sarah Guo, Invest Like the
+  Best, Conviction, Agents, and the originating Slack Chat. There is one
+  canonical Source and no redundant Task.
+- Steps 2–5 ran once in Slack thread `1788438897.149659`, without correction or
+  intervention. Step 2 used one search and one Artifact read for a concise,
+  transcript-grounded answer. Step 3 message `1788438956.077639` created Note
+  `b72b45a9-7f61-417b-8005-f496182fb410` with exactly the intended
+  `derived_from` Source and Chat `about` Note links. Step 4 message
+  `1788439035.071209` used one search and returned RSI Simulator
+  `8d3ff281-1ae0-53e4-973d-153b56f6da3c` and The Economics of Recursive
+  Self-Improvement `46f174c1-38ef-5958-a3de-a8238fe8f174`, both with IDs.
+- The exact tagged step-5 message `1788439103.778919` succeeded on its first
+  attempt. Workflow `01a06747-7a86-73b2-b815-6b61ae375356` and mutation run
+  `7dbeb049-54ed-472f-8eed-44efdf90fb4b` created exactly one Connection,
+  `9234d58c-ff77-4335-b538-7f409c25bc68`, from the new Note to RSI Simulator.
+  It did not duplicate ingestion-created relationships.
+
+Clean-pass parent-run efficiency:
+
+| Step | Run | Input / cache-read / uncached | Output | Traced tools |
+| --- | --- | ---: | ---: | ---: |
+| 1 | `ef1b4b26-e43f-48c2-add5-4031517638ef` | 27,488 / 27,008 / 480 | 45 | 2 |
+| 2 | `9ac503a5-0a31-4520-9d55-245e1ff9f81e` | 33,487 / 27,776 / 5,711 | 196 | 2 |
+| 3 | `1aa75720-d586-49f8-bc0d-22bae2c9b81f` | 27,640 / 26,624 / 1,016 | 44 | 1 |
+| 4 | `5e32886e-cbfc-4889-9525-dc8fac47f753` | 30,194 / 26,880 / 3,314 | 320 | 1 |
+| 5 | `c2c48b18-0085-4550-8b6c-76f92cad1d12` | 29,592 / 27,904 / 1,688 | 191 | 2 |
+
+Gross input was 148,401 tokens; 136,192 (91.8%) were cache reads, leaving
+12,209 fresh input tokens plus 796 output tokens. All traced tools completed
+without failure. Step 5's asynchronous mutation is represented by its separate
+completed mutation run because the parent trace does not enumerate commands
+chained inside a shell invocation.
+
+One background Curator run after step 1 failed on an upstream HTTP 503. It
+created no Object or Connection and did not affect the five-step flow. This is
+tracked as infrastructure noise rather than a clean-pass failure. Candidate 6
+is the first complete clean-reset acceptance pass; one consecutive clean pass
+remains.
 
 ## Video Narration Notes
 
