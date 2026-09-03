@@ -369,3 +369,41 @@ Next reset manifest after the diagnostic take:
     reads; step 3 one Note create; step 4 one rich retrieval; step 5 two reads
     and one trigger. Any discovery call, schema retry, refetch, or failed tool
     call fails the take even when the final answer is correct.
+
+## Candidate 2 Implementation — 2026-09-03
+
+- Centaur commit `baa8350adb73bc011ebdd5f1c59c900a79fb5bea`
+  adds two deployment-gated Slackbot behaviors. Rez executes unmentioned human
+  replies only after the prior subscribed-thread turn has completed, and each
+  Rez execution uses a fresh harness session rebuilt from Slack-visible thread
+  history. The latter retains visible Source/Note/candidate IDs without carrying
+  forward earlier help text, transcript payloads, or tool output.
+- Enyu commit `0556e202581f1ca2ecd32ebd705430cc306ca169`
+  moves supplied-transcript analysis to the narrower ingestion-workflow
+  principal, explicitly prohibits source refetch/tool use in that analysis,
+  and gives Rez exact command recipes and receipt-trust rules for all five
+  steps. Deployment pin commit `172060a` selects that overlay.
+- Context commit `943840098626b69b74d37514f79fa7ad559ac6ad`
+  documents the four accepted provenance keys and rejects unsupported keys in
+  the client before a request is sent. Source search already returns the rich
+  step-4 packet required here: Object ID, title, canonical URL, current Artifact
+  ID, excerpt, and created/updated timestamps.
+- Focused Slack routing/session tests, Enyu workflow/overlay tests, Context
+  client tests, Helm rendering, type checking, and `git diff --check` pass. One
+  unrelated pre-existing Slackbot test for clearing a harness-rejected sticky
+  model times out when run alone and is not changed or hidden by this candidate.
+- Local Helm revision 109 is deployed. Researcher startup confirms
+  `execute_subscribed_replies_enabled=true` and
+  `fresh_session_per_turn_enabled=true`; the editor retains both defaults as
+  false. The Context UI is live at `http://127.0.0.1:8180/objects`.
+
+Candidate 2 reset manifest (generated 2026-09-03; not yet executed):
+
+- SHA-256: `9fd1f8effef9dbbb379560b7705f83066cd7860d1bb33a48ecbaaaaf2ada7f09`
+- Exact fixture closure: 2 Objects, 13 Connections, 7 Runs, 1 Artifact, 15
+  embeddings, 16 Run-owned Events, and 16 Events targeting fixture records.
+- The only Objects are Source `5b870a30-7257-55ca-b9cb-bb51d6a1f333`
+  and Note `738920bb-ea04-4fa3-88da-a6c49dbee50e`. Shared RSI targets,
+  including Source `ee67e8c4-c7ea-5231-8626-9f76da35b7ba`, survive.
+- This hash differs from the prior approved manifest and therefore requires a
+  fresh exact approval before deletion and the next five-step take.
