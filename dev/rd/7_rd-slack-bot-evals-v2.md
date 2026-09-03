@@ -783,6 +783,16 @@ clean pass remains.
   RSI target. This confirms the repair but does not convert Candidate 7 into a
   clean pass. Candidate 6 remains the only clean acceptance pass.
 
+Candidate 8 reset preview (not executed):
+
+- Manifest SHA-256:
+  `91b830479c2717df3f5cf49c98dbe714b9743581bf9d270bd669eff26714621c`.
+- Exact database closure: Candidate 7's 2 Chats, Source, Note, 12 Connections,
+  13 Runs, 1 Artifact, 17 embeddings, 17 Run-owned Events, and 17 Events
+  targeting fixture records. Shared Objects remain outside the Object deletion
+  set. The corresponding Slack roots are `1788470712.207459` and
+  `1788470876.631939`; deletion awaits explicit approval of this exact preview.
+
 ## Video Narration Notes
 
 1. Add the podcast once; ingestion owns transcript processing, canonical Source
