@@ -249,6 +249,26 @@ def test_create_note_accepts_documented_provenance_on_first_request():
 
     assert result["object_id"] == "note-1"
     assert len(requests) == 1
+    payload = json.loads(requests[0].content)
+    assert payload["originating_chat_object_id"] is None
+
+
+def test_create_task_omits_empty_originating_chat_object_id():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"object_id": "task-1"})
+
+    result = privileged_client(handler).create_task(
+        title="Follow up on recursive self-improvement",
+        description="A source-grounded follow-up task.",
+        idempotency_key="task-no-originating-chat",
+    )
+
+    assert result["object_id"] == "task-1"
+    payload = json.loads(requests[0].content)
+    assert payload["originating_chat_object_id"] is None
 
 
 def test_create_note_rejects_undocumented_passage_provenance_before_request():

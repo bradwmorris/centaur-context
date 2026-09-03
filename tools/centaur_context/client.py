@@ -672,7 +672,9 @@ class CentaurContextClient:
                 "content": content,
                 "content_format": content_format,
                 "provenance": provenance,
-                "originating_chat_object_id": _clean(originating_chat_object_id),
+                "originating_chat_object_id": (
+                    _clean(originating_chat_object_id) or None
+                ),
                 "derived_from_source_object_ids": derived_from_source_object_ids or [],
             },
             idempotency_key=idempotency_key,
@@ -727,7 +729,7 @@ class CentaurContextClient:
             "priority": priority,
             "agent_suitable": bool(agent_suitable),
             "provenance": provenance,
-            "originating_chat_object_id": _clean(originating_chat_object_id),
+            "originating_chat_object_id": _clean(originating_chat_object_id) or None,
             "derived_from_source_object_ids": derived_from_source_object_ids or [],
         }
         if due_at:
