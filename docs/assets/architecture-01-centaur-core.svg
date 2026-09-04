@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960" role="img" aria-labelledby="title desc">
+  <title id="title">Centaur core architecture</title>
+  <desc id="desc">Slack and API callers send a request into a user-owned Centaur runtime. The api-rs control plane records durable state in Postgres and assigns one temporary agent sandbox. Inside the sandbox, the Centaur adapter runs one selected harness from Claude Code, Codex, Hermes, or Pi and exposes approved tools and workflows. A paired iron-proxy controls outbound access to model providers and external services. Durable events return the response to the caller.</desc>
+  <defs>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#00E100"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#8B8B91"/>
+    </marker>
+    <style>
+      .bg { fill: #0F0F10; }
+      .boundary { fill: #141416; stroke: #5A5A60; stroke-width: 2; }
+      .runtime { fill: #171A17; stroke: #00E100; stroke-width: 2; }
+      .panel { fill: #202023; stroke: #56565C; stroke-width: 2; }
+      .panel-green { fill: #172117; stroke: #267B2A; stroke-width: 2; }
+      .temporary { fill: #18181A; stroke: #8B8B91; stroke-width: 2; stroke-dasharray: 8 8; }
+      .pill { fill: #111112; stroke: #45454A; stroke-width: 1.5; }
+      .pill-active { fill: #103711; stroke: #00E100; stroke-width: 1.5; }
+      .eyebrow { fill: #00E100; font: 700 17px Menlo, SFMono-Regular, monospace; letter-spacing: 1.5px; }
+      .label { fill: #F5F5F5; font: 600 24px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .label-small { fill: #F5F5F5; font: 600 20px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .body { fill: #B2B2B7; font: 400 18px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .meta { fill: #8B8B91; font: 400 16px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .mono { fill: #D9D9DD; font: 500 16px Menlo, SFMono-Regular, monospace; }
+      .green-line { fill: none; stroke: #00E100; stroke-width: 3; marker-end: url(#arrow-green); }
+      .muted-line { fill: none; stroke: #8B8B91; stroke-width: 2; marker-end: url(#arrow-muted); }
+      .support-line { fill: none; stroke: #66666C; stroke-width: 2; stroke-dasharray: 6 7; marker-end: url(#arrow-muted); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="960"/>
+
+  <text x="56" y="67" class="eyebrow">01 · CENTAUR CORE</text>
+  <text x="56" y="112" class="label" style="font-size:34px">A durable agent runtime in your infrastructure</text>
+  <text x="56" y="145" class="body">One request, one selected harness, one temporary sandbox.</text>
+
+  <!-- External callers -->
+  <text x="56" y="218" class="meta" style="letter-spacing:1.4px">OUTSIDE</text>
+  <rect x="56" y="242" width="202" height="230" rx="18" class="panel"/>
+  <text x="82" y="280" class="eyebrow">REQUEST</text>
+  <path d="M84 310H213Q230 310 230 327V378Q230 395 213 395H121L99 418V395H84Q67 395 67 378V327Q67 310 84 310Z" fill="#2A2A2E" stroke="#6B6B72" stroke-width="1.5"/>
+  <text x="91" y="347" class="label-small">Slack</text>
+  <text x="91" y="375" class="body">or API caller</text>
+  <text x="82" y="446" class="meta">Signed event or</text>
+  <text x="82" y="468" class="meta">authenticated request</text>
+
+  <!-- User-owned infrastructure -->
+  <rect x="304" y="188" width="1008" height="692" rx="26" class="boundary"/>
+  <text x="338" y="227" class="label-small">Your infrastructure</text>
+  <text x="1278" y="227" class="meta" text-anchor="end">user-owned · deployed by you</text>
+
+  <rect x="330" y="250" width="956" height="604" rx="22" class="runtime"/>
+  <text x="362" y="291" class="eyebrow">CENTAUR</text>
+  <text x="466" y="291" class="label-small">user-owned runtime</text>
+
+  <!-- Main request path -->
+  <path d="M258 356H376" class="green-line"/>
+  <rect x="273" y="330" width="92" height="34" rx="17" class="pill"/>
+  <text x="319" y="352" class="mono" text-anchor="middle">request</text>
+
+  <!-- Control plane -->
+  <rect x="376" y="323" width="270" height="206" rx="16" class="panel"/>
+  <text x="402" y="361" class="eyebrow">CONTROL PLANE</text>
+  <text x="402" y="399" class="label">api-rs</text>
+  <text x="402" y="431" class="body">Persists the turn</text>
+  <text x="402" y="458" class="body">Assigns the runtime</text>
+  <text x="402" y="485" class="body">Streams durable events</text>
+
+  <path d="M646 438H720" class="green-line"/>
+
+  <!-- Temporary sandbox -->
+  <rect x="694" y="312" width="358" height="372" rx="18" class="temporary"/>
+  <text x="720" y="350" class="eyebrow">TEMPORARY AGENT SANDBOX</text>
+  <text x="1025" y="378" class="meta" text-anchor="end">created or reused by api-rs</text>
+
+  <rect x="720" y="400" width="306" height="76" rx="12" class="panel"/>
+  <text x="742" y="431" class="label-small">Centaur adapter</text>
+  <text x="742" y="458" class="meta">neutral prompt ↔ normalized events</text>
+  <path d="M873 476V496" class="green-line"/>
+
+  <rect x="720" y="496" width="306" height="158" rx="12" class="panel-green"/>
+  <text x="742" y="527" class="eyebrow">ONE SELECTED HARNESS</text>
+  <rect x="742" y="546" width="125" height="38" rx="19" class="pill-active"/>
+  <text x="804" y="571" class="mono" text-anchor="middle">Claude Code</text>
+  <rect x="879" y="546" width="125" height="38" rx="19" class="pill-active"/>
+  <text x="941" y="571" class="mono" text-anchor="middle">Codex</text>
+  <rect x="742" y="596" width="125" height="38" rx="19" class="pill-active"/>
+  <text x="804" y="621" class="mono" text-anchor="middle">Hermes</text>
+  <rect x="879" y="596" width="125" height="38" rx="19" class="pill-active"/>
+  <text x="941" y="621" class="mono" text-anchor="middle">Pi</text>
+  <text x="1010" y="675" class="meta" text-anchor="end">sandbox disappears; the record remains</text>
+
+  <!-- Paired proxy and controlled egress -->
+  <path d="M1052 456H1084" class="green-line"/>
+  <rect x="1084" y="384" width="168" height="144" rx="16" class="panel-green"/>
+  <text x="1107" y="419" class="eyebrow">PAIRED POD</text>
+  <text x="1107" y="457" class="label-small">iron-proxy</text>
+  <text x="1107" y="487" class="meta">Injects approved</text>
+  <text x="1107" y="510" class="meta">credentials on wire</text>
+
+  <text x="1360" y="218" class="meta" style="letter-spacing:1.4px">OUTSIDE</text>
+  <rect x="1360" y="242" width="184" height="286" rx="18" class="panel"/>
+  <text x="1384" y="280" class="eyebrow">EGRESS</text>
+  <text x="1384" y="325" class="label-small">Model</text>
+  <text x="1384" y="351" class="label-small">providers</text>
+  <path d="M1384 374H1520" stroke="#4E4E54"/>
+  <text x="1384" y="411" class="label-small">External</text>
+  <text x="1384" y="437" class="label-small">services</text>
+  <text x="1384" y="478" class="meta">Only allowed hosts</text>
+  <text x="1384" y="501" class="meta">and credentials</text>
+  <path d="M1252 456H1360" class="green-line"/>
+  <rect x="1257" y="421" width="98" height="34" rx="17" class="pill"/>
+  <text x="1306" y="443" class="mono" text-anchor="middle">egress</text>
+
+  <!-- Supporting relationships -->
+  <rect x="376" y="626" width="270" height="174" rx="16" class="panel"/>
+  <text x="402" y="664" class="eyebrow">DURABLE STATE</text>
+  <text x="402" y="702" class="label-small">Postgres</text>
+  <text x="402" y="733" class="body">Sessions · messages</text>
+  <text x="402" y="760" class="body">executions · events</text>
+  <path d="M512 529V626" class="support-line"/>
+  <text x="527" y="585" class="meta">read / write</text>
+
+  <rect x="1084" y="626" width="168" height="174" rx="16" class="panel"/>
+  <text x="1107" y="664" class="eyebrow">APPROVED</text>
+  <text x="1107" y="701" class="label-small">Tools</text>
+  <text x="1107" y="730" class="label-small">Workflows</text>
+  <text x="1107" y="770" class="meta">Configured actions</text>
+  <path d="M1026 596C1070 596 1062 686 1084 686" class="support-line"/>
+
+  <!-- Durable response path -->
+  <path d="M694 500H646" class="support-line"/>
+  <path d="M376 500H282V822H170V472" class="support-line"/>
+  <rect x="191" y="638" width="182" height="36" rx="18" class="pill"/>
+  <text x="282" y="661" class="mono" text-anchor="middle">events + response</text>
+
+  <line x1="56" y1="916" x2="96" y2="916" stroke="#00E100" stroke-width="3"/>
+  <text x="110" y="922" class="meta">request / controlled call</text>
+  <line x1="342" y1="916" x2="382" y2="916" stroke="#8B8B91" stroke-width="2" stroke-dasharray="6 7"/>
+  <text x="396" y="922" class="meta">state / durable response</text>
+  <text x="1544" y="922" class="meta" text-anchor="end">The model may run elsewhere. The runtime and record are yours.</text>
+</svg>

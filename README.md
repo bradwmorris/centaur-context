@@ -47,7 +47,8 @@ Extend Centaur Context only when the feature would help many Centaur users.
 - No public ingress is included.
 
 See [Ontology](docs/ontology.md) for the data model and
-[Context and search](docs/context.md) for the retrieval path.
+[Context and search](docs/context.md) for the retrieval path. See
+[Architecture](docs/architecture.md) for the progressive system diagrams.
 
 ## Start
 
