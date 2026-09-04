@@ -27,4 +27,3 @@ the session and event record outside that sandbox.
 Centaur Context is a separate application beside this runtime. It owns shared
 Objects, Connections, Sources, Notes, search, and its human-facing UI; Centaur
 continues to own agents, Slack delivery, sandboxes, and model execution.
-
