@@ -120,11 +120,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .eval-table th:nth-child(1) { width: 58px; text-align: center; }
 .eval-table th:nth-child(2) { width: 200px; }
 .eval-table th:nth-child(3) { width: 72px; }
-.eval-table th:nth-child(4) { width: 150px; }
-.eval-table th:nth-child(5) { width: 170px; }
-.eval-table th:nth-child(6) { width: 98px; }
-.eval-table th:nth-child(7) { width: 160px; }
-.eval-table th:nth-child(8) { width: 62px; }
+.eval-table th:nth-child(4) { width: 170px; }
+.eval-table th:nth-child(5) { width: 98px; }
+.eval-table th:nth-child(6) { width: 310px; }
+.eval-table th:nth-child(7) { width: 62px; }
 .eval-table td { min-width: 0; height: 50px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: middle; color: #c7c9cf; font-size: 11px; overflow: hidden; white-space: nowrap; }
 .eval-table tr:last-child td { border-bottom: 0; }
 .eval-table tr.pinned td { background: rgba(197,172,110,.035); }
