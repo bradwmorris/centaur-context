@@ -26,9 +26,10 @@ and pass.
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
    Source and generated records.
-2. Send the same five Slack messages in order in one Rez thread, waiting for a
-   terminal response and durable state after each message. Substitute step 4's
-   selected Object into step 5 without otherwise changing the script.
+2. Send step 1 as its own Rez root and wait for terminal ingestion plus durable
+   readiness. Then send steps 2–5 in one second Rez thread, waiting for a
+   terminal response and durable state after each message. Step 5 must resolve
+   the selected Object from step 4 without changing the script.
 3. After each step, inspect Slack and Context for answer quality, Runs, traces,
    usage, consulted/affected Objects, records, and connections. Record defects
    and concrete improvements.
@@ -38,33 +39,134 @@ and pass.
 5. Once the full flow works well, repeat it from another clean reset and produce
    final evidence and video narration notes.
 
+## Current State — Authoritative Summary
+
+The functional work is implemented and deployed in the local lab. Candidate 8
+is the latest take and passed the exact five-message flow from a verified clean
+reset with no correction, retry, duplicate Source, redundant Task, duplicate
+Connection, or sandbox-capacity failure. Its Source, Note, Chats, Runs,
+Artifact, embeddings, and final Note-to-RSI-Simulator Connection remain in
+Slack and `centaur_context_enyu` as the current evidence fixture.
+
+The acceptance streak is **one**, not two:
+
+| Candidate | Result | Effect on consecutive streak |
+| --- | --- | --- |
+| 6 | Clean pass | Streak became 1 |
+| 7 | Failed at step 5 because sandbox capacity was exhausted | Streak reset to 0 |
+| 8 | Clean pass after the capacity repair | Streak became 1 |
+
+Candidate 6 and Candidate 8 are two successful takes in total, but they are not
+consecutive because Candidate 7 failed between them. One more approved
+surgical reset and one uninterrupted clean five-message pass are required. The
+next reset manifest must be regenerated immediately before approval because
+background Curator retries can add Runs and change its hash.
+
+Implemented fixes, consolidated:
+
+1. **Safe repeatable resets:** trusted Context tooling discovers the exact eval
+   closure, refuses the wrong Kubernetes context/database/video identity,
+   prints a hashable dry-run manifest, requires that same hash plus the exact
+   approval phrase, deletes transactionally, and verifies the canonical Source
+   is absent while shared RSI Objects survive.
+2. **Ingestion-only Source creation:** Rez has no direct Source-create tool.
+   “Add this source” can only start the signed ingestion workflow, which owns
+   canonicalization, transcript capture, embeddings, initial related Objects,
+   Connections, provenance, and the terminal readiness receipt.
+3. **Safe Source/Connection mutation:** Rez can edit completed Sources and
+   create or edit Connections only through the signed zero-model mutation
+   workflow. Expected revisions, endpoint validation, canonical Connection
+   identity, idempotency, additive assertions, Object Events, and role-scoped
+   authorization prevent overwrites and duplicate edges.
+4. **Slack thread continuity:** unmentioned human replies in a subscribed Rez
+   thread dispatch once; mentioned replies deduplicate by Slack timestamp; and
+   fresh-per-turn sessions rebuild from both human and Rez-visible Slack
+   history so phrases such as “our new note” and “these items” retain the
+   Source, Note, and candidate IDs without carrying old tool output forward.
+5. **Correct per-turn identity:** the trusted Context packet now includes the
+   exact triggering message timestamp. Step 5 uses that timestamp for mutation
+   idempotency and may not substitute the thread-root timestamp.
+6. **Bounded efficient recipes:** Rez receives exact commands instead of using
+   tool listing or help discovery. Step 2 uses one Source search and one
+   Artifact read; step 3 uses one Note create; step 4 uses one rich Source
+   search; and step 5 reads the exact Note and selected Source, then invokes one
+   mutation workflow.
+7. **Artifact and Note correctness:** Artifact GET authorization is narrowly
+   granted; `read-artifact` accepts the documented Artifact ID; optional UUIDs
+   remain JSON `null` instead of becoming empty strings; and Note creation
+   supplies the current Slack Chat ID so the Note transaction creates exactly
+   its Chat `about` link and Source `derived_from` link.
+8. **Curator double-dip prevention:** the Curator cannot create Sources,
+   discards assistant-derived Memory/Task proposals, rejects Tasks that merely
+   restate a completed ingestion request, drops dependent invalid Connections,
+   and treats deterministic empty/protected/no-change plans as no-ops rather
+   than retrying them as repairable model failures.
+9. **Persona and deployment correctness:** the selected Rez persona prompt is
+   injected as developer instructions and fails closed if missing; Slack app
+   manifests retain normal channel/group message subscriptions; local image
+   references and repo-cache deployment pins are deterministic.
+10. **Capacity repair:** the warm pool was reduced and the Enyu overlay now
+    uses a 30-second hot-idle grace under the unchanged four-sandbox hard
+    limit. Under Candidate 8 step-5 pressure, the runtime paused the completed
+    step-1 sandbox and admitted the new turn instead of failing.
+11. **Run observability:** Run detail separates input, cache-read, output, and
+    reasoning usage; classifies readiness polling; and records sanitized tool
+    names, durations, and error classes. The large headline token number is
+    gross context usage, mostly cache reads—not fresh input per tool call.
+
+Current deployed checkpoint: local Helm revision 125 is healthy; the Context
+UI is available at `http://127.0.0.1:8180/objects`; the 30-second sandbox grace
+is active; and Candidate 8 proved the live behavior. The work remains on open
+feature PRs rather than `origin/main`: Context PR #83, Enyu PR #31, and Centaur
+PR #13 in Brad's Centaur fork. All three PRs are open and currently report a
+clean merge state. The protected canonical Centaur checkout at
+`/Users/bradleymorris/Desktop/dev/centaur` was not edited.
+
+Remaining work is deliberately narrow:
+
+- Generate and obtain approval for the next exact reset manifest, remove only
+  Candidate 8's fixture and its two Slack roots, and run Candidate 9 once.
+- If Candidate 9 passes, record two consecutive post-failure clean passes,
+  mark this RD complete, and prepare the final video evidence.
+- Keep upstream Curator HTTP 503 retries recorded as separate infrastructure
+  noise; they have created no eval Object or Connection but remain unresolved.
+- The ingestion-created related-object set remains semantically useful but can
+  vary between takes. Candidate 8 omitted Andrej Karpathy while retaining six
+  other useful automatic links plus the originating Chat; no ingestion logic
+  was weakened or duplicated by Rez.
+- Direct Source editing and canonical reuse of an already-existing Connection
+  are implemented and covered by focused tests, but are not directly exercised
+  by this fixed five-message acceptance flow.
+
 ## What We Are Doing
 
 - [ ] Make this five-step workflow reliable instead of running another broad
   matrix of individual bot updates.
-- [ ] Make repeated takes safe: each take starts from a verified clean fixture
+- [x] Make repeated takes safe: each take starts from a verified clean fixture
   without deleting unrelated Objects, shared RSI research, or external data.
-- [ ] Prove Rez routes every new Source through the ingestion workflow, can
+- [x] Prove Rez routes every new Source through the ingestion workflow, can
   edit the resulting Source, create a grounded Note, find relevant RSI
   material, and create or edit Connections without duplicating ingestion
   output.
-- [ ] Capture per-step observations and talking points for a Slack/UI video.
+- [x] Capture per-step observations and talking points for a Slack/UI video.
 
 ## Fixed Five-Step Slack Flow
 
-Run these messages in order in the same Slack thread:
+Run step 1 as its own Slack root. Only after ingestion is terminal and durable,
+run steps 2–5 in a second Slack thread:
 
-1. `can you add this conversation as source`
+1. `@Rez (enyu researcher) can you add this conversation as source`
    `https://youtu.be/hY6S__xeCjg?si=g_3DaHSPnJDxDNvG`
 2. `hey @Rez (enyu researcher) in that recent invest like the best podcast, what does she say about recursive self-improvement?`
 3. `can you create a note on this`
 4. `what’s the other most interesting stuff we’ve recently added on RSI?`
-5. `can you link the new note to <most relevant Object from step 4>?`
+5. `@Rez (enyu researcher) can you link our new note to these items`
 
-Step 5 must clearly name the selected Object and the evaluator must record its
-ID. Choose the most substantively relevant existing Object returned in step 4,
-not merely the first or newest. If none is defensible, fail the step; do not
-invent a target.
+Step 4 must return clear candidate titles and IDs. In step 5, Rez must resolve
+“our new note” and “these items” from visible thread state, choose one
+substantively relevant existing Object returned in step 4, and state the
+selected title and ID in its mutation receipt. The evaluator records that ID.
+If none is defensible, fail the step; do not invent a target.
 
 ## Baseline Take — 2026-09-02
 
@@ -214,32 +316,32 @@ restart at step 1; do not hand-create state or weaken acceptance criteria.
 
 ## Checks
 
-- [ ] Reset dry run and execution operate from the same immutable manifest or
+- [x] Reset dry run and execution operate from the same immutable manifest or
   fail if the graph changes between them.
-- [ ] Reset is idempotent and its post-check proves a clean fixture plus intact
+- [x] Reset is idempotent and its post-check proves a clean fixture plus intact
   baseline RSI Objects.
-- [ ] Each Slack message correlates by eval marker, workspace, channel, thread,
+- [x] Each Slack message correlates by eval marker, workspace, channel, thread,
   and Run IDs rather than timing alone.
-- [ ] Evidence separates response quality, retrieval, mutations, connections,
+- [x] Evidence separates response quality, retrieval, mutations, connections,
   workflow outcome, traces, errors, latency, and usage for all five steps.
-- [ ] Rez cannot create a Source directly: every add request starts ingestion;
+- [x] Rez cannot create a Source directly: every add request starts ingestion;
   after completion Rez can edit the Source and create/edit Connections.
 - [ ] Repeating an ingestion-created relationship through Rez reuses one
   canonical Connection and preserves both origins/evidence.
-- [ ] `read-artifact` accepts its documented Artifact ID argument, Rez's prompt uses
+- [x] `read-artifact` accepts its documented Artifact ID argument, Rez's prompt uses
   only granted tools and valid fields, and the five-step trace contains no
   avoidable command-discovery or corrected-schema retries.
-- [ ] Curator records valid no-op reconciliation as `no_changes`; protected,
+- [x] Curator records valid no-op reconciliation as `no_changes`; protected,
   empty-plan, and unchanged inputs do not trigger another model attempt.
-- [ ] Source readiness avoids repeated fixed polling, and RSI retrieval uses
+- [x] Source readiness avoids repeated visible fixed polling, and RSI retrieval uses
   batch or sufficiently rich search/read responses instead of one command per
   Object where possible.
-- [ ] Run detail exposes sanitized inner command names, error class and duration,
+- [x] Run detail exposes sanitized inner command names, error class and duration,
   plus separate input, cache-read, output, and reasoning usage; workflow polling
   is distinguishable from substantive agent tool calls.
 - [ ] Two consecutive clean-reset takes satisfy the complete done state.
-- [ ] Focused regressions and relevant repository checks pass.
-- [ ] `git diff --check` passes.
+- [x] Focused regressions and relevant repository checks pass.
+- [x] `git diff --check` passes.
 
 ## Approval Boundary
 
@@ -339,36 +441,36 @@ Next reset manifest after the diagnostic take:
   `fc63ac35-8340-56db-a5e0-9064f28cb046`, and created exactly one Connection
   `41220a6f-aa9e-4589-bd31-abb8268ca3f3`.
 
-## Surgical Efficiency Fixes — Next Candidate
+## Surgical Efficiency Fixes — Implemented
 
-1. **Route thread replies once.** After Rez answers a thread, dispatch later
+1. **Done — Route thread replies once.** After Rez answers a thread, dispatch later
    human replies in that thread to Rez without requiring another mention.
    Mentioned replies must deduplicate by Slack message timestamp.
-2. **Make the stored Source authoritative.** Resolve it from the current
+2. **Done — Make the stored Source authoritative.** Resolve it from the current
    Chat/ingestion receipt and read its artifact. Do not invoke
    `company_context`, global tool discovery, web search, or YouTube when that
    complete artifact answers the question.
-3. **Remove ingestion refetches.** The analysis worker already has the transcript.
+3. **Done — Remove ingestion refetches.** The analysis worker already has the transcript.
    Remove its search tools or prohibit refetching; never send a placeholder key.
-4. **Stop help-command discovery.** Put exact `read-source`, `read-artifact`,
+4. **Done — Stop help-command discovery.** Put exact `read-source`, `read-artifact`,
    `create-note`, and `enyu-context-mutate connect` forms in Rez's instructions.
    A normal take must contain no `centaur-tools list` or `--help` calls.
-5. **Align Note provenance.** Document accepted keys in CLI help and the Note
+5. **Done — Align Note provenance.** Document accepted keys in CLI help and the Note
    template. Add a regression proving the first create request is
    valid; no rejected `passage_start`/`passage_end` retry is allowed.
-6. **Trust mutation receipts.** Treat successful create/mutation responses as
+6. **Done — Trust mutation receipts.** Treat successful create/mutation responses as
    authoritative. Re-read only after an ambiguous response, conflict, or
    explicit verification request.
-7. **Compact between Slack turns.** Preserve Slack-visible messages and a small
+7. **Done — Compact between Slack turns.** Preserve Slack-visible messages and a small
    state record containing Source, Note, and selected-candidate IDs; exclude old
    help text, transcripts, and tool output from later model inputs.
-8. **Use one rich RSI retrieval.** Step 4 should return titles, IDs, canonical
+8. **Done — Use one rich RSI retrieval.** Step 4 should return titles, IDs, canonical
    URLs, excerpts, and recency in one bounded result so step 5 can reuse the
    selected ID without searching again.
-9. **Keep step 5 deterministic.** Read the Note and exact cited Source once,
+9. **Done — Keep step 5 deterministic.** Read the Note and exact cited Source once,
    then invoke the zero-model mutation workflow once with message-scoped
    idempotency. Require one terminal receipt, one edge, and zero decoy edges.
-10. **Set trace acceptance limits.** Step 2 permits bounded Source/artifact
+10. **Done — Set trace acceptance limits.** Step 2 permits bounded Source/artifact
     reads; step 3 one Note create; step 4 one rich retrieval; step 5 two reads
     and one trigger. Any discovery call, schema retry, refetch, or failed tool
     call fails the take even when the final answer is correct.
