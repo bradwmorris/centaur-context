@@ -16,7 +16,7 @@ the temporary `dev/evals` CSV catalog.
 
 **Confirmed decisions:** Evals shows every root Run with pinned Runs first;
 multi-step scenarios use ordered annotations rather than a new grouping model;
-`dev/evals/evals.csv` is removed while `dev/evals/README.md` remains as concise
+`dev/evals/evals.csv` is removed while `dev/evals/AGENTS.md` remains as concise
 operating instructions; and only the best successful Sarah Guo Run set is
 pinned, while failed attempts remain visible and unpinned.
 
@@ -75,7 +75,7 @@ integration do not change.
 - **Files:** One additive migration; `src/runs.rs`; `src/api.rs`; focused Rust
   tests; Run types/API/routing/list UI and tests; development instructions; this
   RD; removal of `dev/evals/evals.csv`; and revision of
-  `dev/evals/README.md` as instructions rather than a source of truth.
+  `dev/evals/AGENTS.md` as instructions rather than a source of truth.
 - **Agent owns:** Implementation, migration and API tests, UI behavior,
   documentation, and local verification.
 - **Requester owns:** Disputed semantic verdicts, destructive fixture reset
