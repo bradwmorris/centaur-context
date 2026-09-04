@@ -683,6 +683,21 @@ async fn run_read_and_review_routes_exist_only_on_the_human_listener() {
     .unwrap();
     assert_eq!(invalid_human_filter.status(), StatusCode::BAD_REQUEST);
 
+    let incomplete_human_cursor = human_router(
+        state(),
+        PathBuf::from("web/dist"),
+        PathBuf::from("identity-assets"),
+    )
+    .oneshot(
+        Request::builder()
+            .uri("/api/v2/runs?before_id=00000000-0000-4000-8000-000000000001")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(incomplete_human_cursor.status(), StatusCode::BAD_REQUEST);
+
     let invalid_human_annotation = human_router(
         state(),
         PathBuf::from("web/dist"),

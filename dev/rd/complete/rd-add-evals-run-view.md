@@ -1,7 +1,8 @@
-# 2 — RD: Add Evals Run View
+# RD: Add Evals Run View
 
-**Status:** `scoped`
+**Status:** `complete`
 **Created:** 2026-09-05
+**GitHub Issue:** [#85](https://github.com/bradwmorris/centaur-context/issues/85)
 
 ## Execution Plan
 
@@ -28,10 +29,10 @@ pinned, while failed attempts remain visible and unpinned.
 
 ## What We Are Doing
 
-- [ ] Use existing Run rows as the only records of eval attempts.
-- [ ] Let a human pin useful Runs as golden examples and annotate every attempt
+- [x] Use existing Run rows as the only records of eval attempts.
+- [x] Let a human pin useful Runs as golden examples and annotate every attempt
   in plain language.
-- [ ] Provide a persistent Evals table in the existing local UI without adding
+- [x] Provide a persistent Evals table in the existing local UI without adding
   an eval-definition or attempt table.
 
 ## Design View
@@ -105,22 +106,32 @@ messages, production work, or merge.
 
 ## Checks
 
-- [ ] Migration tests prove existing Runs remain unpinned and pin state persists
+- [x] Migration tests prove existing Runs remain unpinned and pin state persists
   without changing execution, trace, result, or Object relationships.
-- [ ] Run review tests prove pin, verdict, and annotation updates remain
+- [x] Run review tests prove pin, verdict, and annotation updates remain
   revision-checked and human-only.
-- [ ] Evals routing/UI tests prove bottom-left navigation, pinned-first ordering,
+- [x] Evals routing/UI tests prove bottom-left navigation, pinned-first ordering,
   readable input/result, inline editing, and links to the existing Run detail.
-- [ ] All root Runs remain visible, including legacy unreviewed and failed Runs;
+- [x] All root Runs remain visible, including legacy unreviewed and failed Runs;
   pinned Runs appear first and all other Runs remain newest first.
-- [ ] The successful selected Sarah Guo Run set can be annotated and pinned
+- [x] The successful selected Sarah Guo Run set can be annotated and pinned
   without altering or hiding its earlier failed attempts.
-- [ ] Repository-wide format, lint, Rust, web, Python, and `git diff --check`
+- [x] Repository-wide format, lint, Rust, web, Python, and `git diff --check`
   checks pass.
+
+## Verification
+
+- `cargo fmt --check`, Clippy with warnings denied, and `cargo test` passed.
+- Web type-check, 54 tests, and production build passed.
+- Python client: 21 tests passed; Python compileall passed.
+- Database-backed contract cases compile and skip safely when
+  `TEST_DATABASE_URL` is not configured; no database DSN was supplied.
+- `git diff --check` passed. Enyu needs no downstream change because its overlay
+  does not consume the human-only Run review API or UI.
 
 ## Approval Boundary
 
-This RD is planning only until explicit execution approval. No Slack messages,
-database writes, fixture deletion, deployment, external issue creation, or merge
-is authorized by this document alone. Agents and sandboxes continue using
-authenticated HTTP APIs and never receive a database DSN.
+Execution is approved for implementation and local verification. Slack messages,
+historical Run mutation, fixture deletion, deployment, and merge still require
+separate approval. Agents and sandboxes continue using authenticated HTTP APIs
+and never receive a database DSN.

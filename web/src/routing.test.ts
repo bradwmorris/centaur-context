@@ -13,6 +13,7 @@ describe("durable application routes", () => {
     ["/sources/source-id", "sources", "source-id"],
     ["/notes/note-id", "notes", "note-id"],
     ["/runs/run-id", "runs", "run-id"],
+    ["/evals/run-id", "evals", "run-id"],
     ["/schema/objects/structure", "schema", "objects"],
   ])("parses %s", (path, section, selectedId) => {
     expect(parseRoute(path)).toEqual({ section, selectedId, connectionId: null });
@@ -23,6 +24,7 @@ describe("durable application routes", () => {
     expect(objectPath("object id")).toBe("/objects/object%20id");
     expect(connectionPath("connection id")).toBe("/connections/connection%20id");
     expect(sectionPath("runs")).toBe("/runs");
+    expect(sectionPath("evals")).toBe("/evals");
     expect(detailPath("tasks", "task-id")).toBe("/tasks/task-id");
     expect(schemaPath()).toBe("/schema");
     expect(schemaPath("objects")).toBe("/schema/objects/rows");

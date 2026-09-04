@@ -4,7 +4,7 @@ use axum::{
 };
 use centaur_context::{
     api::{AppState, human_router, note_write_router},
-    db,
+    db, runs,
 };
 use http_body_util::BodyExt;
 use serde_json::json;
@@ -413,6 +413,99 @@ async fn one_run_owns_trace_result_and_mutation_events() {
     );
     let columns: Vec<String> = sqlx::query("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='runs'").fetch_all(&pool).await.unwrap().into_iter().map(|row| row.get(0)).collect();
     assert!(!columns.iter().any(|column| column == "changes"));
+}
+
+#[tokio::test]
+async fn eval_review_pins_existing_root_runs_without_copying_history() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let older = Uuid::new_v4();
+    let newer = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    for (id, parent, created_at) in [
+        (older, None, "2099-01-01T00:00:00Z"),
+        (newer, None, "2099-01-02T00:00:00Z"),
+        (child, Some(newer), "2099-01-03T00:00:00Z"),
+    ] {
+        sqlx::query("INSERT INTO runs(id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,input,trace,result,created_at,updated_at) VALUES($1,$2,'human_mutation','completed','human','eval-reviewer',$3,'{\"prompt\":\"test input\"}','[{\"entry_type\":\"test\"}]','{\"summary\":\"test output\"}',$4::timestamptz,$4::timestamptz)")
+            .bind(id)
+            .bind(parent)
+            .bind(format!("eval-review-{id}"))
+            .bind(created_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let initial = runs::detail(&pool, older).await.unwrap().run;
+    assert!(!initial.pinned);
+    let reviewed = runs::review(
+        &pool,
+        older,
+        "pass",
+        Some("Sarah Guo — step 1 of 5: returned the grounded answer."),
+        Some(true),
+        "brad",
+        0,
+    )
+    .await
+    .unwrap();
+    assert!(reviewed.pinned);
+    assert_eq!(reviewed.verdict, "pass");
+    assert_eq!(reviewed.input, initial.input);
+    assert_eq!(reviewed.trace, initial.trace);
+    assert_eq!(reviewed.result["summary"], initial.result["summary"]);
+    assert_eq!(reviewed.result["review_revision"], 1);
+
+    let stale = runs::review(
+        &pool,
+        older,
+        "fail",
+        Some("stale overwrite"),
+        Some(false),
+        "brad",
+        0,
+    )
+    .await;
+    assert!(matches!(stale, Err(db::DbError::Conflict)));
+
+    let golden = runs::list(
+        &pool,
+        runs::RunFilter {
+            kind: Some("human_mutation".to_owned()),
+            root_only: true,
+            pinned: Some(true),
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let golden_relevant: Vec<Uuid> = golden
+        .into_iter()
+        .filter(|run| run.id == older || run.id == newer || run.id == child)
+        .map(|run| run.id)
+        .collect();
+    assert_eq!(golden_relevant, vec![older]);
+    let other = runs::list(
+        &pool,
+        runs::RunFilter {
+            kind: Some("human_mutation".to_owned()),
+            root_only: true,
+            pinned: Some(false),
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let other_relevant: Vec<Uuid> = other
+        .into_iter()
+        .filter(|run| run.id == older || run.id == newer || run.id == child)
+        .map(|run| run.id)
+        .collect();
+    assert_eq!(other_relevant, vec![newer]);
 }
 
 #[tokio::test]

@@ -23,6 +23,9 @@ pub struct RunFilter {
     pub from: Option<OffsetDateTime>,
     pub to: Option<OffsetDateTime>,
     pub before: Option<OffsetDateTime>,
+    pub before_id: Option<Uuid>,
+    pub root_only: bool,
+    pub pinned: Option<bool>,
     pub limit: i64,
 }
 
@@ -44,6 +47,7 @@ pub struct RunSummary {
     pub error: Option<String>,
     pub verdict: String,
     pub review_notes: Option<String>,
+    pub pinned: bool,
     pub reviewed_by: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
@@ -131,7 +135,7 @@ fn empty_object() -> Value {
 
 const RUN_SELECT: &str = r#"SELECT id,parent_run_id,kind,status,actor_type,actor_id,
  chat_object_id,primary_object_id,idempotency_key,input,trace,result,consulted_object_ids,error,verdict,
- review_notes,reviewed_by,reviewed_at,available_at,started_at,completed_at,created_at,updated_at
+ review_notes,pinned,reviewed_by,reviewed_at,available_at,started_at,completed_at,created_at,updated_at
  FROM runs"#;
 
 pub async fn list(pool: &PgPool, filter: RunFilter) -> Result<Vec<RunSummary>, DbError> {
@@ -146,6 +150,12 @@ pub async fn list(pool: &PgPool, filter: RunFilter) -> Result<Vec<RunSummary>, D
     if let Some(value) = filter.verdict {
         query.push(" AND verdict=").push_bind(value);
     }
+    if filter.root_only {
+        query.push(" AND parent_run_id IS NULL");
+    }
+    if let Some(value) = filter.pinned {
+        query.push(" AND pinned=").push_bind(value);
+    }
     if let Some(value) = filter.from {
         query.push(" AND created_at>=").push_bind(value);
     }
@@ -153,7 +163,16 @@ pub async fn list(pool: &PgPool, filter: RunFilter) -> Result<Vec<RunSummary>, D
         query.push(" AND created_at<=").push_bind(value);
     }
     if let Some(value) = filter.before {
-        query.push(" AND created_at<").push_bind(value);
+        if let Some(id) = filter.before_id {
+            query
+                .push(" AND (created_at,id)<(")
+                .push_bind(value)
+                .push(",")
+                .push_bind(id)
+                .push(")");
+        } else {
+            query.push(" AND created_at<").push_bind(value);
+        }
     }
     if let Some(value) = filter.object_id {
         query
@@ -184,9 +203,8 @@ pub async fn list(pool: &PgPool, filter: RunFilter) -> Result<Vec<RunSummary>, D
                 .push(")");
         }
     }
-    query
-        .push(" ORDER BY created_at DESC,id DESC LIMIT ")
-        .push_bind(filter.limit.clamp(1, 100));
+    query.push(" ORDER BY created_at DESC,id DESC LIMIT ");
+    query.push_bind(filter.limit.clamp(1, 100));
     Ok(query.build_query_as().fetch_all(pool).await?)
 }
 
@@ -517,17 +535,20 @@ pub async fn review(
     id: Uuid,
     verdict: &str,
     notes: Option<&str>,
+    pinned: Option<bool>,
     reviewer: &str,
     expected_revision: i64,
 ) -> Result<RunSummary, DbError> {
     let updated = sqlx::query_scalar::<_, Uuid>(
-        r#"UPDATE runs SET verdict=$2,review_notes=$3,reviewed_by=$4,reviewed_at=now(),
-           result=jsonb_set(result,'{review_revision}',to_jsonb($5::bigint+1),true),updated_at=now()
-           WHERE id=$1 AND COALESCE((result->>'review_revision')::bigint,0)=$5 RETURNING id"#,
+        r#"UPDATE runs SET verdict=$2,review_notes=$3,pinned=COALESCE($4,pinned),
+           reviewed_by=$5,reviewed_at=now(),
+           result=jsonb_set(result,'{review_revision}',to_jsonb($6::bigint+1),true),updated_at=now()
+           WHERE id=$1 AND COALESCE((result->>'review_revision')::bigint,0)=$6 RETURNING id"#,
     )
     .bind(id)
     .bind(verdict)
     .bind(notes)
+    .bind(pinned)
     .bind(reviewer)
     .bind(expected_revision)
     .fetch_optional(pool)

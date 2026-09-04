@@ -10,13 +10,14 @@ const users = [
   { user_object_id: "brad-1", title: "Brad", user_kind: "human", role: "participant", avatar_url: null, avatar_asset_url: null },
   { user_object_id: "rez-1", title: "Rez", user_kind: "agent", role: "participant", avatar_url: null, avatar_asset_url: null },
 ];
+const run = { id: "run-1", parent_run_id: null, kind: "intake", status: "completed", actor_type: "centaur_agent", actor_id: "workflow-enyu-source-ingestion", chat_object_id: chat.id, primary_object_id: source.id, idempotency_key: "run-1", input: {}, trace: [], result: { counts: { objects: 0, connections: 6 }, object_ids: [source.id] }, consulted_object_ids: [], error: null, verdict: "unreviewed", review_notes: null, pinned: false, reviewed_by: null, reviewed_at: null, available_at: null, started_at: now, completed_at: now, created_at: now, updated_at: now };
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/objects");
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
     const path = String(input);
     if (path.includes("/api/v2/connection-graph")) return envelope({ fingerprint: "graph", node_count: 3, connection_count: 2, nodes: [{ id: source.id, kind: "source", title: source.title }, { id: chat.id, kind: "chat", title: chat.title }, { id: "other-1", kind: "entity", title: "Other" }], edges: [{ id: "edge-1", source_object_id: chat.id, target_object_id: source.id, kind: "about", description: "Chat is about source" }, { id: "edge-2", source_object_id: chat.id, target_object_id: "other-1", kind: "involves", description: "Chat involves other" }] });
-    if (path.includes("/api/v2/runs")) return envelope([{ id: "run-1", parent_run_id: null, kind: "intake", status: "completed", actor_type: "centaur_agent", actor_id: "workflow-enyu-source-ingestion", chat_object_id: chat.id, primary_object_id: source.id, idempotency_key: "run-1", input: {}, trace: [], result: { counts: { objects: 0, connections: 6 }, object_ids: [source.id] }, consulted_object_ids: [], error: null, verdict: "unreviewed", review_notes: null, reviewed_by: null, reviewed_at: null, available_at: null, started_at: now, completed_at: now, created_at: now, updated_at: now }]);
+    if (path.includes("/api/v2/runs")) return envelope([run]);
     if (path.includes("/api/v2/object-visuals")) return envelope([{ object_id: chat.id, source_provider: "slack", users }]);
     if (path.includes("/api/v2/objects?")) return envelope([source, chat]);
     if (path.includes("/api/v2/sources")) return envelope({ items: [], next_cursor: null });
@@ -26,11 +27,43 @@ beforeEach(() => {
 });
 
 describe("minimal canonical UI", () => {
-  it("has one Runs surface and no separate Curator or Evals surfaces", async () => {
+  it("keeps Runs and adds Evals as a bottom navigation surface", async () => {
     render(<App />);
     expect(await screen.findByRole("button", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Evals" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Curator Runs" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Evals" })).not.toBeInTheDocument();
+  });
+
+  it("shows all root Runs in an editable pinned-first eval table", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    const pinned = { ...run, id: "run-golden", idempotency_key: "run-golden", kind: "slack_interaction", primary_object_id: null, input: { title: "Golden prompt" }, result: { summary: "Golden result" }, pinned: true, created_at: "2026-08-30T00:00:00Z" };
+    const newer = { ...run, id: "run-newer", idempotency_key: "run-newer", kind: "slack_interaction", primary_object_id: null, input: { title: "New prompt" }, result: { summary: "New result" }, created_at: "2026-09-01T00:00:00Z" };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.includes("/api/v2/runs?") && path.includes("pinned=true")) return envelope([pinned]);
+      if (path.includes("/api/v2/runs?") && path.includes("pinned=false")) return envelope([newer]);
+      return defaultFetch(input, init);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Evals" }));
+    expect(await screen.findByRole("table", { name: "Eval runs" })).toBeVisible();
+    expect(screen.getByRole("columnheader", { name: "Actual result" })).toBeVisible();
+    expect(await screen.findByText("Golden result")).toBeVisible();
+    const rows = screen.getAllByRole("row");
+    expect(rows[1]).toHaveTextContent("Golden prompt");
+    expect(rows[2]).toHaveTextContent("New prompt");
+    expect(screen.getByRole("button", { name: "Edit annotation for run-golden" })).toBeVisible();
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v2\/runs\?.*root_only=true.*pinned=true/), expect.anything());
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v2\/runs\?.*root_only=true.*pinned=false/), expect.anything());
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin run-newer as a golden eval" }));
+    await waitFor(() => {
+      const reviewCall = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes("/runs/run-newer/review"));
+      expect(reviewCall).toBeDefined();
+      expect(JSON.parse(String(reviewCall?.[1]?.body))).toMatchObject({ pinned: true, verdict: "unreviewed", expected_revision: 0 });
+    });
   });
 
   it("lists consolidated runs through API v2", async () => {
