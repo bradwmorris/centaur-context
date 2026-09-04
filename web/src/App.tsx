@@ -340,7 +340,7 @@ function EvalsView({ runs, objects, visuals, query, onQuery, loading, onUpdated 
     </div>
     <div className="eval-table-wrap">
       <table className="eval-table" aria-label="Eval runs">
-        <thead><tr><th>Golden</th><th>Run</th><th>Users</th><th>Input</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>
+        <thead><tr><th>Golden</th><th>Run</th><th>Users</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>
         <tbody>{runs.map((run) => <EvalRunRow run={run} objects={objects} visual={visuals.get(itemVisualObjectId(run))} onUpdated={onUpdated} key={run.id} />)}</tbody>
       </table>
       {!loading && runs.length === 0 && <div className="empty-list">Nothing here yet.</div>}
@@ -381,7 +381,6 @@ function EvalRunRow({ run, objects, visual, onUpdated }: { run: Run; objects: Sh
     <td className="eval-pin-cell"><button type="button" className={run.pinned ? "eval-pin active" : "eval-pin"} disabled={busy} aria-label={run.pinned ? `Unpin ${shortId(run.id)} from golden evals` : `Pin ${shortId(run.id)} as a golden eval`} aria-pressed={run.pinned} onClick={() => void saveControl({ pinned: !run.pinned })}>{run.pinned ? "★" : "☆"}</button></td>
     <td><button type="button" className="eval-run-link" title={`Open ${itemTitle(run, objects)}`} onClick={() => navigate(detailPath("evals", run.id))}><strong>{itemTitle(run, objects)}</strong><span>{shortId(run.id)}</span><span className="eval-run-arrow" aria-hidden="true">›</span></button></td>
     <td className="eval-users-cell"><AttributionStack users={visual?.users ?? []} /></td>
-    <td><span className="eval-cell-text" title={runInput(run)}>{runInput(run)}</span></td>
     <td><span className="eval-cell-text" title={runActualResult(run, objects)}>{runActualResult(run, objects)}</span></td>
     <td><select aria-label={`Verdict for ${shortId(run.id)}`} value={run.verdict} disabled={busy} onChange={(event) => void saveControl({ verdict: event.target.value as RunVerdict })}><option value="unreviewed">Unreviewed</option><option value="pass">Pass</option><option value="mixed">Mixed</option><option value="fail">Fail</option></select>{error && <span className="eval-row-error">{error}</span>}</td>
     <td><InlineEditor label={`annotation for ${shortId(run.id)}`} value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add what happened" className="eval-table-annotation" onSave={async (value) => (await save({ notes: value || null })).review_notes ?? ""} onReload={reload} /></td>

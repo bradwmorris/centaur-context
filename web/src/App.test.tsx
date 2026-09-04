@@ -49,6 +49,7 @@ describe("minimal canonical UI", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Evals" }));
     expect(await screen.findByRole("table", { name: "Eval runs" })).toBeVisible();
     expect(screen.getByRole("columnheader", { name: "Actual result" })).toBeVisible();
+    expect(screen.queryByRole("columnheader", { name: "Input" })).not.toBeInTheDocument();
     expect(await screen.findByText("Golden result")).toBeVisible();
     const rows = screen.getAllByRole("row");
     expect(rows[1]).toHaveTextContent("Golden prompt");
