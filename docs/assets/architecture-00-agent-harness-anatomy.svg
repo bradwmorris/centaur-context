@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="960" viewBox="0 0 1600 960" role="img" aria-labelledby="title desc">
+  <title id="title">The minimal anatomy of an agent harness</title>
+  <desc id="desc">A request enters an agent harness. The harness assembles context and sends it to a model. If the model requests a tool, the harness checks permission, executes the tool, adds the result to context, and repeats. If the model returns a final response, the harness sends it to the user. Small marks identify Pi, Hermes, Claude Code, and Codex as harness examples.</desc>
+  <defs>
+    <linearGradient id="codex" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B9BFF"/>
+      <stop offset="1" stop-color="#4B56D8"/>
+    </linearGradient>
+    <clipPath id="hermes-logo" clipPathUnits="userSpaceOnUse">
+      <circle cx="34" cy="29" r="18"/>
+    </clipPath>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#00E100"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#8B8B91"/>
+    </marker>
+    <style>
+      .bg { fill: #0F0F10; }
+      .harness { fill: #151815; stroke: #00E100; stroke-width: 2; }
+      .panel { fill: #202023; stroke: #5A5A60; stroke-width: 2; }
+      .model { fill: #172117; stroke: #00E100; stroke-width: 2; }
+      .chip { fill: #111112; stroke: #4A4A50; stroke-width: 1.5; }
+      .icon-box { fill: #151517; stroke: #63636A; stroke-width: 1.5; }
+      .eyebrow { fill: #00E100; font: 700 17px Menlo, SFMono-Regular, monospace; letter-spacing: 1.5px; }
+      .label { fill: #F5F5F5; font: 600 24px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .label-small { fill: #F5F5F5; font: 600 18px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .body { fill: #B2B2B7; font: 400 18px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .meta { fill: #8B8B91; font: 400 16px "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .mono { fill: #D9D9DD; font: 500 16px Menlo, SFMono-Regular, monospace; }
+      .green-line { fill: none; stroke: #00E100; stroke-width: 3; marker-end: url(#arrow-green); }
+      .return-line { fill: none; stroke: #00E100; stroke-width: 3; stroke-dasharray: 8 8; marker-end: url(#arrow-green); }
+      .response-line { fill: none; stroke: #8B8B91; stroke-width: 2; marker-end: url(#arrow-muted); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="960"/>
+
+  <!-- User -->
+  <text x="38" y="390" class="meta" style="letter-spacing:1.4px">USER</text>
+  <path d="M57 414H228Q248 414 248 434V506Q248 526 228 526H116L91 552V526H57Q37 526 37 506V434Q37 414 57 414Z" class="panel"/>
+  <text x="72" y="460" class="label-small">Request</text>
+  <text x="72" y="491" class="meta">message + files</text>
+
+  <!-- Harness boundary -->
+  <rect x="292" y="84" width="1268" height="792" rx="28" class="harness"/>
+  <text x="332" y="140" class="eyebrow">AGENT HARNESS</text>
+  <rect x="1360" y="112" width="162" height="38" rx="19" class="chip"/>
+  <text x="1441" y="137" class="mono" text-anchor="middle">device or VM</text>
+
+  <!-- Harness examples -->
+  <g transform="translate(332 176)">
+    <rect width="132" height="58" rx="12" class="chip"/>
+    <circle cx="30" cy="29" r="18" fill="#29292D"/>
+    <text x="30" y="36" fill="#F5F5F5" font-family="Georgia, serif" font-size="24" text-anchor="middle">π</text>
+    <text x="57" y="35" class="label-small">Pi</text>
+  </g>
+
+  <g transform="translate(478 176)">
+    <rect width="154" height="58" rx="12" class="chip"/>
+    <image href="data:image/jpeg;base64,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" x="16" y="11" width="36" height="36" preserveAspectRatio="xMidYMid slice" clip-path="url(#hermes-logo)"/>
+    <text x="67" y="35" class="label-small">Hermes</text>
+  </g>
+
+  <g transform="translate(646 176)">
+    <rect width="206" height="58" rx="12" class="chip"/>
+    <g transform="translate(30 29)" stroke="#D97757" stroke-width="3" stroke-linecap="round">
+      <path d="M0-16V16M-16 0H16M-11-11 11 11M11-11-11 11M-6-15 6 15M6-15-6 15M-15-6 15 6M-15 6 15-6"/>
+    </g>
+    <text x="60" y="35" class="label-small">Claude Code</text>
+  </g>
+
+  <g transform="translate(866 176)">
+    <rect width="166" height="58" rx="12" class="chip"/>
+    <path d="M17 37C11 37 8 33 8 28C8 23 12 19 17 19C19 13 24 10 31 10C39 10 45 15 46 22C51 22 55 26 55 31C55 35 52 39 47 39H18Z" fill="url(#codex)"/>
+    <path d="M23 24 29 29 23 34M33 34H41" fill="none" stroke="#FFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="70" y="35" class="label-small">Codex</text>
+  </g>
+
+  <!-- Request becomes context -->
+  <path d="M248 470H368" class="green-line"/>
+
+  <!-- Context -->
+  <rect x="368" y="330" width="310" height="302" rx="18" class="panel"/>
+  <g transform="translate(398 364)">
+    <rect x="8" y="0" width="32" height="40" rx="3" fill="none" stroke="#8B8B91" stroke-width="2"/>
+    <rect x="0" y="8" width="32" height="40" rx="3" fill="#202023" stroke="#F5F5F5" stroke-width="2"/>
+    <path d="M8 21H24M8 28H24M8 35H19" stroke="#00E100" stroke-width="2" stroke-linecap="round"/>
+  </g>
+  <text x="460" y="393" class="eyebrow">CONTEXT</text>
+  <path d="M398 428H648" stroke="#4F4F55"/>
+  <text x="398" y="470" class="body">Request + history</text>
+  <text x="398" y="511" class="body">Instructions / skills</text>
+  <text x="398" y="552" class="body">Tool definitions</text>
+  <text x="398" y="602" class="meta">what the model sees</text>
+
+  <path d="M678 481H772" class="green-line"/>
+  <rect x="691" y="455" width="68" height="34" rx="17" class="chip"/>
+  <text x="725" y="477" class="mono" text-anchor="middle">send</text>
+
+  <!-- Model -->
+  <rect x="772" y="330" width="284" height="302" rx="18" class="model"/>
+  <g transform="translate(802 365)" fill="none" stroke="#00E100" stroke-width="2">
+    <circle cx="23" cy="23" r="21"/>
+    <circle cx="15" cy="17" r="3" fill="#00E100"/>
+    <circle cx="31" cy="17" r="3" fill="#00E100"/>
+    <circle cx="23" cy="32" r="3" fill="#00E100"/>
+    <path d="M17 19 21 29M29 19 25 29"/>
+  </g>
+  <text x="864" y="393" class="eyebrow">MODEL</text>
+  <rect x="884" y="404" width="144" height="32" rx="16" class="chip"/>
+  <text x="956" y="425" class="mono" text-anchor="middle" style="font-size:14px">local or API</text>
+  <path d="M802 454H1026" stroke="#267B2A"/>
+  <text x="802" y="498" class="body">Tool call</text>
+  <text x="802" y="535" class="meta">or</text>
+  <text x="802" y="576" class="body">Final response</text>
+  <text x="802" y="608" class="meta">chooses the next step</text>
+
+  <path d="M1056 442H1152" class="green-line"/>
+  <rect x="1061" y="406" width="90" height="34" rx="17" class="chip"/>
+  <text x="1106" y="428" class="mono" text-anchor="middle">tool call</text>
+
+  <!-- Tool runner -->
+  <rect x="1152" y="330" width="330" height="302" rx="18" class="panel"/>
+  <g transform="translate(1182 365)">
+    <rect x="0" y="0" width="48" height="42" rx="5" fill="none" stroke="#F5F5F5" stroke-width="2"/>
+    <path d="M9 13 16 20 9 27M23 28H37" fill="none" stroke="#00E100" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="1250" y="393" class="eyebrow">TOOL RUNNER</text>
+  <path d="M1182 428H1452" stroke="#4F4F55"/>
+  <text x="1182" y="470" class="body">Check permission</text>
+  <text x="1182" y="511" class="body">Execute tool</text>
+  <text x="1182" y="552" class="body">Capture result</text>
+  <text x="1182" y="602" class="meta">files · shell · APIs · browser</text>
+
+  <!-- Tool result closes the loop -->
+  <path d="M1317 632V714H523V632" class="return-line"/>
+  <rect x="822" y="696" width="184" height="36" rx="18" class="chip"/>
+  <text x="914" y="719" class="mono" text-anchor="middle">result → context</text>
+
+  <!-- No tool call ends the turn -->
+  <path d="M914 632V792H157V552" class="response-line"/>
+  <rect x="530" y="774" width="154" height="36" rx="18" class="chip"/>
+  <text x="607" y="797" class="mono" text-anchor="middle">final response</text>
+</svg>
