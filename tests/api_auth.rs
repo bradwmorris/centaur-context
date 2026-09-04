@@ -7,6 +7,7 @@ use centaur_context::{
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
     intake::router as intake_router,
+    research_mutation::router as research_mutation_router,
     source_intake::router as source_intake_router,
 };
 use http_body_util::BodyExt;
@@ -22,6 +23,48 @@ fn state() -> AppState {
             .unwrap(),
         embeddings: None,
         text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+    }
+}
+
+#[tokio::test]
+async fn research_mutation_listener_requires_its_exact_workflow_principal() {
+    let router = research_mutation_router(state(), "m".repeat(32));
+    for (token, principal, expected) in [
+        (
+            "x".repeat(32),
+            "workflow-enyu-context-mutation",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "m".repeat(32),
+            "agent-enyu-researcher",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "m".repeat(32),
+            "workflow-enyu-source-ingestion",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "m".repeat(32),
+            "workflow-enyu-context-mutation",
+            StatusCode::OK,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("x-centaur-principal-id", principal)
+                    .header("x-centaur-thread-key", "workflow:test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
     }
 }
 

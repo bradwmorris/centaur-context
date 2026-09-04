@@ -31,5 +31,6 @@ secrets = [
     {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-intake.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
     {type = "http", name = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-enyu.centaur.svc.cluster.local"]},
 ]

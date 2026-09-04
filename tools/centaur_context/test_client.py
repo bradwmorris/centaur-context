@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -33,6 +34,8 @@ def privileged_client(handler):
         intake_token="i" * 32,
         source_intake_url="http://source-intake.test",
         source_intake_token="s" * 32,
+        research_mutation_url="http://research-mutation.test",
+        research_mutation_token="m" * 32,
         external_action_url="http://actions.test",
         external_action_token="e" * 32,
         principal_id="agent-test",
@@ -146,6 +149,31 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
     scoped.source_intake_validate({"version": "centaur-context-source-intake-v2"})
     scoped.source_intake_resolve_connections(["Ryan Greenblatt", "Agents"])
+    scoped.edit_source(
+        "source-1",
+        {"expected_revision": 2, "title": "Corrected title"},
+        "edit-source-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
+    scoped.connect(
+        {
+            "source_object_id": "note-1",
+            "kind": "related_to",
+            "target_object_id": "source-1",
+            "description": "The note discusses the same research topic.",
+        },
+        "connect-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
+    scoped.edit_connection(
+        "connection-1",
+        {"expected_revision": 1, "description": "A clearer explanation."},
+        "edit-connection-1",
+        principal_id="workflow-enyu-context-mutation",
+        thread_key="workflow:mutation-1",
+    )
     scoped.workflow_run_start({"run_id": "run-1"})
     scoped.workflow_run_trace("run-1", {"id": "trace-1"})
     scoped.workflow_run_finish("run-1", {"status": "completed"})
@@ -157,6 +185,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         ("intake.test", "/api/v2/intake/batches/validate"),
         ("source-intake.test", "/api/v2/source-intake/validate"),
         ("source-intake.test", "/api/v2/source-intake/resolve-connections"),
+        ("research-mutation.test", "/api/v2/sources/source-1"),
+        ("research-mutation.test", "/api/v2/connections"),
+        ("research-mutation.test", "/api/v2/connections/connection-1"),
         ("source-intake.test", "/api/v2/source-intake/runs/start"),
         ("source-intake.test", "/api/v2/source-intake/runs/run-1/trace"),
         ("source-intake.test", "/api/v2/source-intake/runs/run-1/finish"),
@@ -168,6 +199,9 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         "Bearer " + "i" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
+        "Bearer " + "m" * 32,
+        "Bearer " + "m" * 32,
+        "Bearer " + "m" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
         "Bearer " + "s" * 32,
@@ -179,6 +213,73 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     task_payload = json.loads(requests[1].content)
     assert task_payload["originating_chat_object_id"] == "chat-1"
     assert task_payload["derived_from_source_object_ids"] == ["source-1"]
+
+
+def test_source_intake_wait_allows_long_transcripts_to_finish_after_twelve_polls():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"ready": len(requests) >= 13})
+
+    result = privileged_client(handler).source_intake_wait(
+        {"version": "centaur-context-source-intake-v3"},
+        interval_seconds=0,
+    )
+
+    assert result["ready"] is True
+    assert len(requests) == 13
+
+
+def test_create_note_accepts_documented_provenance_on_first_request():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"object_id": "note-1"})
+
+    result = privileged_client(handler).create_note(
+        title="Recursive self-improvement",
+        description="A source-grounded note.",
+        content="Evidence",
+        provenance={"source_type": "slack", "source_ref": "1700000000.000001"},
+        derived_from_source_object_ids=["source-1"],
+        idempotency_key="1700000000.000001",
+    )
+
+    assert result["object_id"] == "note-1"
+    assert len(requests) == 1
+    payload = json.loads(requests[0].content)
+    assert payload["originating_chat_object_id"] is None
+
+
+def test_create_task_omits_empty_originating_chat_object_id():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"object_id": "task-1"})
+
+    result = privileged_client(handler).create_task(
+        title="Follow up on recursive self-improvement",
+        description="A source-grounded follow-up task.",
+        idempotency_key="task-no-originating-chat",
+    )
+
+    assert result["object_id"] == "task-1"
+    payload = json.loads(requests[0].content)
+    assert payload["originating_chat_object_id"] is None
+
+
+def test_create_note_rejects_undocumented_passage_provenance_before_request():
+    with pytest.raises(ValueError, match="passage_end, passage_start"):
+        privileged_client(lambda _: response({})).create_note(
+            title="Recursive self-improvement",
+            description="A source-grounded note.",
+            content="Evidence",
+            provenance={"passage_start": 1, "passage_end": 2},
+            idempotency_key="note-invalid-provenance",
+        )
 
 
 @pytest.mark.parametrize(
@@ -199,6 +300,15 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
             {"batch_id": "batch-1", "manifest_sha256": "a" * 64}
         ),
         lambda value: value.source_intake_validate({"version": "centaur-context-source-intake-v2"}),
+        lambda value: value.connect(
+            {
+                "source_object_id": "note-1",
+                "kind": "related_to",
+                "target_object_id": "source-1",
+                "description": "The records concern the same topic.",
+            },
+            "connect-1",
+        ),
         lambda value: value.reserve_external_action(
             {"version": "centaur-context-external-action-v2"}
         ),
@@ -209,8 +319,21 @@ def test_specialized_writes_never_fall_back_to_the_read_token(monkeypatch, opera
         "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN",
         "CENTAUR_CONTEXT_INTAKE_TOKEN",
         "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN",
         "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN",
     ]:
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError):
         operation(client(lambda _: response({})))
+
+
+def test_tool_manifest_declares_every_specialized_write_credential():
+    manifest = (Path(__file__).with_name("pyproject.toml")).read_text()
+    for name in [
+        "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN",
+        "CENTAUR_CONTEXT_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN",
+        "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN",
+        "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN",
+    ]:
+        assert f'name = "{name}"' in manifest

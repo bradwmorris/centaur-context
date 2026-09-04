@@ -7,6 +7,7 @@ pub mod embeddings;
 pub mod external_actions;
 pub mod ingest;
 pub mod intake;
+pub mod research_mutation;
 pub mod runs;
 pub mod schema;
 pub mod search;

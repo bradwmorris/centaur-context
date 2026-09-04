@@ -497,11 +497,14 @@ async fn reconcile_owned(
             .await?;
     }
 
-    let message_ids = load_message_window(&mut tx, &run).await?;
+    let message_window = load_message_window(&mut tx, &run).await?;
+    let message_ids = message_window.keys().copied().collect::<HashSet<_>>();
     validate_message_refs(&plan, &message_ids)?;
+    validate_human_grounded_objects(&plan, &message_window)?;
     let mut created = HashMap::new();
     let mut changed_objects = HashMap::new();
     let mut sequence = 0_i32;
+    let mut skipped_operations = 0_i32;
 
     for item in &plan.create_objects {
         sequence += 1;
@@ -542,20 +545,17 @@ async fn reconcile_owned(
     }
 
     for item in &plan.update_objects {
-        sequence += 1;
         let current = current_object(&mut tx, item.object_id).await?;
         if current.protected || current.lifecycle != "active" {
-            return Err(CuratorError::Invalid(
-                "the curator cannot update a protected or archived Object".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         if current.revision != item.expected_revision {
             return Err(CuratorError::Conflict);
         }
         if current.kind == "chat" || current.kind == "user" {
-            return Err(CuratorError::Invalid(
-                "Chat and User Objects are protected from curator reconciliation".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         validate_task_patch(&current.kind, item.task.as_ref())?;
         crate::domain::validate_object_description(
@@ -563,6 +563,20 @@ async fn reconcile_owned(
             item.description.as_deref().unwrap_or(&current.description),
         )
         .map_err(invalid)?;
+        if item
+            .title
+            .as_ref()
+            .is_none_or(|value| value == &current.title)
+            && item
+                .description
+                .as_ref()
+                .is_none_or(|value| value == &current.description)
+            && item.task.is_none()
+        {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let before = current_object_json(&current);
         let provenance = curator_provenance(
             run_id,
@@ -611,7 +625,6 @@ async fn reconcile_owned(
     }
 
     for item in &plan.create_connections {
-        sequence += 1;
         let source = resolve_ref(&item.source, &created)?;
         let target = resolve_ref(&item.target, &created)?;
         if source == target {
@@ -621,6 +634,21 @@ async fn reconcile_owned(
         }
         ensure_active_object(&mut tx, source).await?;
         ensure_active_object(&mut tx, target).await?;
+        let exists: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(SELECT 1 FROM connections
+               WHERE source_object_id=$1 AND kind=$2 AND target_object_id=$3
+                 AND archived_at IS NULL)"#,
+        )
+        .bind(source)
+        .bind(&item.kind)
+        .bind(target)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let id = Uuid::new_v4();
         let provenance = curator_provenance(
             run_id,
@@ -660,16 +688,27 @@ async fn reconcile_owned(
     }
 
     for item in &plan.update_connections {
-        sequence += 1;
         let current = current_connection(&mut tx, item.connection_id).await?;
         if current.protected || current.archived_at.is_some() {
-            return Err(CuratorError::Invalid(
-                "the curator cannot update a protected or archived connection".into(),
-            ));
+            skipped_operations += 1;
+            continue;
         }
         if current.revision != item.expected_revision {
             return Err(CuratorError::Conflict);
         }
+        if item
+            .kind
+            .as_ref()
+            .is_none_or(|value| value == &current.kind)
+            && item
+                .description
+                .as_ref()
+                .is_none_or(|value| value == &current.description)
+        {
+            skipped_operations += 1;
+            continue;
+        }
+        sequence += 1;
         let before = connection_json(&current);
         let provenance = curator_provenance(
             run_id,
@@ -712,8 +751,12 @@ async fn reconcile_owned(
 
     validate_derived_connections(&plan, &created, &changed_objects, run.chat_object_id)?;
     let result = json!({
-        "run_id": run_id, "status": "completed", "chat_object_id": run.chat_object_id,
-        "created_objects": created, "change_count": sequence,
+        "run_id": run_id,
+        "status": if sequence == 0 { "no_changes" } else { "completed" },
+        "chat_object_id": run.chat_object_id,
+        "created_objects": created,
+        "change_count": sequence,
+        "skipped_operations": skipped_operations,
     });
     sqlx::query(
         r#"UPDATE runs SET status='completed',completed_at=now(),
@@ -849,13 +892,17 @@ pub async fn undo_as(
 }
 
 pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> {
+    plan.update_objects
+        .retain(|item| item.title.is_some() || item.description.is_some() || item.task.is_some());
+    plan.update_connections
+        .retain(|item| item.kind.is_some() || item.description.is_some());
     let count = plan.create_objects.len()
         + plan.update_objects.len()
         + plan.create_connections.len()
         + plan.update_connections.len();
-    if count == 0 || count > MAX_OPERATIONS {
+    if count > MAX_OPERATIONS {
         return Err(CuratorError::Invalid(
-            "a reconciliation plan must contain between 1 and 100 operations".into(),
+            "a reconciliation plan must contain at most 100 operations".into(),
         ));
     }
     let mut clients = HashSet::new();
@@ -1023,9 +1070,6 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                 ));
             }
         }
-        if item.title.is_none() && item.description.is_none() && item.task.is_none() {
-            return Err(CuratorError::Invalid("Object update has no changes".into()));
-        }
     }
     for item in &mut plan.create_connections {
         for reference in [&mut item.source, &mut item.target] {
@@ -1067,11 +1111,6 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
             .map_err(invalid)?;
         item.description = optional_text(item.description.take(), "connection description", 1000)
             .map_err(invalid)?;
-        if item.kind.is_none() && item.description.is_none() {
-            return Err(CuratorError::Invalid(
-                "Connection update has no changes".into(),
-            ));
-        }
     }
     Ok(())
 }
@@ -1241,12 +1280,20 @@ async fn lock_run(
     .ok_or(CuratorError::NotFound)
 }
 
+#[derive(Debug, FromRow)]
+struct MessageEvidence {
+    id: Uuid,
+    sender_kind: String,
+    content: String,
+}
+
 async fn load_message_window(
     tx: &mut Transaction<'_, Postgres>,
     run: &CuratorRun,
-) -> Result<HashSet<Uuid>, CuratorError> {
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT m.id FROM chat_messages m
+) -> Result<HashMap<Uuid, MessageEvidence>, CuratorError> {
+    let messages: Vec<MessageEvidence> = sqlx::query_as(
+        r#"SELECT m.id,u.user_kind AS sender_kind,m.content FROM chat_messages m
+           JOIN users u ON u.object_id=m.sender_user_object_id
            WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN
              (SELECT ingestion_sequence FROM chat_messages WHERE id=$2)
              AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3)
@@ -1257,12 +1304,134 @@ async fn load_message_window(
     .bind(run.last_message_id)
     .fetch_all(&mut **tx)
     .await?;
-    if ids.len() != run.message_count as usize {
+    if messages.len() != run.message_count as usize {
         return Err(CuratorError::Invalid(
             "curator run message window no longer matches its recorded count".into(),
         ));
     }
-    Ok(ids.into_iter().collect())
+    Ok(messages
+        .into_iter()
+        .map(|message| (message.id, message))
+        .collect())
+}
+
+fn validate_human_grounded_objects(
+    plan: &ReconciliationPlan,
+    messages: &HashMap<Uuid, MessageEvidence>,
+) -> Result<(), CuratorError> {
+    for item in &plan.create_objects {
+        if item.kind == "source" {
+            return Err(CuratorError::Invalid(
+                "Source creation is ingestion-only; the curator cannot create Sources".into(),
+            ));
+        }
+        if !matches!(item.kind.as_str(), "memory" | "task") {
+            continue;
+        }
+        let evidence = item
+            .supporting_message_ids
+            .iter()
+            .filter_map(|id| messages.get(id))
+            .collect::<Vec<_>>();
+        if evidence.is_empty()
+            || evidence
+                .iter()
+                .any(|message| message.sender_kind != "human")
+        {
+            return Err(CuratorError::Invalid(format!(
+                "curator-created {} Objects must be supported only by human-authored messages",
+                item.kind
+            )));
+        }
+        if item.kind == "task"
+            && evidence
+                .iter()
+                .any(|message| is_source_ingestion_request(&message.content))
+        {
+            return Err(CuratorError::Invalid(
+                "Source-ingestion requests are workflow commands, not durable Tasks".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_source_ingestion_request(content: &str) -> bool {
+    let content = content.to_ascii_lowercase();
+    let explicit_ingestion = ["ingest", "import", "capture"]
+        .iter()
+        .any(|term| content.contains(term));
+    let names_source_material = [
+        "source",
+        "conversation",
+        "url",
+        "link",
+        "file",
+        "video",
+        "podcast",
+        "http://",
+        "https://",
+    ]
+    .iter()
+    .any(|term| content.contains(term));
+    let add_source = content.contains("add")
+        && ["source", "url", "file", "http://", "https://"]
+            .iter()
+            .any(|term| content.contains(term));
+    (explicit_ingestion && names_source_material) || add_source
+}
+
+fn drop_disallowed_worker_creates(
+    plan: &mut ReconciliationPlan,
+    messages: &[WorkerMessage],
+) -> Vec<String> {
+    let human_message_ids = messages
+        .iter()
+        .filter(|message| message.sender_kind == "human")
+        .map(|message| message.id)
+        .collect::<HashSet<_>>();
+    let ingestion_request_ids = messages
+        .iter()
+        .filter(|message| {
+            message.sender_kind == "human" && is_source_ingestion_request(&message.content)
+        })
+        .map(|message| message.id)
+        .collect::<HashSet<_>>();
+    let dropped = plan
+        .create_objects
+        .iter()
+        .filter(|item| {
+            item.kind == "source"
+                || (matches!(item.kind.as_str(), "memory" | "task")
+                    && (item.supporting_message_ids.is_empty()
+                        || item
+                            .supporting_message_ids
+                            .iter()
+                            .any(|id| !human_message_ids.contains(id))))
+                || (item.kind == "task"
+                    && item
+                        .supporting_message_ids
+                        .iter()
+                        .any(|id| ingestion_request_ids.contains(id)))
+        })
+        .map(|item| item.client_id.clone())
+        .collect::<HashSet<_>>();
+    if dropped.is_empty() {
+        return Vec::new();
+    }
+    plan.create_objects
+        .retain(|item| !dropped.contains(&item.client_id));
+    plan.create_connections.retain(|connection| {
+        !object_ref_uses_client(&connection.source, &dropped)
+            && !object_ref_uses_client(&connection.target, &dropped)
+    });
+    let mut dropped = dropped.into_iter().collect::<Vec<_>>();
+    dropped.sort();
+    dropped
+}
+
+fn object_ref_uses_client(reference: &ObjectRef, client_ids: &HashSet<String>) -> bool {
+    matches!(reference, ObjectRef::Created { client_id } if client_ids.contains(client_id))
 }
 
 fn validate_message_refs(
@@ -1900,6 +2069,21 @@ pub async fn run_worker(
                 worker_context(&pool, embeddings.as_ref(), text_search_config, &run).await?;
             let mut plan =
                 request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
+            let dropped = drop_disallowed_worker_creates(&mut plan, &messages);
+            if !dropped.is_empty() {
+                crate::runs::append_curator_trace(
+                    &pool,
+                    run.id,
+                    "deterministic_filter",
+                    json!({"dropped_create_client_ids": dropped}),
+                )
+                .await
+                .map_err(|trace_error| {
+                    CuratorError::Invalid(format!(
+                        "curator deterministic-filter trace failed: {trace_error}"
+                    ))
+                })?;
+            }
             if let Err(error) = validate_plan(&mut plan) {
                 crate::runs::append_curator_trace(
                     &pool,
@@ -2075,7 +2259,7 @@ Every create_connections entry MUST contain all of these fields:
 An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
 {"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
 
-Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source; the dedicated ingestion workflow owns Source creation. Tasks require task.confirmed=true and may be created or updated only for an explicit instruction or commitment. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source and do not create a Task that restates the request; the dedicated ingestion workflow owns and executes that command. Tasks require task.confirmed=true and may be created or updated only for an explicit durable instruction or commitment that remains actionable after the current bot or workflow finishes. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -2549,6 +2733,183 @@ impl IntoResponse for CuratorApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn worker_message(id: Uuid, sender_kind: &str) -> WorkerMessage {
+        WorkerMessage {
+            id,
+            provider_message_id: id.to_string(),
+            sender_user_object_id: Uuid::new_v4(),
+            sender_title: sender_kind.into(),
+            sender_kind: sender_kind.into(),
+            content: "supporting message".into(),
+            source_created_at: OffsetDateTime::now_utc(),
+        }
+    }
+
+    fn worker_message_with_content(id: Uuid, sender_kind: &str, content: &str) -> WorkerMessage {
+        WorkerMessage {
+            content: content.into(),
+            ..worker_message(id, sender_kind)
+        }
+    }
+
+    fn created_object(
+        client_id: &str,
+        kind: &str,
+        supporting_message_ids: Vec<Uuid>,
+    ) -> CreateObject {
+        CreateObject {
+            client_id: client_id.into(),
+            kind: kind.into(),
+            title: format!("{kind} title"),
+            description: format!("A concrete {kind} description with enough grounded context."),
+            supporting_message_ids,
+            entity_kind: None,
+            task: None,
+            memory: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn worker_filter_drops_sources_and_their_connections() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("duplicate-source", "source", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![CreateConnection {
+                source: ObjectRef::Created {
+                    client_id: "duplicate-source".into(),
+                },
+                kind: "derived_from".into(),
+                target: ObjectRef::Existing {
+                    object_id: Uuid::new_v4(),
+                },
+                description: "Derived from the conversation.".into(),
+                supporting_message_ids: vec![human_id],
+            }],
+            update_connections: vec![],
+        };
+
+        let dropped =
+            drop_disallowed_worker_creates(&mut plan, &[worker_message(human_id, "human")]);
+
+        assert_eq!(dropped, vec!["duplicate-source"]);
+        assert!(plan.create_objects.is_empty());
+        assert!(plan.create_connections.is_empty());
+    }
+
+    #[test]
+    fn worker_filter_drops_assistant_derived_memories() {
+        let agent_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("assistant-memory", "memory", vec![agent_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped =
+            drop_disallowed_worker_creates(&mut plan, &[worker_message(agent_id, "agent")]);
+
+        assert_eq!(dropped, vec!["assistant-memory"]);
+        assert!(plan.create_objects.is_empty());
+    }
+
+    #[test]
+    fn worker_filter_drops_tasks_that_restate_source_ingestion_commands() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("ingestion-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "can you add this conversation as source https://youtu.be/example",
+            )],
+        );
+
+        assert_eq!(dropped, vec!["ingestion-task"]);
+        assert!(plan.create_objects.is_empty());
+    }
+
+    #[test]
+    fn worker_filter_keeps_a_distinct_durable_task() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("durable-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "Please review the research brief by Friday",
+            )],
+        );
+
+        assert!(dropped.is_empty());
+        assert_eq!(plan.create_objects.len(), 1);
+    }
+
+    #[test]
+    fn worker_filter_does_not_treat_every_add_link_request_as_ingestion() {
+        let human_id = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("link-task", "task", vec![human_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+
+        let dropped = drop_disallowed_worker_creates(
+            &mut plan,
+            &[worker_message_with_content(
+                human_id,
+                "human",
+                "Please add the launch link to the briefing task",
+            )],
+        );
+
+        assert!(dropped.is_empty());
+        assert_eq!(plan.create_objects.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_guard_rejects_any_curator_source() {
+        let message_id = Uuid::new_v4();
+        let plan = ReconciliationPlan {
+            create_objects: vec![created_object("source", "source", vec![message_id])],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+        let messages = HashMap::from([(
+            message_id,
+            MessageEvidence {
+                id: message_id,
+                sender_kind: "human".into(),
+                content: "add this URL as a source https://example.com".into(),
+            },
+        )]);
+
+        assert!(
+            validate_human_grounded_objects(&plan, &messages)
+                .unwrap_err()
+                .to_string()
+                .contains("ingestion-only")
+        );
+    }
 
     #[test]
     fn plan_allows_work_without_a_memory() {

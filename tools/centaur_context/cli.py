@@ -103,7 +103,7 @@ def create_note(
     derived_from_source_object_id: list[str] | None = None,
     idempotency_key: str = "",
 ) -> None:
-    """Create a Note using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
+    """Create a Note. Provenance accepts source_type, source_ref, note, publication_allowed."""
     try:
         provenance = json.loads(provenance_json)
     except json.JSONDecodeError as exc:
@@ -170,6 +170,11 @@ def source_intake_commit(manifest_file: str) -> None:
 def source_intake_status(manifest_file: str) -> None:
     """Check commit and retrieval readiness for one Enyu Source manifest."""
     _print(_client().source_intake_status(_manifest(manifest_file)))
+
+
+def source_intake_wait(manifest_file: str) -> None:
+    """Wait for a committed Source intake to become query-ready."""
+    _print(_client().source_intake_wait(_manifest(manifest_file)))
 
 
 def list_themes(slug: str | None = None) -> None:
@@ -277,7 +282,6 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("source_id")
 
     command = commands.add_parser("read-artifact")
-    command.add_argument("source_id")
     command.add_argument("artifact_id")
     command.add_argument("--offset", type=_bounded_int(0, 2**31 - 1), default=0)
     command.add_argument("--limit", type=_bounded_int(1, 20_000), default=8_000)
@@ -287,12 +291,25 @@ def _build_parser() -> argparse.ArgumentParser:
     command = commands.add_parser("read-note")
     command.add_argument("note_id")
 
-    command = commands.add_parser("create-note")
+    command = commands.add_parser(
+        "create-note",
+        description=(
+            "Create a Note. --provenance-json accepts only source_type, source_ref, "
+            "note, and publication_allowed."
+        ),
+    )
     command.add_argument("title")
     command.add_argument("--description", required=True)
     command.add_argument("--content", required=True)
     command.add_argument("--content-format", default="markdown")
-    command.add_argument("--provenance-json", default="{}")
+    command.add_argument(
+        "--provenance-json",
+        default="{}",
+        help=(
+            'JSON object using only source_type, source_ref, note, publication_allowed; '
+            'example: {"source_type":"slack","source_ref":"1700000000.000001"}'
+        ),
+    )
     command.add_argument("--originating-chat-object-id")
     command.add_argument("--derived-from-source-object-id", action="append")
     command.add_argument("--idempotency-key", required=True)
@@ -314,6 +331,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "source-intake-validate",
         "source-intake-commit",
         "source-intake-status",
+        "source-intake-wait",
     ):
         command = commands.add_parser(name)
         command.add_argument("manifest_file")
