@@ -2,6 +2,8 @@
 
 This folder is the canonical starting point for Centaur Context evaluation work.
 
+**[View the current eval table](./evals.csv)**
+
 - `evals.csv` contains concrete eval cases that have been attempted.
 - This README contains candidate golden scenarios that have not necessarily been
   exercised as complete evals.
