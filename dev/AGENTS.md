@@ -95,6 +95,25 @@ integrations, publishing, sending, spending, credentials, or deletion require
 explicit requester approval.]
 ```
 
+When a relationship is hard to understand in short prose, insert an optional
+`## Design View` next to the section it supports. Use the smallest form that
+makes the implementation contract clear:
+
+- pseudocode for logic, decisions, or state transitions;
+- a call tree for runtime flow, a component tree for UI ownership, or a shallow
+  file tree for module responsibilities;
+- Mermaid for interaction, control, or data flow across several boundaries;
+- a `diff`-shaped sketch when the important point is the change from the current
+  shape to the target shape; or
+- the complete target block when most of it is new or omitted context would
+  hide ownership or order.
+
+Keep only the calls, files, states, and boundaries needed for the RD. Place the
+view beside the concise text it clarifies. A design view is explanatory: it
+must not replace the goal, observable done state, file boundaries, execution
+steps, or checks. Do not add a diagram when a short paragraph or list is clearer,
+and do not create a separate visual artifact merely to explain the RD.
+
 ## Quality Rules
 
 - Aim for fewer than 1,000 words; never exceed 3,000 words without explicit
