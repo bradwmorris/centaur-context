@@ -118,8 +118,8 @@ Current deployed checkpoint: local Helm revision 125 is healthy; the Context
 UI is available at `http://127.0.0.1:8180/objects`; the 30-second sandbox grace
 is active; and Candidate 8 proved the live behavior. The work remains on open
 feature PRs rather than `origin/main`: Context PR #83, Enyu PR #31, and Centaur
-PR #13 in Brad's Centaur fork. All three PRs are open and currently report a
-clean merge state. The protected canonical Centaur checkout at
+PR #13 in Brad's Centaur fork. All three PRs are open. The protected canonical
+Centaur checkout at
 `/Users/bradleymorris/Desktop/dev/centaur` was not edited.
 
 Remaining work is deliberately narrow:
