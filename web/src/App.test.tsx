@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -53,6 +53,10 @@ describe("minimal canonical UI", () => {
     const rows = screen.getAllByRole("row");
     expect(rows[1]).toHaveTextContent("Golden prompt");
     expect(rows[2]).toHaveTextContent("New prompt");
+    expect(screen.getByRole("columnheader", { name: "Users" })).toBeVisible();
+    expect(within(rows[1]).getByRole("img", { name: "Brad, Human, participant" })).toBeVisible();
+    expect(within(rows[1]).getByRole("img", { name: "Rez, Agent, participant" })).toBeVisible();
+    expect(within(rows[1]).getByRole("button", { name: /Golden prompt/ })).toHaveAttribute("title", "Open Bot interaction · Golden prompt");
     expect(screen.getByRole("button", { name: "Edit annotation for run-golden" })).toBeVisible();
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/api\/v2\/runs\?.*root_only=true.*pinned=true/), expect.anything());

@@ -115,15 +115,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .description-snippet[data-empty="true"] { color: var(--text-subtle); font-style: italic; }
 .empty-list { color: var(--text-subtle); text-align: center; padding: 60px 10px; font-size: 13px; }
 .eval-table-wrap { min-width: 0; margin: 0 12px 24px; overflow-x: auto; border: 1px solid rgba(255,255,255,.07); border-radius: 7px; background: #0f1012; }
-.eval-table { width: 100%; min-width: 1100px; border-collapse: collapse; table-layout: fixed; }
+.eval-table { width: 100%; min-width: 970px; border-collapse: collapse; table-layout: fixed; }
 .eval-table th { height: 38px; padding: 0 10px; border-bottom: 1px solid rgba(255,255,255,.08); color: var(--text-subtle); font-size: 10px; font-weight: 540; text-align: left; text-transform: uppercase; letter-spacing: .04em; }
 .eval-table th:nth-child(1) { width: 58px; text-align: center; }
-.eval-table th:nth-child(2) { width: 190px; }
-.eval-table th:nth-child(3), .eval-table th:nth-child(4) { width: 220px; }
-.eval-table th:nth-child(5) { width: 115px; }
-.eval-table th:nth-child(6) { width: 240px; }
-.eval-table th:nth-child(7) { width: 80px; }
-.eval-table td { min-width: 0; height: 64px; padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: middle; color: #c7c9cf; font-size: 11px; }
+.eval-table th:nth-child(2) { width: 200px; }
+.eval-table th:nth-child(3) { width: 72px; }
+.eval-table th:nth-child(4) { width: 150px; }
+.eval-table th:nth-child(5) { width: 170px; }
+.eval-table th:nth-child(6) { width: 98px; }
+.eval-table th:nth-child(7) { width: 160px; }
+.eval-table th:nth-child(8) { width: 62px; }
+.eval-table td { min-width: 0; height: 50px; padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: middle; color: #c7c9cf; font-size: 11px; overflow: hidden; white-space: nowrap; }
 .eval-table tr:last-child td { border-bottom: 0; }
 .eval-table tr.pinned td { background: rgba(197,172,110,.035); }
 .eval-pin-cell { text-align: center; }
@@ -131,12 +133,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .eval-pin:hover { background: #1c1d20; color: #bbb59e; }
 .eval-pin.active { color: #d1b867; }
 .eval-pin:disabled { opacity: .55; cursor: wait; }
-.eval-run-link { width: 100%; display: grid; gap: 3px; border: 0; background: transparent; padding: 0; text-align: left; cursor: pointer; }
-.eval-run-link strong { color: #dedfe2; font-size: 11px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.eval-run-link span, .eval-table time { color: var(--text-subtle); font-size: 9px; }
-.eval-cell-text { display: -webkit-box; overflow: hidden; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-height: 1.4; }
+.eval-run-link { width: 100%; min-width: 0; height: 32px; display: flex; align-items: center; gap: 7px; border: 1px solid #34363d; border-radius: 6px; background: #151618; padding: 0 8px; text-align: left; cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+.eval-run-link:hover { border-color: #555861; background: #1b1c20; }
+.eval-run-link:focus-visible { outline: 2px solid #777b87; outline-offset: 1px; }
+.eval-run-link strong { min-width: 0; flex: 1 1 auto; color: #e3e4e7; font-size: 11px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eval-run-link > span { flex: 0 0 auto; color: var(--text-subtle); font-size: 9px; }
+.eval-run-link .eval-run-arrow { color: #b9bbc2; font-size: 16px; line-height: 1; }
+.eval-table time { color: var(--text-subtle); font-size: 9px; }
+.eval-users-cell { overflow: visible !important; }
+.eval-cell-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
 .eval-table select { width: 100%; height: 31px; border: 1px solid #383a41; border-radius: 6px; background: #151618; color: #c7c9cf; padding: 0 7px; font-size: 10px; }
-.eval-table-annotation .inline-editor-view { min-height: 34px; }
+.eval-table-annotation .inline-editor-view { min-height: 30px; overflow: hidden; }
+.eval-table-annotation .inline-editor-view > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eval-row-error { display: block; margin-top: 4px; color: #cc8585; font-size: 9px; line-height: 1.3; }
 .eval-records { padding-bottom: 30px; }
 .eval-record > .eval-id { pointer-events: auto; }
