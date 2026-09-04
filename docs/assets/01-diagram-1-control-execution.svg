@@ -1,0 +1,129 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Diagram 1 — Control Plane to Execution Plane</title>
+  <desc>Rust defines a sandbox, requests it through the Kubernetes API, connects to the resulting pod, and controls its lifecycle while Kubernetes keeps it running.</desc>
+  <defs>
+    <linearGradient id="controlFill" x1="58" y1="150" x2="650" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#173419"/><stop offset="1" stop-color="#111B12"/>
+    </linearGradient>
+    <linearGradient id="executionFill" x1="820" y1="150" x2="1542" y2="830" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#202022"/><stop offset="1" stop-color="#151516"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <marker id="greenArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L12 6L0 12Z" fill="#00E100"/>
+    </marker>
+    <marker id="grayArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L12 6L0 12Z" fill="#A0A0A5"/>
+    </marker>
+    <style>
+      .sans{font-family:Inter,Arial,sans-serif}.serif{font-family:Georgia,'Times New Roman',serif}.mono{font-family:'SFMono-Regular',Consolas,monospace}
+      .plane{font:700 15px Inter,Arial,sans-serif;letter-spacing:2.4px}.label{font:700 14px Inter,Arial,sans-serif;letter-spacing:1.4px}
+      .title{font:400 42px Georgia,'Times New Roman',serif}.small{font:500 13px Inter,Arial,sans-serif}.step{font:700 14px Inter,Arial,sans-serif}
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#0F0F10"/>
+  <text x="58" y="72" class="serif title" fill="#F4F4F2">Control Plane → Execution Plane</text>
+
+  <!-- Plane boundaries -->
+  <rect x="58" y="130" width="602" height="712" rx="28" fill="url(#controlFill)" stroke="#00E100" stroke-width="2.5"/>
+  <rect x="796" y="130" width="746" height="712" rx="28" fill="url(#executionFill)" stroke="#4A4A4D" stroke-width="2"/>
+  <text x="90" y="174" class="sans plane" fill="#00E100">CONTROL PLANE</text>
+  <text x="828" y="174" class="sans plane" fill="#D8D8DA">EXECUTION PLANE</text>
+
+  <!-- Rust controller -->
+  <rect x="94" y="208" width="530" height="156" rx="22" fill="#0D160E" stroke="#3C7B3F" stroke-width="1.5"/>
+  <g transform="translate(126 238)">
+    <circle cx="45" cy="45" r="39" fill="#E05A2B"/>
+    <path d="M45 0V10M45 80V90M0 45H10M80 45H90M13 13L20 20M70 70L77 77M77 13L70 20M20 70L13 77" stroke="#E05A2B" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="45" cy="45" r="28" fill="#131314"/>
+    <text x="45" y="54" class="serif" font-size="29" font-weight="700" fill="#F5F5F5" text-anchor="middle">R</text>
+  </g>
+  <text x="248" y="264" class="sans" font-size="27" font-weight="700" fill="#F4F4F2">api.rs</text>
+  <text x="248" y="290" class="sans label" fill="#E77750">RUST CONTROLLER</text>
+  <circle cx="251" cy="324" r="12" fill="#00E100"/><text x="251" y="329" class="sans step" fill="#081008" text-anchor="middle">1</text>
+  <text x="278" y="329" class="sans" font-size="18" font-weight="600" fill="#F4F4F2">Define required sandbox</text>
+
+  <!-- Sandbox specification -->
+  <rect x="94" y="396" width="530" height="116" rx="18" fill="#151716" stroke="#4B4F4B"/>
+  <path d="M126 424H166L182 440V484H126V424ZM166 424V442H182M138 454H170M138 466H164" stroke="#00E100" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="208" y="442" class="sans label" fill="#B8B8BC">SANDBOX SPEC</text>
+  <text x="208" y="474" class="mono" font-size="15" fill="#F0F0F0">image · cpu · memory · tools</text>
+
+  <!-- Agent work -->
+  <rect x="94" y="554" width="530" height="92" rx="18" fill="#151716" stroke="#4B4F4B"/>
+  <path d="M128 579L143 594L128 609M151 609H174" stroke="#00E100" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="211" cy="600" r="12" fill="#00E100"/><text x="211" y="605" class="sans step" fill="#081008" text-anchor="middle">4</text>
+  <text x="238" y="606" class="sans" font-size="18" font-weight="600" fill="#F4F4F2">Connect + send agent work</text>
+
+  <!-- Lifecycle decisions -->
+  <rect x="94" y="688" width="530" height="116" rx="18" fill="#151716" stroke="#4B4F4B"/>
+  <circle cx="130" cy="730" r="12" fill="#00E100"/><text x="130" y="735" class="sans step" fill="#081008" text-anchor="middle">6</text>
+  <text x="158" y="736" class="sans" font-size="18" font-weight="600" fill="#F4F4F2">Decide lifecycle</text>
+  <g transform="translate(158 757)">
+    <rect width="82" height="28" rx="14" fill="#252527"/><text x="41" y="19" class="sans small" fill="#D8D8DA" text-anchor="middle">PAUSE</text>
+    <rect x="92" width="92" height="28" rx="14" fill="#252527"/><text x="138" y="19" class="sans small" fill="#D8D8DA" text-anchor="middle">RESUME</text>
+    <rect x="194" width="90" height="28" rx="14" fill="#302020"/><text x="239" y="19" class="sans small" fill="#E4A0A0" text-anchor="middle">DELETE</text>
+  </g>
+
+  <!-- Kubernetes API -->
+  <rect x="704" y="252" width="270" height="126" rx="20" fill="#18243B" stroke="#6C8CD5" stroke-width="2"/>
+  <g transform="translate(730 278)">
+    <path d="M31 0L58 15V45L31 60L4 45V15L31 0Z" fill="#326CE5"/>
+    <circle cx="31" cy="30" r="12" fill="none" stroke="#FFFFFF" stroke-width="3"/>
+    <path d="M31 12V19M31 41V48M13 30H20M42 30H49M18 17L23 22M39 38L44 43M44 17L39 22M23 38L18 43" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+  <text x="808" y="299" class="sans label" fill="#9CB7F4">KUBERNETES</text>
+  <text x="808" y="331" class="sans" font-size="22" font-weight="700" fill="#F4F4F2">API</text>
+  <text x="808" y="353" class="mono" font-size="13" fill="#B8C6E7">PodSpec + lifecycle</text>
+
+  <!-- Request to Kubernetes -->
+  <path d="M624 452H674V315H704" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#greenArrow)"/>
+  <path d="M692 306L708 315L692 324V306Z" fill="#00E100"/>
+  <circle cx="665" cy="422" r="13" fill="#00E100"/><text x="665" y="427" class="sans step" fill="#081008" text-anchor="middle">2</text>
+
+  <!-- Kubernetes cluster -->
+  <rect x="1012" y="208" width="490" height="596" rx="24" fill="#131314" stroke="#3E3E41" stroke-width="1.5"/>
+  <text x="1042" y="246" class="sans label" fill="#88888D">KUBERNETES CLUSTER</text>
+
+  <!-- Create and run -->
+  <path d="M974 315H1038V406" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1029 392L1038 408L1047 392H1029Z" fill="#00E100"/>
+  <circle cx="1008" cy="315" r="13" fill="#00E100"/><text x="1008" y="320" class="sans step" fill="#081008" text-anchor="middle">3</text>
+  <text x="1059" y="319" class="sans small" fill="#CFCFD2">CREATE + RUN</text>
+
+  <!-- Sandbox pod -->
+  <rect x="1040" y="406" width="324" height="314" rx="22" fill="#181819" stroke="#00E100" stroke-width="2.5"/>
+  <rect x="1064" y="430" width="276" height="46" rx="12" fill="#122612"/>
+  <circle cx="1087" cy="453" r="6" fill="#00E100"/>
+  <text x="1104" y="459" class="sans label" fill="#F4F4F2">SANDBOX POD</text>
+
+  <g transform="translate(1090 505)">
+    <path d="M24 48C10 48 2 39 2 28C2 17 11 8 22 8C27-2 39-8 52-8C70-8 83 4 85 21C96 21 104 29 104 39C104 49 97 56 86 56H24Z" fill="#252528" stroke="#737378" stroke-width="2"/>
+    <rect x="18" y="42" width="196" height="122" rx="16" fill="#0D0D0E" stroke="#59595D" stroke-width="2"/>
+    <circle cx="39" cy="63" r="4" fill="#00E100"/>
+    <text x="57" y="68" class="mono" font-size="13" fill="#AFAFB3">linux sandbox</text>
+    <rect x="39" y="88" width="154" height="50" rx="10" fill="#1E1E20"/>
+    <path d="M57 104L67 113L57 122M76 122H94" stroke="#D8D8DA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="108" y="119" class="sans small" fill="#F4F4F2">agent harness</text>
+  </g>
+
+  <!-- Agent work path bypasses Kubernetes API -->
+  <path d="M624 600H842V558H1040" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#greenArrow)"/>
+  <path d="M1026 549L1042 558L1026 567V549Z" fill="#00E100"/>
+  <rect x="739" y="577" width="176" height="34" rx="17" fill="#0F0F10" stroke="#343437"/>
+  <text x="827" y="599" class="mono" font-size="13" fill="#D8D8DA" text-anchor="middle">agent work</text>
+
+  <!-- Kubernetes reconcile loop -->
+  <rect x="1390" y="420" width="86" height="276" rx="18" fill="#171719" stroke="#505054"/>
+  <path d="M1433 466C1452 466 1463 481 1463 501V610C1463 630 1452 645 1433 645M1433 645C1414 645 1403 630 1403 610V501C1403 481 1414 466 1433 466" stroke="#A0A0A5" stroke-width="3" stroke-linecap="round" marker-end="url(#grayArrow)"/>
+  <circle cx="1433" cy="450" r="13" fill="#D8D8DA"/><text x="1433" y="455" class="sans step" fill="#151516" text-anchor="middle">5</text>
+  <text x="1433" y="555" class="sans small" fill="#D8D8DA" text-anchor="middle" transform="rotate(90 1433 555)">KEEP POD RUNNING</text>
+
+  <!-- Lifecycle command returns through Kubernetes API -->
+  <path d="M624 744H744V392H839V378" stroke="#A0A0A5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#grayArrow)"/>
+  <path d="M830 390L839 374L848 390H830Z" fill="#A0A0A5"/>
+  <text x="757" y="416" class="mono" font-size="12" fill="#AFAFB3">lifecycle</text>
+</svg>
