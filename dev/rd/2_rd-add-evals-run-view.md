@@ -5,15 +5,19 @@
 
 ## Execution Plan
 
-**Status:** `still needs work`
+**Status:** `complete and ready`
 
 **Basis checked:** The consolidated `runs` schema; Run list, detail, review API,
 and UI; current left navigation and routes; the Sarah Guo RSI Runs and RD; and
 the temporary `dev/evals` CSV catalog.
 
-**Missing:** Confirm whether Evals shows all root Runs or only reviewed/pinned
-Runs; whether a golden scenario needs named multi-step grouping; and whether to
-remove `dev/evals` entirely and pin the existing Sarah Guo Runs after deployment.
+**Missing:** none.
+
+**Confirmed decisions:** Evals shows every root Run with pinned Runs first;
+multi-step scenarios use ordered annotations rather than a new grouping model;
+`dev/evals/evals.csv` is removed while `dev/evals/README.md` remains as concise
+operating instructions; and only the best successful Sarah Guo Run set is
+pinned, while failed attempts remain visible and unpinned.
 
 1. Add the smallest persistent golden-Run field and extend the existing Run
    review operation to update it with verdict and annotation.
@@ -69,12 +73,12 @@ integration do not change.
   reuse; and Runs retain their current execution behavior and detail view.
 - **Files:** One additive migration; `src/runs.rs`; `src/api.rs`; focused Rust
   tests; Run types/API/routing/list UI and tests; development instructions; this
-  RD; and removal or retirement of `dev/evals` if approved.
+  RD; removal of `dev/evals/evals.csv`; and revision of
+  `dev/evals/README.md` as instructions rather than a source of truth.
 - **Agent owns:** Implementation, migration and API tests, UI behavior,
   documentation, and local verification.
-- **Requester owns:** The three decisions under **Missing**, disputed semantic
-  verdicts, destructive fixture reset approval, local deployment approval, and
-  merge approval.
+- **Requester owns:** Disputed semantic verdicts, destructive fixture reset
+  approval, local deployment approval, and merge approval.
 - **Out of scope:** A new eval/eval-case/attempt table; a CSV execution ledger;
   automatic judging; changing how Runs are created; historical inference beyond
   explicitly selected Sarah Guo Runs; public ingress; or production deployment.
@@ -82,7 +86,9 @@ integration do not change.
 ## Operating Loop
 
 When Brad asks to run tests, the agent opens Evals, selects the named or pinned
-golden Runs, and uses their user inputs as the test script. It controls Slack as
+golden Runs, and uses their user inputs as the test script. For a multi-step
+scenario, annotations carry the scenario name and order, such as “Sarah Guo —
+step 1 of 5”; no separate scenario record is added. The agent controls Slack as
 Brad, waits for each normal Run to finish, reads the user-visible result first,
 then inspects the trace and durable state. It records pass/fail and a short
 factual annotation directly on each new Run.
@@ -105,8 +111,10 @@ messages, production work, or merge.
   revision-checked and human-only.
 - [ ] Evals routing/UI tests prove bottom-left navigation, pinned-first ordering,
   readable input/result, inline editing, and links to the existing Run detail.
-- [ ] Legacy unreviewed Runs and failed Runs remain visible according to the
-  confirmed inclusion rule.
+- [ ] All root Runs remain visible, including legacy unreviewed and failed Runs;
+  pinned Runs appear first and all other Runs remain newest first.
+- [ ] The successful selected Sarah Guo Run set can be annotated and pinned
+  without altering or hiding its earlier failed attempts.
 - [ ] Repository-wide format, lint, Rust, web, Python, and `git diff --check`
   checks pass.
 
