@@ -20,6 +20,14 @@ export class ApiError extends Error {
   }
 }
 
+const evalApiCompatibilityError = "Evals API is out of date. Restart Centaur Context with the current backend and database migrations.";
+
+function assertEvalRun(run: Run, expectedPinned?: boolean): void {
+  if (typeof run?.pinned !== "boolean" || (expectedPinned !== undefined && run.pinned !== expectedPinned)) {
+    throw new Error(evalApiCompatibilityError);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -143,19 +151,26 @@ export const api = {
           params.set("before_id", before.id);
         }
         const page = await request<Run[]>(`/api/v2/runs?${params}`);
+        page.forEach((run) => assertEvalRun(run, pinned));
         items.push(...page);
         before = page.length === 100 ? page.at(-1) : undefined;
       } while (before);
       return items;
     };
     const [pinned, other] = await Promise.all([load(true), load(false)]);
-    return [...pinned, ...other];
+    const runs = [...pinned, ...other];
+    if (new Set(runs.map((run) => run.id)).size !== runs.length) {
+      throw new Error(evalApiCompatibilityError);
+    }
+    return runs;
   },
   run(id: string) {
     return request<RunDetail>(`/api/v2/runs/${id}`);
   },
-  reviewRun(id: string, body: { verdict: RunVerdict; notes: string | null; pinned?: boolean; expected_revision: number }) {
-    return request<Run>(`/api/v2/runs/${id}/review`, write("PATCH", body));
+  async reviewRun(id: string, body: { verdict: RunVerdict; notes: string | null; pinned?: boolean; expected_revision: number }) {
+    const run = await request<Run>(`/api/v2/runs/${id}/review`, write("PATCH", body));
+    assertEvalRun(run, body.pinned);
+    return run;
   },
   undoRun(id: string) {
     return request<Record<string, unknown>>(`/api/v2/runs/${id}/undo`, write("POST", {}));

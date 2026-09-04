@@ -40,6 +40,7 @@ describe("minimal canonical UI", () => {
     const newer = { ...run, id: "run-newer", idempotency_key: "run-newer", kind: "slack_interaction", primary_object_id: null, input: { title: "New prompt" }, result: { summary: "New result" }, created_at: "2026-09-01T00:00:00Z" };
     vi.mocked(fetch).mockImplementation((input, init) => {
       const path = String(input);
+      if (path.includes("/runs/run-newer/review")) return envelope({ ...newer, pinned: true, result: { ...newer.result, review_revision: 1 } });
       if (path.includes("/api/v2/runs?") && path.includes("pinned=true")) return envelope([pinned]);
       if (path.includes("/api/v2/runs?") && path.includes("pinned=false")) return envelope([newer]);
       return defaultFetch(input, init);
@@ -64,6 +65,22 @@ describe("minimal canonical UI", () => {
       expect(reviewCall).toBeDefined();
       expect(JSON.parse(String(reviewCall?.[1]?.body))).toMatchObject({ pinned: true, verdict: "unreviewed", expected_revision: 0 });
     });
+    expect(await screen.findByRole("button", { name: "Unpin run-newer from golden evals" })).toBeVisible();
+  });
+
+  it("fails visibly when the backend does not support eval pins", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    const { pinned: _pinned, ...legacyRun } = run;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.includes("/api/v2/runs?")) return envelope([legacyRun]);
+      return defaultFetch(input, init);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Evals" }));
+    expect(await screen.findByText(/Evals API is out of date/)).toBeVisible();
+    expect(screen.getByRole("table", { name: "Eval runs" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /as a golden eval/ })).not.toBeInTheDocument();
   });
 
   it("lists consolidated runs through API v2", async () => {
