@@ -25,6 +25,11 @@ for Centaur users and agents.
 Before planning or executing a requirements document, read `dev/AGENTS.md` and
 the relevant file in `dev/rd/`. Planning and execution are separate modes.
 
+## Evaluation Work
+
+Before generating, replaying, running, or reviewing evals, read and follow
+`dev/evals/AGENTS.md`.
+
 ## Git Workflow
 
 Treat the commit on `origin/main` as the canonical landed checkpoint. A local
