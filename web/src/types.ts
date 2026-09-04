@@ -378,6 +378,7 @@ export interface Run {
   error: string | null;
   verdict: RunVerdict;
   review_notes: string | null;
+  pinned: boolean;
   reviewed_by: string | null;
   reviewed_at: string | null;
   available_at: string | null;

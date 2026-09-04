@@ -1900,6 +1900,9 @@ struct EvalListQuery {
     from: Option<String>,
     to: Option<String>,
     before: Option<String>,
+    before_id: Option<Uuid>,
+    root_only: Option<bool>,
+    pinned: Option<bool>,
     limit: Option<i64>,
 }
 
@@ -1907,6 +1910,13 @@ async fn list_runs(
     State(state): State<AppState>,
     Query(query): Query<EvalListQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let before = query
+        .before
+        .map(|value| parse_timestamp(value, "before"))
+        .transpose()?;
+    if query.before_id.is_some() && before.is_none() {
+        return Err(ApiError::BadRequest("before_id requires before".to_owned()));
+    }
     let data = crate::runs::list(
         &state.pool,
         crate::runs::RunFilter {
@@ -1992,10 +2002,10 @@ async fn list_runs(
                 .to
                 .map(|value| parse_timestamp(value, "to"))
                 .transpose()?,
-            before: query
-                .before
-                .map(|value| parse_timestamp(value, "before"))
-                .transpose()?,
+            before,
+            before_id: query.before_id,
+            root_only: query.root_only.unwrap_or(false),
+            pinned: query.pinned,
             limit: query.limit.unwrap_or(50).clamp(1, 100),
         },
     )
@@ -2016,6 +2026,7 @@ async fn read_run(
 struct RunReviewRequest {
     verdict: String,
     notes: Option<String>,
+    pinned: Option<bool>,
     expected_revision: i64,
 }
 
@@ -2032,6 +2043,7 @@ async fn review_run(
         id,
         &verdict,
         notes.as_deref(),
+        input.pinned,
         &actor.actor_id,
         input.expected_revision,
     )

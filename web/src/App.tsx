@@ -13,7 +13,7 @@ import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraph
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", schema: "Schema" };
+const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", evals: "Evals", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
@@ -61,14 +61,14 @@ export default function App() {
     setError(null);
     try {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
-      const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs";
+      const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs" || section === "evals";
       const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
-        needsObjects ? api.objects(selectedId || section === "runs" ? "" : query, objectKind, sort) : Promise.resolve(null),
+        needsObjects ? api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, sort) : Promise.resolve(null),
         section === "tasks" ? api.tasks(sort) : Promise.resolve(null),
         section === "sources" ? api.sources(selectedId ? "" : query, sort) : Promise.resolve(null),
         section === "notes" ? api.notes(selectedId ? "" : query, sort) : Promise.resolve(null),
         section === "themes" ? api.themes(sort) : Promise.resolve(null),
-        section === "runs" && !selectedId ? api.runs() : Promise.resolve(null),
+        (section === "runs" || section === "evals") && !selectedId ? section === "evals" ? api.evalRuns() : api.runs({ root_only: "true" }) : Promise.resolve(null),
         api.objectVisuals(),
         sort === "connections" && isObjectBackedSection(section) ? api.connectionGraph() : Promise.resolve(null),
       ]);
@@ -156,6 +156,7 @@ export default function App() {
           <NavButton active={section === "runs"} compact={collapsed} icon="↻" label="Runs" onClick={() => selectSection("runs")} />
           <NavButton active={section === "schema"} compact={collapsed} icon="⌘" label="Schema" onClick={() => selectSection("schema")} />
         </nav>
+        <div className="nav-evals"><NavButton active={section === "evals"} compact={collapsed} icon="★" label="Evals" onClick={() => selectSection("evals")} /></div>
         <div className="nav-foot" title="Running locally"><span className="status-dot" />{!collapsed && "Local workspace"}</div>
       </aside>
 
@@ -172,7 +173,7 @@ export default function App() {
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} query={query} onQuery={setQuery} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
@@ -200,7 +201,7 @@ export default function App() {
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}
         </div>
       </section>
@@ -240,10 +241,11 @@ function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[
     const normalized = query.trim().toLocaleLowerCase();
     return normalized ? themes.filter((item) => `${item.title} ${item.slug} ${item.description}`.toLocaleLowerCase().includes(normalized)) : themes;
   }
-  if (section === "runs") {
+  if (section === "runs" || section === "evals") {
     const normalized = query.trim().toLocaleLowerCase();
     const rootRuns = runs.filter((item) => item.parent_run_id === null);
-    return normalized ? rootRuns.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id} ${itemTitle(item, objects)} ${itemDescription(item, objects)}`.toLocaleLowerCase().includes(normalized)) : rootRuns;
+    const filtered = normalized ? rootRuns.filter((item) => `${item.id} ${item.kind} ${item.status} ${item.actor_type} ${item.actor_id} ${itemTitle(item, objects)} ${runActualResult(item, objects)} ${runInput(item)} ${item.review_notes ?? ""}`.toLocaleLowerCase().includes(normalized)) : rootRuns;
+    return section === "evals" ? [...filtered].sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id)) : filtered;
   }
   if (section === "objects") return objects;
   const kind = sectionKinds[section];
@@ -300,8 +302,20 @@ function runOutcome(run: Run, objects: SharedObject[] | RunObject[]) {
   if (run.error) return run.error;
   return `${run.actor_type}:${run.actor_id} · ${run.verdict}`;
 }
+function runInput(run: Run) {
+  for (const value of [run.input.title, run.input.prompt, run.input.query, run.input.requested_title, run.input.source_locator, run.input.summary]) {
+    const text = textValue(value);
+    if (text) return text;
+  }
+  return Object.keys(run.input).length > 0 ? JSON.stringify(run.input).slice(0, 500) : "No input recorded";
+}
+function runActualResult(run: Run, objects: SharedObject[] | RunObject[]) {
+  if (run.error) return run.error;
+  if (run.kind === "intake") return runOutcome(run, objects);
+  return textValue(run.result.summary, runOutcome(run, objects));
+}
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
-function isObjectBackedSection(section: Section) { return !["connections", "runs", "schema"].includes(section); }
+function isObjectBackedSection(section: Section) { return !["connections", "runs", "evals", "schema"].includes(section); }
 function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | undefined { return section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
 
 function useSerializedSave() {
@@ -315,6 +329,63 @@ function useSerializedSave() {
 
 function NavButton({ active, compact, icon, label, onClick }: { active: boolean; compact: boolean; icon: string; label: string; onClick: () => void }) {
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
+}
+
+function EvalsView({ runs, objects, query, onQuery, loading, onUpdated }: { runs: Run[]; objects: SharedObject[]; query: string; onQuery: (value: string) => void; loading: boolean; onUpdated: (run: Run) => void }) {
+  return <section className="list-view evals-view" aria-label="evals records">
+    <header className="list-view-head"><div className="title-with-action"><h1>Evals</h1></div></header>
+    <div className="list-toolbar">
+      <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label="Search evals" value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search evals" /></label>
+      <span>{runs.length} {runs.length === 1 ? "run" : "runs"}</span>
+    </div>
+    <div className="eval-table-wrap">
+      <table className="eval-table" aria-label="Eval runs">
+        <thead><tr><th>Golden</th><th>Run</th><th>Input</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>
+        <tbody>{runs.map((run) => <EvalRunRow run={run} objects={objects} onUpdated={onUpdated} key={run.id} />)}</tbody>
+      </table>
+      {!loading && runs.length === 0 && <div className="empty-list">Nothing here yet.</div>}
+    </div>
+  </section>;
+}
+
+function EvalRunRow({ run, objects, onUpdated }: { run: Run; objects: SharedObject[]; onUpdated: (run: Run) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const latest = useRef(run);
+  const serialize = useSerializedSave();
+  useEffect(() => { latest.current = run; }, [run]);
+  const save = (changes: { verdict?: RunVerdict; notes?: string | null; pinned?: boolean }) => serialize(async () => {
+    const current = latest.current;
+    const updated = await api.reviewRun(current.id, {
+      verdict: changes.verdict ?? current.verdict,
+      notes: changes.notes === undefined ? current.review_notes : changes.notes,
+      pinned: changes.pinned ?? current.pinned,
+      expected_revision: Number((current.result.review_revision as number | undefined) ?? 0),
+    });
+    latest.current = updated;
+    onUpdated(updated);
+    return updated;
+  });
+  const saveControl = async (changes: { verdict?: RunVerdict; pinned?: boolean }) => {
+    setBusy(true); setError(null);
+    try { await save(changes); }
+    catch (cause) { setError(conflictMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  const reload = async () => {
+    const next = (await api.run(run.id)).run;
+    latest.current = next;
+    onUpdated(next);
+  };
+  return <tr className={run.pinned ? "pinned" : undefined}>
+    <td className="eval-pin-cell"><button type="button" className={run.pinned ? "eval-pin active" : "eval-pin"} disabled={busy} aria-label={run.pinned ? `Unpin ${shortId(run.id)} from golden evals` : `Pin ${shortId(run.id)} as a golden eval`} aria-pressed={run.pinned} onClick={() => void saveControl({ pinned: !run.pinned })}>{run.pinned ? "★" : "☆"}</button></td>
+    <td><button type="button" className="eval-run-link" onClick={() => navigate(detailPath("evals", run.id))}><strong>{itemTitle(run, objects)}</strong><span>{shortId(run.id)}</span></button></td>
+    <td><span className="eval-cell-text">{runInput(run)}</span></td>
+    <td><span className="eval-cell-text">{runActualResult(run, objects)}</span></td>
+    <td><select aria-label={`Verdict for ${shortId(run.id)}`} value={run.verdict} disabled={busy} onChange={(event) => void saveControl({ verdict: event.target.value as RunVerdict })}><option value="unreviewed">Unreviewed</option><option value="pass">Pass</option><option value="mixed">Mixed</option><option value="fail">Fail</option></select>{error && <span className="eval-row-error">{error}</span>}</td>
+    <td><InlineEditor label={`annotation for ${shortId(run.id)}`} value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add what happened" className="eval-table-annotation" onSave={async (value) => (await save({ notes: value || null })).review_notes ?? ""} onReload={reload} /></td>
+    <td><time dateTime={run.created_at}>{relative(run.created_at)}</time></td>
+  </tr>;
 }
 
 function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; refreshKey: number; onChanged: () => Promise<void> }) {
@@ -886,7 +957,7 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
     </section>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
       <Property label="Run ID"><span className="object-id-pill">{shortId(run.id)}</span></Property>
-      <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property>
+      <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property><Property label="Golden eval">{run.pinned ? "Pinned" : "Not pinned"}</Property>
       <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
       {primary && <Property label="Primary Object"><a className="run-object-title" href={detailPath("objects", primary.object_id)}>{primary.title}</a><ObjectTypeBadge kind={primary.kind} /><ObjectId id={primary.object_id} compact /></Property>}
       <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>

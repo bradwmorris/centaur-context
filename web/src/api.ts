@@ -132,10 +132,29 @@ export const api = {
     params.set("limit", "100");
     return request<Run[]>(`/api/v2/runs?${params}`);
   },
+  async evalRuns() {
+    const load = async (pinned: boolean) => {
+      const items: Run[] = [];
+      let before: Run | undefined;
+      do {
+        const params = new URLSearchParams({ root_only: "true", pinned: String(pinned), limit: "100" });
+        if (before) {
+          params.set("before", before.created_at);
+          params.set("before_id", before.id);
+        }
+        const page = await request<Run[]>(`/api/v2/runs?${params}`);
+        items.push(...page);
+        before = page.length === 100 ? page.at(-1) : undefined;
+      } while (before);
+      return items;
+    };
+    const [pinned, other] = await Promise.all([load(true), load(false)]);
+    return [...pinned, ...other];
+  },
   run(id: string) {
     return request<RunDetail>(`/api/v2/runs/${id}`);
   },
-  reviewRun(id: string, body: { verdict: RunVerdict; notes: string | null; expected_revision: number }) {
+  reviewRun(id: string, body: { verdict: RunVerdict; notes: string | null; pinned?: boolean; expected_revision: number }) {
     return request<Run>(`/api/v2/runs/${id}/review`, write("PATCH", body));
   },
   undoRun(id: string) {
