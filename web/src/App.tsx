@@ -173,7 +173,7 @@ export default function App() {
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} query={query} onQuery={setQuery} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} query={query} onQuery={setQuery} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
             </header>
@@ -331,7 +331,7 @@ function NavButton({ active, compact, icon, label, onClick }: { active: boolean;
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
 }
 
-function EvalsView({ runs, objects, query, onQuery, loading, onUpdated }: { runs: Run[]; objects: SharedObject[]; query: string; onQuery: (value: string) => void; loading: boolean; onUpdated: (run: Run) => void }) {
+function EvalsView({ runs, objects, visuals, query, onQuery, loading, onUpdated }: { runs: Run[]; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; query: string; onQuery: (value: string) => void; loading: boolean; onUpdated: (run: Run) => void }) {
   return <section className="list-view evals-view" aria-label="evals records">
     <header className="list-view-head"><div className="title-with-action"><h1>Evals</h1></div></header>
     <div className="list-toolbar">
@@ -340,15 +340,15 @@ function EvalsView({ runs, objects, query, onQuery, loading, onUpdated }: { runs
     </div>
     <div className="eval-table-wrap">
       <table className="eval-table" aria-label="Eval runs">
-        <thead><tr><th>Golden</th><th>Run</th><th>Input</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>
-        <tbody>{runs.map((run) => <EvalRunRow run={run} objects={objects} onUpdated={onUpdated} key={run.id} />)}</tbody>
+        <thead><tr><th>Golden</th><th>Run</th><th>Users</th><th>Input</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>
+        <tbody>{runs.map((run) => <EvalRunRow run={run} objects={objects} visual={visuals.get(itemVisualObjectId(run))} onUpdated={onUpdated} key={run.id} />)}</tbody>
       </table>
       {!loading && runs.length === 0 && <div className="empty-list">Nothing here yet.</div>}
     </div>
   </section>;
 }
 
-function EvalRunRow({ run, objects, onUpdated }: { run: Run; objects: SharedObject[]; onUpdated: (run: Run) => void }) {
+function EvalRunRow({ run, objects, visual, onUpdated }: { run: Run; objects: SharedObject[]; visual: ObjectVisual | undefined; onUpdated: (run: Run) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(run);
@@ -379,9 +379,10 @@ function EvalRunRow({ run, objects, onUpdated }: { run: Run; objects: SharedObje
   };
   return <tr className={run.pinned ? "pinned" : undefined}>
     <td className="eval-pin-cell"><button type="button" className={run.pinned ? "eval-pin active" : "eval-pin"} disabled={busy} aria-label={run.pinned ? `Unpin ${shortId(run.id)} from golden evals` : `Pin ${shortId(run.id)} as a golden eval`} aria-pressed={run.pinned} onClick={() => void saveControl({ pinned: !run.pinned })}>{run.pinned ? "★" : "☆"}</button></td>
-    <td><button type="button" className="eval-run-link" onClick={() => navigate(detailPath("evals", run.id))}><strong>{itemTitle(run, objects)}</strong><span>{shortId(run.id)}</span></button></td>
-    <td><span className="eval-cell-text">{runInput(run)}</span></td>
-    <td><span className="eval-cell-text">{runActualResult(run, objects)}</span></td>
+    <td><button type="button" className="eval-run-link" title={`Open ${itemTitle(run, objects)}`} onClick={() => navigate(detailPath("evals", run.id))}><strong>{itemTitle(run, objects)}</strong><span>{shortId(run.id)}</span><span className="eval-run-arrow" aria-hidden="true">›</span></button></td>
+    <td className="eval-users-cell"><AttributionStack users={visual?.users ?? []} /></td>
+    <td><span className="eval-cell-text" title={runInput(run)}>{runInput(run)}</span></td>
+    <td><span className="eval-cell-text" title={runActualResult(run, objects)}>{runActualResult(run, objects)}</span></td>
     <td><select aria-label={`Verdict for ${shortId(run.id)}`} value={run.verdict} disabled={busy} onChange={(event) => void saveControl({ verdict: event.target.value as RunVerdict })}><option value="unreviewed">Unreviewed</option><option value="pass">Pass</option><option value="mixed">Mixed</option><option value="fail">Fail</option></select>{error && <span className="eval-row-error">{error}</span>}</td>
     <td><InlineEditor label={`annotation for ${shortId(run.id)}`} value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add what happened" className="eval-table-annotation" onSave={async (value) => (await save({ notes: value || null })).review_notes ?? ""} onReload={reload} /></td>
     <td><time dateTime={run.created_at}>{relative(run.created_at)}</time></td>
