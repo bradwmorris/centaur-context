@@ -92,6 +92,15 @@ cause share the same repair; unrelated fixes never accumulate on a campaign
 branch. After approval and merge, synchronize local `main`, restore the normal
 local stack, and remove the completed worktree and branch before continuing.
 
+Branch code may write only the exact approved eval interactions to the shared
+canonical local data, and its Run annotation must identify the branch commit.
+If a repair changes the database schema, test its migration against a disposable
+database named with the approved `centaur_context_test` pattern first. Do not
+apply an unmerged migration to the canonical database unless backward
+compatibility is proved and Brad separately approves it. Otherwise merge the
+repair, migrate through the normal main-based stack, and perform the live Slack
+replay afterward.
+
 ## Delegated Campaign Approval
 
 An active RD may record Brad's explicit delegation for the executing agent to

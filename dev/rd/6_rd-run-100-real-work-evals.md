@@ -77,7 +77,7 @@ scenario against synchronized `main`. When it fails:
 3. create one repair RD/issue and `codex/<issue>-<defect>` branch from current
    `origin/main` in its own worktree;
 4. run the affected local services from that branch and replay the same Slack
-   input before merge;
+   input before merge, except for schema-changing repairs described below;
 5. record the tested commit/image in the passing replacement Run;
 6. seek the normal merge approval, merge, fast-forward canonical local `main`,
    restore the main-based stack, and remove the worktree and branches; then
@@ -88,6 +88,14 @@ defects get separate branches. Never stack hundreds of fixes on a long-lived
 campaign branch, and never call a branch-only pass landed. The campaign issue
 tracks progress; Run annotations hold attempt evidence; defect issues and RDs
 hold repair reasoning.
+
+The canonical local database is shared state even when the code is in a
+worktree. Normal backward-compatible branch code may execute the exact eval
+against it, with the branch commit recorded on the Run. A schema-changing repair
+must first use a disposable `centaur_context_test` database. Do not apply an
+unmerged migration to canonical data unless compatibility is proved and Brad
+separately approves it; otherwise merge, migrate the main-based stack, and then
+perform the live Slack replay.
 
 ## Campaign Controls
 
