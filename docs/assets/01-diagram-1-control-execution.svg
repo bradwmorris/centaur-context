@@ -5,9 +5,7 @@
     <linearGradient id="controlFill" x1="58" y1="150" x2="650" y2="830" gradientUnits="userSpaceOnUse">
       <stop stop-color="#173419"/><stop offset="1" stop-color="#111B12"/>
     </linearGradient>
-    <linearGradient id="executionFill" x1="820" y1="150" x2="1542" y2="830" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#202022"/><stop offset="1" stop-color="#151516"/>
-    </linearGradient>
+    <linearGradient id="executionFill" x1="820" y1="150" x2="1542" y2="830" gradientUnits="userSpaceOnUse"><stop stop-color="#181819"/><stop offset="1" stop-color="#131314"/></linearGradient>
     <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
       <feGaussianBlur stdDeviation="9"/>
     </filter>
@@ -19,7 +17,7 @@
     </marker>
     <style>
       .sans{font-family:Inter,Arial,sans-serif}.serif{font-family:Georgia,'Times New Roman',serif}.mono{font-family:'SFMono-Regular',Consolas,monospace}
-      .plane{font:700 15px Inter,Arial,sans-serif;letter-spacing:2.4px}.label{font:700 14px Inter,Arial,sans-serif;letter-spacing:1.4px}
+      .plane{font:600 14px Inter,Arial,sans-serif;letter-spacing:2px}.label{font:600 14px Inter,Arial,sans-serif;letter-spacing:1.2px}
       .title{font:400 42px Georgia,'Times New Roman',serif}.small{font:500 13px Inter,Arial,sans-serif}.step{font:700 14px Inter,Arial,sans-serif}
     </style>
   </defs>
@@ -29,20 +27,16 @@
 
   <!-- Plane boundaries -->
   <rect x="58" y="130" width="602" height="712" rx="28" fill="url(#controlFill)" stroke="#00E100" stroke-width="2.5"/>
-  <rect x="796" y="130" width="746" height="712" rx="28" fill="url(#executionFill)" stroke="#4A4A4D" stroke-width="2"/>
+  <rect x="796" y="130" width="746" height="712" rx="28" fill="url(#executionFill)" stroke="#555558" stroke-width="2" stroke-dasharray="8 8"/>
   <text x="90" y="174" class="sans plane" fill="#00E100">CONTROL PLANE</text>
-  <text x="828" y="174" class="sans plane" fill="#D8D8DA">EXECUTION PLANE</text>
+  <text x="828" y="174" class="sans plane" fill="#00E100">EXECUTION PLANE</text>
 
   <!-- Rust controller -->
   <rect x="94" y="208" width="530" height="156" rx="22" fill="#0D160E" stroke="#3C7B3F" stroke-width="1.5"/>
-  <g transform="translate(126 238)">
-    <circle cx="45" cy="45" r="39" fill="#E05A2B"/>
-    <path d="M45 0V10M45 80V90M0 45H10M80 45H90M13 13L20 20M70 70L77 77M77 13L70 20M20 70L13 77" stroke="#E05A2B" stroke-width="7" stroke-linecap="round"/>
-    <circle cx="45" cy="45" r="28" fill="#131314"/>
-    <text x="45" y="54" class="serif" font-size="29" font-weight="700" fill="#F5F5F5" text-anchor="middle">R</text>
-  </g>
-  <text x="248" y="264" class="sans" font-size="27" font-weight="700" fill="#F4F4F2">api.rs</text>
-  <text x="248" y="290" class="sans label" fill="#E77750">RUST CONTROLLER</text>
+  <rect x="126" y="232" width="92" height="92" fill="#F5F5F5"/>
+  <image x="131" y="237" width="82" height="82" href="data:image/png;base64,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" preserveAspectRatio="xMidYMid meet"/>
+  <text x="248" y="264" class="serif" font-size="27" font-weight="700" fill="#F4F4F2">api.rs</text>
+  <text x="248" y="290" class="sans label" fill="#00E100">RUST CONTROL PLANE</text>
   <circle cx="251" cy="324" r="12" fill="#00E100"/><text x="251" y="329" class="sans step" fill="#081008" text-anchor="middle">1</text>
   <text x="278" y="329" class="sans" font-size="18" font-weight="600" fill="#F4F4F2">Define required sandbox</text>
 
@@ -69,15 +63,14 @@
   </g>
 
   <!-- Kubernetes API -->
-  <rect x="704" y="252" width="270" height="126" rx="20" fill="#18243B" stroke="#6C8CD5" stroke-width="2"/>
-  <g transform="translate(730 278)">
-    <path d="M31 0L58 15V45L31 60L4 45V15L31 0Z" fill="#326CE5"/>
-    <circle cx="31" cy="30" r="12" fill="none" stroke="#FFFFFF" stroke-width="3"/>
-    <path d="M31 12V19M31 41V48M13 30H20M42 30H49M18 17L23 22M39 38L44 43M44 17L39 22M23 38L18 43" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="704" y="252" width="270" height="126" rx="18" fill="#1E1E1E" stroke="#555558" stroke-width="1.5"/>
+  <g transform="translate(730 278)" stroke="#F0F0F0" stroke-width="2.5" stroke-linejoin="round">
+    <rect x="0" y="0" width="58" height="16" rx="3"/><rect x="0" y="22" width="58" height="16" rx="3"/><rect x="0" y="44" width="58" height="16" rx="3"/>
+    <circle cx="10" cy="8" r="2.5" fill="#00E100" stroke="none"/><circle cx="10" cy="30" r="2.5" fill="#00E100" stroke="none"/><circle cx="10" cy="52" r="2.5" fill="#00E100" stroke="none"/>
   </g>
-  <text x="808" y="299" class="sans label" fill="#9CB7F4">KUBERNETES</text>
-  <text x="808" y="331" class="sans" font-size="22" font-weight="700" fill="#F4F4F2">API</text>
-  <text x="808" y="353" class="mono" font-size="13" fill="#B8C6E7">PodSpec + lifecycle</text>
+  <text x="808" y="299" class="sans label" fill="#00E100">KUBERNETES API</text>
+  <text x="808" y="330" class="serif" font-size="21" fill="#F4F4F2">PodSpec + lifecycle</text>
+  <text x="808" y="353" class="small" fill="#99999E">create · pause · resume · delete</text>
 
   <!-- Request to Kubernetes -->
   <path d="M624 452H674V315H704" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#greenArrow)"/>
@@ -85,8 +78,8 @@
   <circle cx="665" cy="422" r="13" fill="#00E100"/><text x="665" y="427" class="sans step" fill="#081008" text-anchor="middle">2</text>
 
   <!-- Kubernetes cluster -->
-  <rect x="1012" y="208" width="490" height="596" rx="24" fill="#131314" stroke="#3E3E41" stroke-width="1.5"/>
-  <text x="1042" y="246" class="sans label" fill="#88888D">KUBERNETES CLUSTER</text>
+  <rect x="1012" y="208" width="490" height="596" rx="24" fill="#131314" stroke="#343436" stroke-width="1.5"/>
+  <text x="1042" y="246" class="sans label" fill="#8E8E93">KUBERNETES CLUSTER · DEPLOYED BY HELM</text>
 
   <!-- Create and run -->
   <path d="M974 315H1038V406" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
@@ -95,20 +88,22 @@
   <text x="1059" y="319" class="sans small" fill="#CFCFD2">CREATE + RUN</text>
 
   <!-- Sandbox pod -->
-  <rect x="1040" y="406" width="324" height="314" rx="22" fill="#181819" stroke="#00E100" stroke-width="2.5"/>
-  <rect x="1064" y="430" width="276" height="46" rx="12" fill="#122612"/>
-  <circle cx="1087" cy="453" r="6" fill="#00E100"/>
-  <text x="1104" y="459" class="sans label" fill="#F4F4F2">SANDBOX POD</text>
-
-  <g transform="translate(1090 505)">
-    <path d="M24 48C10 48 2 39 2 28C2 17 11 8 22 8C27-2 39-8 52-8C70-8 83 4 85 21C96 21 104 29 104 39C104 49 97 56 86 56H24Z" fill="#252528" stroke="#737378" stroke-width="2"/>
-    <rect x="18" y="42" width="196" height="122" rx="16" fill="#0D0D0E" stroke="#59595D" stroke-width="2"/>
-    <circle cx="39" cy="63" r="4" fill="#00E100"/>
-    <text x="57" y="68" class="mono" font-size="13" fill="#AFAFB3">linux sandbox</text>
-    <rect x="39" y="88" width="154" height="50" rx="10" fill="#1E1E20"/>
-    <path d="M57 104L67 113L57 122M76 122H94" stroke="#D8D8DA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="108" y="119" class="sans small" fill="#F4F4F2">agent harness</text>
-  </g>
+  <rect x="1040" y="406" width="324" height="326" rx="18" fill="#181819" stroke="#555558" stroke-width="1.5"/>
+  <text x="1062" y="439" class="serif" font-size="20" fill="#F4F4F2">REZ AGENT POD</text>
+  <rect x="1062" y="458" width="280" height="70" rx="11" fill="#222224" stroke="#404043"/>
+  <rect x="1074" y="470" width="46" height="46" fill="#F5F5F5"/>
+  <image x="1077" y="473" width="40" height="40" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAOkAAADYCAMAAAA5zzTZAAAAdVBMVEUgISL///8AAADv7++0tbXs7OwEBwmlpqYTFBbIycmpqal0dHQWFxnW1tZgYWEaGxz39/cLDQ+bm5vZ2dmVlZY4ODnQ0NCDhIS6u7s/P0Di4uIAAAWKi4tPUFAqKyyBgYIlJSZvb3BnaGhbXF3Dw8M6OztJSkpo6xsSAAADJ0lEQVR4nO3d2VajQBRAUSgjZmqhSMiAxqG1/f9PbGwfei0ouDHEwL05592k9qKYklhE8bUUDT2Ai4XUXkjthdReSO2F1F5HSLOb8Zf1ls4eD0+JG3++eMtXp0tXi+ol0khF6dK7aH1zkrS8d9Ohx//NvNu2T+NW6bNbDj3wE/LJ5JvS2yIZetAn5hbfkm4elOyegZJ9eAYHpRs39HD7NH0KUkPSlWpoRd0fK33RO3W/SkL7akD66oceae/c7hjpTPnc/Zdv7qpNaaF97n7mt7J0Z2GTVvO3cWHYkO4tbNLqoJRL0tLGJo3SF0maa70KrOfqN3F16cHG5A1M35o003aj1tryvltqZTetdtSiW2risuGradYpNXI2/ax+Rq1JJ0j1hRRpI59cojOc1vtKfX53gebb/tS+0ubd0I90hs/sektvLyI9wxUMUqRIkSJFihQpUqRIkSJFihQpUqRIkSJFihQpUqRIkQ4uLX9Jya+hQ/oq/r/dnRHpQvqNQjJHihQpUqRIkSJFihQpUqRIkSJFihQpUqRIkSJFihQp0quQ/ha/KZalG3l51xFI5eYi41V8jUwc6Sik0nJT07bFPf93ixQpUqRIkSJFihQpUqRIkSJFihQpUqRIkSJFihQpUqQGpBMj0vXbvdCH9LgeJdJFshQSn0ukRdp/1X6kSJEiRYoUKVKkSJEiRYoUKVKkSJEiRYoUKVKkSJEqltb+fjDpzU9L5Senzw/iF8Fi6WEuvU3uf1gaefFJ9v2hFVV8FwnaX6ompEj1Jkh3VyN9tyP1Waf0lx3pU9wpFddtUVN66JbG+3Oc98eQXwvSrXjtoSQ3E6QbK9PXxYI07n8jMoqmz6I0l35lrCO3EqU2jr7Lt7qrKY3vLFBdeYQ0LvSfaB4em6yAtFS/UdM/TVVIqv+G5iH0sV5IGq91U90mhApKVVPTMLRFWk1grYclHzUPu13SuCxUbta0fZ3NNml1XvXqrpZSV9Sv64+RxlnunNcziVPvil27pktaNdsW8vKy48h/5C076FHSzy27ep+Mvt17mUkQUWompPZCai+k9kJqL6T2uh7pX/ogmbyHL08sAAAAAElFTkSuQmCC" preserveAspectRatio="xMidYMid meet"/>
+  <text x="1132" y="486" class="serif" font-size="17" fill="#F4F4F2">Centaur adapter</text>
+  <text x="1132" y="508" class="small" fill="#99999E">prompt ↔ events</text>
+  <rect x="1062" y="540" width="280" height="92" rx="11" fill="#222224" stroke="#404043"/>
+  <rect x="1074" y="553" width="56" height="56" fill="#F5F5F5"/>
+  <image x="1078" y="557" width="48" height="48" href="data:image/jpeg;base64,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" preserveAspectRatio="xMidYMid meet"/>
+  <text x="1142" y="572" class="serif" font-size="17" fill="#F4F4F2">Codex agent loop</text>
+  <text x="1142" y="594" class="small" fill="#99999E">harness + tools</text>
+  <text x="1142" y="614" class="small" fill="#99999E">inside Linux sandbox</text>
+  <rect x="1062" y="644" width="280" height="62" rx="11" fill="#181819" stroke="#343437"/>
+  <text x="1078" y="670" class="serif" font-size="16" fill="#D8D8DA">temporary files</text>
+  <text x="1078" y="692" class="small" fill="#8E8E93">not the source of truth</text>
 
   <!-- Agent work path bypasses Kubernetes API -->
   <path d="M624 600H842V558H1040" stroke="#00E100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#greenArrow)"/>
