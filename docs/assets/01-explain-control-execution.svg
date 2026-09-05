@@ -1,5 +1,5 @@
 <svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <title>Diagram 1 — Control Plane to Execution Plane</title>
+  <title>Explain Control → Execution</title>
   <desc>Rust defines a sandbox, requests it through the Kubernetes API, connects to the resulting pod, and controls its lifecycle while Kubernetes keeps it running.</desc>
   <defs>
     <linearGradient id="controlFill" x1="58" y1="150" x2="650" y2="830" gradientUnits="userSpaceOnUse">
@@ -23,7 +23,7 @@
   </defs>
 
   <rect width="1600" height="900" fill="#0F0F10"/>
-  <text x="58" y="72" class="serif title" fill="#F4F4F2">Control Plane → Execution Plane</text>
+  <text x="58" y="72" class="serif title" fill="#F4F4F2">Explain Control → Execution</text>
 
   <!-- Plane boundaries -->
   <rect x="58" y="130" width="602" height="712" rx="28" fill="url(#controlFill)" stroke="#00E100" stroke-width="2.5"/>
