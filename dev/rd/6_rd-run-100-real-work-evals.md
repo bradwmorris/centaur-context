@@ -1,7 +1,8 @@
 # 6 — RD: Run 100 Real-Work Slack Evals
 
-**Status:** `scoped`
+**Status:** `in_progress`
 **Created:** 2026-09-05
+**GitHub Issue:** [#97](https://github.com/bradwmorris/centaur-context/issues/97)
 
 ## Execution Plan
 
