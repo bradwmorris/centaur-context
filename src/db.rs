@@ -628,6 +628,7 @@ pub struct ArtifactEmbeddingChunk {
 pub enum ListSort {
     Recent,
     Connections,
+    Oldest,
 }
 
 #[derive(Clone, Debug)]
@@ -645,6 +646,8 @@ pub struct ObjectListFilter {
 pub struct SourceListFilter {
     pub query: Option<String>,
     pub source_kind: Option<String>,
+    pub created_after: Option<OffsetDateTime>,
+    pub created_through: Option<OffsetDateTime>,
     pub cursor: Option<Uuid>,
     pub limit: i64,
     pub sort: ListSort,
@@ -879,7 +882,12 @@ fn push_object_list_cursor(query: &mut QueryBuilder<'_, Postgres>, cursor: Uuid,
         push_active_connection_count(query, "o.id");
         query.push(",");
     }
-    query.push("o.created_at,o.id) < (SELECT ");
+    query.push("o.created_at,o.id) ");
+    query.push(if matches!(sort, ListSort::Oldest) {
+        "> (SELECT "
+    } else {
+        "< (SELECT "
+    });
     if matches!(sort, ListSort::Connections) {
         push_active_connection_count(query, "cursor_object.id");
         query.push(",");
@@ -896,7 +904,11 @@ fn push_object_list_order(query: &mut QueryBuilder<'_, Postgres>, sort: &ListSor
         push_active_connection_count(query, "o.id");
         query.push(" DESC,");
     }
-    query.push("o.created_at DESC,o.id DESC");
+    if matches!(sort, ListSort::Oldest) {
+        query.push("o.created_at ASC,o.id ASC");
+    } else {
+        query.push("o.created_at DESC,o.id DESC");
+    }
 }
 
 pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec<Object>, DbError> {
@@ -1529,6 +1541,12 @@ pub async fn list_sources(
     );
     if let Some(kind) = filter.source_kind {
         query.push(" AND s.source_kind=").push_bind(kind);
+    }
+    if let Some(created_after) = filter.created_after {
+        query.push(" AND o.created_at>").push_bind(created_after);
+    }
+    if let Some(created_through) = filter.created_through {
+        query.push(" AND o.created_at<=").push_bind(created_through);
     }
     if let Some(cursor) = filter.cursor {
         push_object_list_cursor(&mut query, cursor, &filter.sort);

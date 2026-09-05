@@ -58,6 +58,25 @@ def search_sources(
     _print(_client().search_sources(query, limit=limit, cursor=cursor))
 
 
+def list_sources(
+    created_after: str | None = None,
+    created_through: str | None = None,
+    limit: int = 50,
+    cursor: str | None = None,
+    sort: str = "recent",
+) -> None:
+    """List Sources, optionally within a stable Context-created time window."""
+    _print(
+        _client().list_sources(
+            created_after=created_after,
+            created_through=created_through,
+            limit=limit,
+            cursor=cursor,
+            sort=sort,
+        )
+    )
+
+
 def read_source(source_id: str, thread_key: str | None = None) -> None:
     """Read Source metadata without loading its long-form content."""
     _print(_client().read_source(source_id, thread_key=thread_key))
@@ -277,6 +296,15 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("query")
         command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
         command.add_argument("--cursor")
+
+    command = commands.add_parser("list-sources")
+    command.add_argument("--created-after")
+    command.add_argument("--created-through")
+    command.add_argument("--limit", type=_bounded_int(1, 100), default=50)
+    command.add_argument("--cursor")
+    command.add_argument(
+        "--sort", choices=("recent", "connections", "oldest"), default="recent"
+    )
 
     command = commands.add_parser("read-source")
     command.add_argument("source_id")

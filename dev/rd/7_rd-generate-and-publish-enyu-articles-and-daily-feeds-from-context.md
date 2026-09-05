@@ -1,7 +1,8 @@
 # 7 — RD: Generate and Publish Enyu Articles and Daily Feeds from Context Sources
 
-**Status:** `scoped`
+**Status:** `in_progress`
 **Created:** 2026-09-05
+**GitHub Issue:** [#98](https://github.com/bradwmorris/centaur-context/issues/98)
 
 ## Execution Plan
 

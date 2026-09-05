@@ -542,6 +542,28 @@ class CentaurContextClient:
             params["cursor"] = _clean(cursor)
         return self._request("GET", "/api/v2/search/sources", params=params)
 
+    def list_sources(
+        self,
+        *,
+        created_after: str | None = None,
+        created_through: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        sort: str = "recent",
+    ) -> dict[str, Any]:
+        """List Sources, optionally within a stable Context-created time window."""
+        sort = _clean(sort)
+        if sort not in {"recent", "connections", "oldest"}:
+            raise ValueError("sort must be recent, connections, or oldest")
+        params: dict[str, Any] = {"limit": _bounded_limit(limit), "sort": sort}
+        if _clean(created_after):
+            params["created_after"] = _clean(created_after)
+        if _clean(created_through):
+            params["created_through"] = _clean(created_through)
+        if _clean(cursor):
+            params["cursor"] = _clean(cursor)
+        return self._request("GET", "/api/v2/sources", params=params)
+
     def read_source(
         self,
         source_id: str,
