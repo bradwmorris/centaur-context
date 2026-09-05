@@ -108,12 +108,10 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
                 "id":format!("{interaction}:tool:1"),"entry_type":"tool_call","name":"create_note","status":"completed","component":"centaur_agent"
             }]}
     });
-    for _ in 0..2 {
-        let response = app
-            .clone()
-            .oneshot(request(&token, &completed))
-            .await
-            .unwrap();
+    let mut replay = completed.clone();
+    replay["messages"][1]["content"] = json!("A later replay must not replace the evidence.");
+    for payload in [&completed, &replay] {
+        let response = app.clone().oneshot(request(&token, payload)).await.unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body: Value =
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
@@ -121,8 +119,8 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
         assert_eq!(body["data"]["run_id"], run_id);
     }
 
-    let row: (String, Option<Uuid>, Value, Vec<Uuid>) = sqlx::query_as(
-        "SELECT status,primary_object_id,trace,consulted_object_ids FROM runs WHERE id=$1",
+    let row: (String, Option<Uuid>, Value, Vec<Uuid>, Value, Value) = sqlx::query_as(
+        "SELECT status,primary_object_id,trace,consulted_object_ids,input,result FROM runs WHERE id=$1",
     )
     .bind(Uuid::parse_str(run_id).unwrap())
     .fetch_one(&pool)
@@ -131,6 +129,23 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
     assert_eq!(row.0, "completed");
     assert_eq!(row.1, Some(note_id));
     assert!(row.3.len() >= 3, "Chat and both participants are linked");
+    assert_eq!(
+        row.4["request_message"]["content"],
+        "Create a note about the result."
+    );
+    assert_eq!(
+        row.4["request_message"]["source_created_at"],
+        "2026-08-28T00:00:01Z"
+    );
+    assert_eq!(row.5["response_message"]["content"], "I created the note.");
+    assert_eq!(
+        row.5["response_message"]["source_created_at"],
+        "2026-08-28T00:00:02Z"
+    );
+    assert_eq!(
+        row.5["response_message"]["provider_message_id"],
+        "1780000002.000100"
+    );
     let trace = row.2.as_array().unwrap();
     assert_eq!(
         trace

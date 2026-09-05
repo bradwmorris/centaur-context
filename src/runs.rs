@@ -569,15 +569,29 @@ pub async fn set_context(tx: &mut Transaction<'_, Postgres>, run_id: Uuid) -> Re
     }
 }
 
+pub struct SlackInteractionOpen<'a> {
+    pub workspace_id: &'a str,
+    pub channel_id: &'a str,
+    pub thread_id: &'a str,
+    pub interaction_id: &'a str,
+    pub started_at: OffsetDateTime,
+    pub title: String,
+    pub request_message: Option<Value>,
+}
+
 pub async fn open_slack_interaction(
     tx: &mut Transaction<'_, Postgres>,
-    workspace_id: &str,
-    channel_id: &str,
-    thread_id: &str,
-    interaction_id: &str,
-    started_at: OffsetDateTime,
-    title: String,
+    input: SlackInteractionOpen<'_>,
 ) -> Result<(Uuid, bool), DbError> {
+    let SlackInteractionOpen {
+        workspace_id,
+        channel_id,
+        thread_id,
+        interaction_id,
+        started_at,
+        title,
+        request_message,
+    } = input;
     let key = format!("slack-turn:{workspace_id}:{channel_id}:{thread_id}:{interaction_id}");
     if let Some(id) = sqlx::query_scalar(
         "SELECT id FROM runs WHERE kind='slack_interaction' AND idempotency_key=$1 FOR UPDATE",
@@ -589,9 +603,13 @@ pub async fn open_slack_interaction(
         return Ok((id, false));
     }
     let id = Uuid::new_v4();
+    let mut input = json!({"workspace_id":workspace_id,"channel_id":channel_id,"thread_id":thread_id,"interaction_id":interaction_id,"title":title});
+    if let Some(request_message) = request_message {
+        input["request_message"] = request_message;
+    }
     sqlx::query(r#"INSERT INTO runs (id,kind,status,actor_type,actor_id,idempotency_key,input,result,available_at,started_at)
       VALUES ($1,'slack_interaction','running','system','chat-ingestor',$2,$3,$4,now(),$5)"#)
-      .bind(id).bind(key).bind(json!({"workspace_id":workspace_id,"channel_id":channel_id,"thread_id":thread_id,"interaction_id":interaction_id,"title":title}))
+      .bind(id).bind(key).bind(input)
       .bind(json!({"summary":"The bot interaction is running."})).bind(started_at).execute(&mut **tx).await?;
     append_external_trace(
         tx,
@@ -682,6 +700,25 @@ pub async fn append_external_trace(
     .bind(id)
     .execute(&mut **tx)
     .await?;
+    Ok(())
+}
+
+pub async fn record_slack_response_evidence(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    response: Option<Value>,
+) -> Result<(), DbError> {
+    if let Some(response) = response {
+        sqlx::query(
+            r#"UPDATE runs
+               SET result=jsonb_set(result,'{response_message}',$2::jsonb,true),updated_at=now()
+               WHERE id=$1 AND NOT (result?'response_message')"#,
+        )
+        .bind(run_id)
+        .bind(response)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 

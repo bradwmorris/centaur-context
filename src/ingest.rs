@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Transaction};
 use subtle::ConstantTimeEq;
-use time::{Duration, OffsetDateTime};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
@@ -26,6 +26,8 @@ const INGESTOR_ACTOR_ID: &str = "chat-ingestor";
 const MAX_MESSAGES_PER_REQUEST: usize = 500;
 const MAX_USAGE_ATTEMPTS_PER_REQUEST: usize = 100;
 const MAX_TRACE_ENTRIES_PER_REQUEST: usize = 500;
+const MAX_TRACE_ENTRY_BYTES: usize = 256 * 1024;
+const MAX_TRACE_TOTAL_BYTES: usize = 1024 * 1024;
 const MAX_AFFECTED_OBJECTS_PER_REQUEST: usize = 100;
 
 #[derive(Clone, Debug)]
@@ -282,6 +284,32 @@ impl SlackInteractionInput {
                 value: "every trace entry must be an object".to_owned(),
             });
         }
+        let trace_sizes = self
+            .run
+            .trace
+            .iter()
+            .map(|value| {
+                serde_json::to_vec(value)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(usize::MAX)
+            })
+            .collect::<Vec<_>>();
+        if trace_sizes.iter().any(|size| *size > MAX_TRACE_ENTRY_BYTES) {
+            return Err(ValidationError::TooLong {
+                field: "run.trace entry bytes",
+                max: MAX_TRACE_ENTRY_BYTES,
+            });
+        }
+        if trace_sizes
+            .iter()
+            .fold(0usize, |total, size| total.saturating_add(*size))
+            > MAX_TRACE_TOTAL_BYTES
+        {
+            return Err(ValidationError::TooLong {
+                field: "run.trace total bytes",
+                max: MAX_TRACE_TOTAL_BYTES,
+            });
+        }
         if self.run.affected_object_ids.len() > MAX_AFFECTED_OBJECTS_PER_REQUEST {
             return Err(ValidationError::TooLong {
                 field: "run.affected_object_ids",
@@ -474,14 +502,21 @@ pub async fn ingest(
         ),
     )
     .await?;
+    let request = input
+        .messages
+        .iter()
+        .find(|message| message.provider_message_id == input.run.interaction_id);
     let (run_id, _) = crate::runs::open_slack_interaction(
         &mut tx,
-        &input.workspace_id,
-        &input.channel_id,
-        &input.thread_id,
-        &input.run.interaction_id,
-        input.run.started_at,
-        interaction_title(&input),
+        crate::runs::SlackInteractionOpen {
+            workspace_id: &input.workspace_id,
+            channel_id: &input.channel_id,
+            thread_id: &input.thread_id,
+            interaction_id: &input.run.interaction_id,
+            started_at: input.run.started_at,
+            title: interaction_title(&input),
+            request_message: request.map(slack_message_evidence),
+        },
     )
     .await?;
     let chat_object_id = get_or_create_chat(&mut tx, &actor, run_id, &input).await?;
@@ -572,6 +607,18 @@ pub async fn ingest(
     for entry in &input.run.trace {
         crate::runs::append_external_trace(&mut tx, run_id, entry).await?;
     }
+    let response = request.and_then(|request| {
+        input.messages.iter().find(|message| {
+            message.sender.user_kind == "agent"
+                && message.source_created_at >= request.source_created_at
+        })
+    });
+    crate::runs::record_slack_response_evidence(
+        &mut tx,
+        run_id,
+        response.map(slack_message_evidence),
+    )
+    .await?;
     let mut affected_object_ids = Vec::new();
     for object_id in &input.run.affected_object_ids {
         let exists: bool = sqlx::query_scalar(
@@ -624,6 +671,19 @@ pub async fn ingest(
             "open"
         },
         run_state: persisted_run_state,
+    })
+}
+
+fn slack_message_evidence(message: &ValidatedSlackMessage) -> Value {
+    json!({
+        "content": message.content,
+        "provider_message_id": message.provider_message_id,
+        "sender": {
+            "display_name": message.sender.display_name,
+            "provider_user_id": message.sender.provider_user_id,
+            "user_kind": message.sender.user_kind,
+        },
+        "source_created_at": message.source_created_at.format(&Rfc3339).expect("RFC 3339 formatting is valid"),
     })
 }
 
@@ -1062,12 +1122,15 @@ pub async fn queue_inactive_interactions(
             let fallback_id = format!("inactivity:{}", OffsetDateTime::now_utc().unix_timestamp());
             let (id, _) = crate::runs::open_slack_interaction(
                 &mut tx,
-                &workspace_id,
-                &channel_id,
-                &thread_id,
-                &fallback_id,
-                OffsetDateTime::now_utc(),
-                "Slack conversation inactivity".to_owned(),
+                crate::runs::SlackInteractionOpen {
+                    workspace_id: &workspace_id,
+                    channel_id: &channel_id,
+                    thread_id: &thread_id,
+                    interaction_id: &fallback_id,
+                    started_at: OffsetDateTime::now_utc(),
+                    title: "Slack conversation inactivity".to_owned(),
+                    request_message: None,
+                },
             )
             .await?;
             crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
@@ -1225,6 +1288,36 @@ mod tests {
                 provenance: json!({}),
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn slack_message_evidence_preserves_the_visible_message_and_sender() {
+        let message = ValidatedSlackMessage {
+            provider_message_id: "1700000000.000100".to_owned(),
+            sender: ValidatedSlackSender {
+                provider_user_id: "U123".to_owned(),
+                display_name: "Brad".to_owned(),
+                user_kind: "human".to_owned(),
+                avatar_url: None,
+                avatar_asset: None,
+                profile_refreshed_at: None,
+            },
+            content: "What changed?".to_owned(),
+            source_created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            slack_message_evidence(&message),
+            json!({
+                "content": "What changed?",
+                "provider_message_id": "1700000000.000100",
+                "sender": {
+                    "display_name": "Brad",
+                    "provider_user_id": "U123",
+                    "user_kind": "human",
+                },
+                "source_created_at": "1970-01-01T00:00:00Z",
+            })
         );
     }
 }
