@@ -37,6 +37,8 @@ or approval decision remains.
       explicitly identified evidence fixtures in canonical Context.
 - [ ] Finish with every scenario passed and agent-approved, or explicitly
       blocked with its evidence and unresolved owner recorded.
+- [ ] Pin and regularly replay the catalogue's representative 20-scenario
+      golden subset, rather than turning every approved case into routine cost.
 
 ## Current System and Why It Looks This Way
 
@@ -57,8 +59,9 @@ reconstructed from current prompts or Objects.
 Three operating modes are defined in `dev/evals/AGENTS.md`: agent-generated
 scenarios, exact replay of a failure, and simulation of all pinned golden Runs.
 This campaign uses all three. Brad has explicitly delegated golden approval for
-this RD, so a fully inspected pass may be annotated
-`Golden — approved · agent-verified`; only the best stable Run is pinned.
+this RD. A fully inspected pass is `Approved — agent-verified`; the catalogue's
+20 selected regular-regression scenarios use
+`Golden — approved · agent-verified`, with only the best stable Run pinned.
 
 The explainability implementation landed in Context PR #94 at `afd0267` and its
 Centaur producer work landed in PR #14 at `ba90df1`. The canonical local data is
@@ -121,10 +124,11 @@ perform the live Slack replay.
 
 - **Goal:** Prove and improve the real Slack research workflow with 100
   representative, repeatable eval scenarios.
-- **Done:** E001–E100 each has a reviewed terminal Run and approved golden pass,
-  or a documented hard blocker; all authorized repairs are landed and synced;
-  disposable fixtures are cleaned by exact ID; intended Sources remain; and
-  the pinned-suite replay and final hygiene audit pass.
+- **Done:** E001–E100 each has a reviewed terminal Run and approved pass, or a
+  documented hard blocker; the selected 20-scenario golden subset is pinned;
+  all authorized repairs are landed and synced; disposable fixtures are cleaned
+  by exact ID; intended Sources remain; and the pinned-suite replay and final
+  hygiene audit pass.
 - **Files:** `dev/evals/100-real-work-eval-scenarios.md`,
   `dev/evals/AGENTS.md`, this RD, campaign/defect RDs, and only the owning code
   and tests for defects discovered during later execution.

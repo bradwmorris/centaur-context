@@ -25,6 +25,21 @@ Before E061–E065, resolve `{{fresh_*}}` to five useful, not-yet-ingested items
 from Brad's actual research queue and record the URLs in the campaign issue.
 Never pick arbitrary content merely to satisfy the test.
 
+## Initial Golden Suite
+
+All 100 scenarios should finish with an approved passing Run, but only this
+representative 20-scenario subset is pinned for regular replay:
+
+`E001`, `E003`, `E004`, `E007`, `E021`, `E022`, `E027`, `E031`, `E040`,
+`E041`, `E042`, `E046`, `E051`, `E054`, `E058`, `E071`, `E086`, `E087`,
+`E091`, and `E100`.
+
+This covers exact retrieval, synthesis, editorial judgment, thread memory,
+canonical reuse, one simple write, cross-agent permissions, prompt injection,
+and an end-to-end workflow without making every routine pinned-suite replay run
+all 100 cases. Change the subset only with a reason recorded in the campaign
+issue; pin only the best stable Run for each selected scenario.
+
 ## Batch 1 — Find the Right Existing Thing
 
 | ID | Bot | Slack interaction | Pass condition | Hygiene |
@@ -186,10 +201,11 @@ Actual: <plain-language result>
 Evidence: <Run IDs, Object IDs, key trace/retrieval facts>
 Code: <main commit or branch commit/image>
 Hygiene: <none, durable Source retained, or exact fixture cleanup result>
-Golden — approved · agent-verified
+Approved — agent-verified
 ```
 
 For a failure, replace the last line with `Fail — <first upstream cause>`, leave
 the Run unpinned, and link the repair issue/RD. The passing replay points back to
-the failed Run. Do not put campaign progress or repair design into a second CSV
-or database table.
+the failed Run. For an Initial Golden Suite scenario, use
+`Golden — approved · agent-verified` instead and pin its best stable Run. Do not
+put campaign progress or repair design into a second CSV or database table.

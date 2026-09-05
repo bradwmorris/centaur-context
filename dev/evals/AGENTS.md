@@ -105,11 +105,13 @@ replay afterward.
 
 An active RD may record Brad's explicit delegation for the executing agent to
 approve successful Runs. Under that delegation, the agent may annotate a
-passing replacement `Golden — approved · agent-verified` and pin it after
-checking the visible Slack response, trace, retrieval evidence, mutations, and
-durable state. Pin only the best stable Run for that scenario. Earlier failures
-and superseded attempts remain visible and unpinned. Without that explicit RD
-delegation, the normal `Candidate — pending Brad review` rule still applies.
+passing Run `Approved — agent-verified` after checking the visible Slack
+response, trace, retrieval evidence, mutations, and durable state. If the active
+RD also selects that scenario for the regular regression suite, annotate its
+best stable Run `Golden — approved · agent-verified` and pin it. Approval does
+not automatically mean pinning. Earlier failures and superseded attempts remain
+visible and unpinned. Without that explicit RD delegation, the normal
+`Candidate — pending Brad review` rule still applies.
 
 ## Fixture Hygiene
 
