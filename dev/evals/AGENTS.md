@@ -83,6 +83,44 @@ an obvious in-scope fix only when implementation is authorized. Nontrivial work
 gets one RD and GitHub issue for the coherent repair. After a fix, rerun the
 same scenario and annotate the new Run; retain the full earlier history.
 
+For a multi-eval campaign, use one short-lived issue, branch, and worktree per
+distinct product defect, not per failed Run. Create the fix branch from the
+latest `origin/main`, run the affected services from that branch in the local
+stack, and replay the failing Slack interaction before merge. Record the tested
+commit or image in the replacement Run annotation. Failures with the same root
+cause share the same repair; unrelated fixes never accumulate on a campaign
+branch. After approval and merge, synchronize local `main`, restore the normal
+local stack, and remove the completed worktree and branch before continuing.
+
+## Delegated Campaign Approval
+
+An active RD may record Brad's explicit delegation for the executing agent to
+approve successful Runs. Under that delegation, the agent may annotate a
+passing replacement `Golden — approved · agent-verified` and pin it after
+checking the visible Slack response, trace, retrieval evidence, mutations, and
+durable state. Pin only the best stable Run for that scenario. Earlier failures
+and superseded attempts remain visible and unpinned. Without that explicit RD
+delegation, the normal `Candidate — pending Brad review` rule still applies.
+
+## Fixture Hygiene
+
+- Give every disposable Object a deterministic marker such as
+  `[eval:<scenario-id>:<campaign-id>]`, and record its exact Object ID as soon
+  as it is created.
+- Classify the scenario before sending it as read-only, durable research
+  ingestion, or disposable mutation. A useful approved Source is durable
+  research, not test debris.
+- State the cleanup method before execution. After grading, clean up only the
+  exact disposable IDs created by that scenario, using a supported human API or
+  compensating/archive operation. Never use broad title, date, or type filters.
+- If no safe supported cleanup exists, retain the fixture, annotate that fact,
+  and open a cleanup defect. Do not improvise direct database deletion.
+- Cleanup happens only after the Run and durable state have been inspected.
+  Cleanup creates its own normal mutation Run when the product records one.
+- Read-only and denied-operation scenarios pass only when they leave no
+  mutation. Ingestion reuse scenarios pass only when they do not duplicate the
+  existing Source.
+
 Running an eval authorizes its exact Slack test messages and read-only evidence
 collection. It does not by itself authorize fixture deletion, unrelated
 external messages, deployment, merge, or other destructive work.
