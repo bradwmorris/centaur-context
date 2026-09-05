@@ -943,7 +943,15 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
   return <div className="record-page"><div className="record-primary eval-detail">
     <div className="detail-heading run-heading"><h1 className="detail-title">{title}</h1></div>
     <p className="detail-description">{outcome}</p>
-    <section className="run-metrics" aria-label="Run summary">
+    <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
+      <Property label="Run ID"><span className="object-id-pill">{shortId(run.id)}</span></Property>
+      <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property><Property label="Golden eval">{run.pinned ? "Pinned" : "Not pinned"}</Property>
+      <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
+      {primary && <Property label="Primary Object"><a className="run-object-title" href={detailPath("objects", primary.object_id)}>{primary.title}</a><ObjectTypeBadge kind={primary.kind} /><ObjectId id={primary.object_id} compact /></Property>}
+      <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>
+      {run.chat_object_id && <Property label="Originating Chat"><a href={detailPath("objects", run.chat_object_id)}>Open Slack conversation</a><ObjectId id={run.chat_object_id} compact /></Property>}<Property label="Technical actor">{run.actor_type}:{run.actor_id}</Property><Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
+    </div></section>
+    <section className="run-summary" aria-label="Run summary"><h2>Metrics</h2><div className="run-metrics">
       <RunMetric label="Duration" value={metrics.duration} />
       <RunMetric label="Model" value={metrics.model} />
       <RunMetric label="Total tokens" value={metrics.tokens.total} />
@@ -957,16 +965,8 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
       <RunMetric label="Tool calls" value={String(metrics.toolCalls)} />
       <RunMetric label="Readiness polls" value={String(metrics.polls)} />
       <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
-    </section>
-    <p className="token-explanation">Provider total = input + output. Cache figures are part of input; reasoning is part of output. Fresh input is derived, while captured component sizes below are estimates.</p>
-    <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
-      <Property label="Run ID"><span className="object-id-pill">{shortId(run.id)}</span></Property>
-      <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property><Property label="Golden eval">{run.pinned ? "Pinned" : "Not pinned"}</Property>
-      <Property label="Source">{chatVisual?.source_provider ? <SourceBadge provider={chatVisual.source_provider} /> : "Internal"}</Property><Property label="Users">{(chatVisual?.users.length ?? 0) > 0 ? <AttributionStack users={chatVisual?.users ?? []} /> : "None"}</Property>
-      {primary && <Property label="Primary Object"><a className="run-object-title" href={detailPath("objects", primary.object_id)}>{primary.title}</a><ObjectTypeBadge kind={primary.kind} /><ObjectId id={primary.object_id} compact /></Property>}
-      <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>
-      {run.chat_object_id && <Property label="Originating Chat"><a href={detailPath("objects", run.chat_object_id)}>Open Slack conversation</a><ObjectId id={run.chat_object_id} compact /></Property>}<Property label="Technical actor">{run.actor_type}:{run.actor_id}</Property><Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
     </div></section>
+    <p className="token-explanation">Provider total = input + output. Cache figures are part of input; reasoning is part of output. Fresh input is derived, while captured component sizes below are estimates.</p>
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
     <section className="eval-annotation" aria-label="Run review"><div className="verdict-segments" role="group" aria-label="Review verdict"><button type="button" className={run.verdict === "pass" ? "active pass" : "pass"} disabled={busy} aria-pressed={run.verdict === "pass"} onClick={() => void chooseVerdict("pass")}>Pass</button><button type="button" className={run.verdict === "fail" ? "active fail" : "fail"} disabled={busy} aria-pressed={run.verdict === "fail"} onClick={() => void chooseVerdict("fail")}>Fail</button>{!(["pass", "fail"] as string[]).includes(run.verdict) && <span className={`eval-verdict ${run.verdict}`}>Legacy: {run.verdict}</span>}</div><InlineEditor label="Review notes" value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add review notes" className="review-notes-editor" onSave={async (value) => { const updated = await saveReview(run.verdict, value || null); return updated.review_notes ?? ""; }} onReload={load} /></section>
     {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
@@ -992,9 +992,9 @@ function ConversationEvidence({ run }: { run: Run }) {
 }
 
 function EvidenceMessage({ label, value }: { label: string; value?: Record<string, unknown> }) {
-  if (!value) return <article className="evidence-card unavailable"><strong>{label}</strong><p>Not captured for this Run.</p></article>;
+  if (!value) return null;
   const sender = recordValue(value.sender);
-  return <article className="evidence-card"><header><strong>{label}</strong><span>{textValue(sender?.display_name, "Unknown sender")} · {formatEvidenceTime(value.source_created_at)}</span></header><pre>{textValue(value.content, "")}</pre><small>Slack message {textValue(value.provider_message_id, "unknown")}</small></article>;
+  return <details className="evidence-row evidence-text"><summary><strong>{label}</strong></summary><div className="evidence-meta"><span>{textValue(sender?.display_name, "Unknown sender")}</span><span>{formatEvidenceTime(value.source_created_at)}</span><span>Slack message {textValue(value.provider_message_id, "unknown")}</span></div><pre>{textValue(value.content, "")}</pre></details>;
 }
 
 function AgentInputEvidence({ trace }: { trace: Record<string, unknown>[] }) {
@@ -1003,19 +1003,16 @@ function AgentInputEvidence({ trace }: { trace: Record<string, unknown>[] }) {
   const turnFacts = recordValue(turn?.facts);
   const instructionFacts = recordValue(instructions?.facts);
   const application = recordValue(instructionFacts?.application_instructions);
-  const provider = recordValue(instructionFacts?.provider_instructions);
   const toolCatalogue = recordValue(instructionFacts?.tool_catalogue);
   const applicationTools = recordValue(toolCatalogue?.application);
-  const providerTools = recordValue(toolCatalogue?.provider);
-  const components = arrayRecords(turnFacts?.components);
+  const components = arrayRecords(turnFacts?.components).filter((component) => textValue(component.status, "captured") === "captured");
+  const capturedApplication = application && textValue(application.status, "captured") === "captured" ? application : undefined;
+  const capturedTools = applicationTools && textValue(applicationTools.status, "captured") === "captured" ? applicationTools : undefined;
+  const hasCapturedInput = Boolean(capturedApplication || capturedTools || components.length > 0);
   return <Section title="What the agent received">
-    {!turn && !instructions && <p className="evidence-unavailable">Not captured for this Run. Historical Runs are never reconstructed.</p>}
-    {application && <EvidenceText title="Application instructions" value={application} estimated />}
-    {provider && <article className="evidence-card unavailable"><strong>Provider-hidden instructions</strong><p>{textValue(provider.reason, textValue(provider.status, "Unavailable"))}</p></article>}
-    {applicationTools && textValue(applicationTools.status) === "captured" && <EvidenceText title="Application tool catalogue" value={applicationTools} estimated />}
-    {applicationTools && textValue(applicationTools.status) !== "captured" && <article className="evidence-card unavailable"><strong>Application tool catalogue</strong><p>{textValue(applicationTools.reason, textValue(applicationTools.status, "Unavailable"))}</p></article>}
-    {providerTools && <article className="evidence-card unavailable"><strong>Provider-managed tool definitions</strong><p>{textValue(providerTools.reason, textValue(providerTools.status, "Unavailable"))}</p></article>}
-    {toolCatalogue && !applicationTools && !providerTools && <article className="evidence-card unavailable"><strong>Effective tool catalogue</strong><p>{textValue(toolCatalogue.reason, textValue(toolCatalogue.status, "Unavailable"))}</p></article>}
+    {!hasCapturedInput && <p className="evidence-unavailable">Application-controlled input was not captured for this Run.</p>}
+    {capturedApplication && <EvidenceText title="Application instructions" value={capturedApplication} estimated />}
+    {capturedTools && <EvidenceText title="Application tool catalogue" value={capturedTools} estimated />}
     {components.length > 0 && <div className="evidence-list">{components.map((component, index) => <EvidenceText key={`${textValue(component.kind)}-${index}`} title={textValue(component.kind, "Input component").replaceAll("_", " ")} value={component} estimated />)}</div>}
   </Section>;
 }
@@ -1024,7 +1021,7 @@ function EvidenceText({ title, value, estimated = false }: { title: string; valu
   const chars = numberValue(value.chars);
   const capturedTokens = numberValue(value.estimated_tokens);
   const tokens = capturedTokens ?? (estimated && chars !== null ? Math.ceil(chars / 4) : null);
-  return <details className="evidence-card evidence-text"><summary><strong>{title}</strong><span>{chars === null ? "Size unavailable" : `${formatCount(chars)} chars`}{tokens === null ? "" : ` · ~${formatCount(tokens)} tokens${estimated ? " estimated" : ""}`}</span></summary><div className="evidence-meta">{textValue(value.source) && <span>{textValue(value.source)}</span>}{textValue(value.sha256) && <code>sha256 {textValue(value.sha256)}</code>}</div><pre>{textValue(value.text, "No text captured.")}</pre></details>;
+  return <details className="evidence-row evidence-text"><summary><strong>{title}</strong></summary><div className="evidence-meta"><span>{chars === null ? "Size unavailable" : `${formatCount(chars)} chars`}{tokens === null ? "" : ` · ~${formatCount(tokens)} tokens${estimated ? " estimated" : ""}`}</span>{textValue(value.source) && <span>{textValue(value.source)}</span>}{textValue(value.sha256) && <code>sha256 {textValue(value.sha256)}</code>}</div><pre>{textValue(value.text, "No text captured.")}</pre></details>;
 }
 
 function RetrievedContextEvidence({ trace }: { trace: Record<string, unknown>[] }) {
@@ -1034,17 +1031,17 @@ function RetrievedContextEvidence({ trace }: { trace: Record<string, unknown>[] 
   const objects = arrayRecords(packet?.objects);
   return <Section title="Retrieved Context">
     {!packet ? <p className="evidence-unavailable">Not captured for this Run. Historical Runs are never reconstructed.</p> : <>
-      <div className="evidence-meta"><span>Query: {textValue(packet.query, "Unavailable")}</span><span>Method: {textValue(packet.retrieval, "Unavailable")}</span><span>Captured: {formatEvidenceTime(packet.captured_at ?? retrieval?.created_at)}</span>{numberValue(packet.duration_ms) !== null && <span>Retrieval: {formatDuration(numberValue(packet.duration_ms) ?? 0)}</span>}<span>Omitted: {formatCount(numberValue(recordValue(packet.budget)?.omitted_objects) ?? numberValue(packet.omitted_object_count) ?? 0)} objects · {formatCount(numberValue(recordValue(packet.budget)?.omitted_connections) ?? 0)} connections</span></div>
-      <div className="evidence-list">{objects.map((object, index) => { const relevance = recordValue(object.relevance); return <article className="evidence-card" key={textValue(object.id, String(index))}><header><strong>{index + 1}. {textValue(object.title, "Untitled Object")}</strong><span>{textValue(object.kind)} · revision {scalarValue(object.revision, "?")} · score {scalarValue(relevance?.score, "?")}</span></header><p>{textValue(relevance?.rationale, "No retrieval rationale captured.")}</p><pre>{textValue(object.description, "")}</pre><small>{textValue(object.id)}</small><details className="run-technical"><summary>Evidence and connections</summary><pre>{JSON.stringify(object, null, 2)}</pre></details></article>; })}</div>
-      <details className="evidence-card evidence-text"><summary><strong>Exact injected Context text</strong><span>{packet.transport_truncated === true ? "truncated" : "complete"}</span></summary><pre>{textValue(packet.injected_text, "No Context text was injected.")}</pre></details>
-      {recordValue(packet.budget) && <details className="evidence-card evidence-text"><summary><strong>Retrieval budget</strong></summary><pre>{JSON.stringify(packet.budget, null, 2)}</pre></details>}
+      <details className="evidence-row evidence-text"><summary><strong>Retrieval details</strong></summary><div className="evidence-meta"><span>Query: {textValue(packet.query, "Unavailable")}</span><span>Method: {textValue(packet.retrieval, "Unavailable")}</span><span>Captured: {formatEvidenceTime(packet.captured_at ?? retrieval?.created_at)}</span>{numberValue(packet.duration_ms) !== null && <span>Retrieval: {formatDuration(numberValue(packet.duration_ms) ?? 0)}</span>}<span>Omitted: {formatCount(numberValue(recordValue(packet.budget)?.omitted_objects) ?? numberValue(packet.omitted_object_count) ?? 0)} objects · {formatCount(numberValue(recordValue(packet.budget)?.omitted_connections) ?? 0)} connections</span></div></details>
+      <div className="evidence-list">{objects.map((object, index) => { const relevance = recordValue(object.relevance); return <details className="evidence-row evidence-text" key={textValue(object.id, String(index))}><summary><strong>{index + 1}. {textValue(object.title, "Untitled Object")}</strong></summary><div className="evidence-meta"><span>{textValue(object.kind)}</span><span>Revision {scalarValue(object.revision, "?")}</span><span>Score {scalarValue(relevance?.score, "?")}</span><span>{textValue(object.id)}</span></div><p>{textValue(relevance?.rationale, "No retrieval rationale captured.")}</p><pre>{textValue(object.description, "")}</pre><details className="run-technical"><summary>Evidence and connections</summary><pre>{JSON.stringify(object, null, 2)}</pre></details></details>; })}</div>
+      <details className="evidence-row evidence-text"><summary><strong>Exact injected Context text</strong></summary><div className="evidence-meta"><span>{packet.transport_truncated === true ? "Truncated" : "Complete"}</span></div><pre>{textValue(packet.injected_text, "No Context text was injected.")}</pre></details>
+      {recordValue(packet.budget) && <details className="evidence-row evidence-text"><summary><strong>Retrieval budget</strong></summary><pre>{JSON.stringify(packet.budget, null, 2)}</pre></details>}
     </>}
   </Section>;
 }
 
 function ToolEvidence({ trace }: { trace: Record<string, unknown>[] }) {
   const tools = trace.filter((entry) => entry.entry_type === "tool_call");
-  return <Section title="Tool activity"><div className="evidence-list">{tools.map((entry, index) => { const facts = recordValue(entry.facts); const detail = facts && ["command", "arguments", "output", "result", "error"].some((key) => facts[key] !== undefined); return <details className="evidence-card evidence-text" key={textValue(entry.id, String(index))}><summary><strong>{textValue(entry.name, "Tool call")}</strong><span>{textValue(entry.status, "completed")}</span></summary>{detail ? <pre>{JSON.stringify(facts, null, 2)}</pre> : <p>Arguments and results were not captured for this Run.</p>}</details>; })}{tools.length === 0 && <p className="evidence-unavailable">No tool calls were recorded.</p>}</div></Section>;
+  return <Section title="Tool activity"><div className="evidence-list">{tools.map((entry, index) => { const facts = recordValue(entry.facts); const detail = facts && ["command", "arguments", "output", "result", "error"].some((key) => facts[key] !== undefined); return <details className="evidence-row evidence-text" key={textValue(entry.id, String(index))}><summary><strong>{textValue(entry.name, "Tool call")}</strong></summary><div className="evidence-meta"><span>{textValue(entry.status, "completed")}</span></div>{detail ? <pre>{JSON.stringify(facts, null, 2)}</pre> : <p>Arguments and results were not captured for this Run.</p>}</details>; })}{tools.length === 0 && <p className="evidence-unavailable">No tool calls were recorded.</p>}</div></Section>;
 }
 
 function RunMetric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {

@@ -95,6 +95,12 @@ The UI must distinguish preloaded Context from Objects read later through tools,
 participants/originating Chat, and changed Objects. A related-Object list is not
 a substitute for retrieval evidence.
 
+The Eval detail page uses one vertical flow: properties first, metrics below,
+then plain disclosure rows for captured evidence. Closed rows show only their
+title. Metadata and content appear after expansion. Do not render cards, tinted
+containers, or placeholder rows for provider-hidden instructions and
+provider-managed tool definitions.
+
 ### Prompt boundary
 
 Display the exact instructions and content controlled by this application under

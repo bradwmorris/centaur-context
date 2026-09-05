@@ -119,12 +119,17 @@ describe("minimal canonical UI", () => {
     window.history.replaceState({}, "", "/evals/run-explain");
     render(<App />);
     expect((await screen.findAllByText("What changed?")).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByText("Agent response"));
     expect(screen.getByText("The launch changed.")).toBeVisible();
     expect(screen.getByText("Application instructions")).toBeVisible();
+    fireEvent.click(screen.getByText("Application instructions"));
     expect(screen.getByText("~6 tokens estimated", { exact: false })).toBeVisible();
-    expect(screen.getByText("Provider-controlled hidden instructions are not exposed to Centaur.")).toBeVisible();
-    expect(screen.getByText("Semantic match")).toBeVisible();
+    expect(screen.queryByText("Provider-hidden instructions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Provider-controlled hidden instructions are not exposed to Centaur.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Retrieval details"));
     expect(screen.getByText("Omitted: 3 objects · 8 connections")).toBeVisible();
+    fireEvent.click(screen.getByText("1. Launch memory"));
+    expect(screen.getByText("Semantic match")).toBeVisible();
     expect(screen.getByText("Fresh input (derived)")).toBeVisible();
     expect(screen.getByText("40")).toBeVisible();
   });
@@ -134,8 +139,8 @@ describe("minimal canonical UI", () => {
     vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-history") ? envelope({ run: { ...run, id: "run-history" }, children: [], objects: [], events: [] }) : defaultFetch(input, init));
     window.history.replaceState({}, "", "/evals/run-history");
     render(<App />);
-    expect((await screen.findAllByText("Not captured for this Run.")).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("Not captured for this Run. Historical Runs are never reconstructed.").length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByText("Application-controlled input was not captured for this Run.")).toBeVisible();
+    expect(screen.getByText("Not captured for this Run. Historical Runs are never reconstructed.")).toBeVisible();
   });
 
   it("renders database date tuples captured by early explainable Runs", async () => {
@@ -149,7 +154,8 @@ describe("minimal canonical UI", () => {
     vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-tuple-time") ? envelope({ run: tupleRun, children: [], objects: [], events: [] }) : defaultFetch(input, init));
     window.history.replaceState({}, "", "/evals/run-tuple-time");
     render(<App />);
-    expect(await screen.findByText("Tuple request")).toBeVisible();
+    fireEvent.click(await screen.findByText("User request"));
+    expect(screen.getByText("Tuple request")).toBeVisible();
     expect(screen.queryByText(/Time unavailable/)).not.toBeInTheDocument();
   });
 
