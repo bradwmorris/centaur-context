@@ -96,10 +96,11 @@ participants/originating Chat, and changed Objects. A related-Object list is not
 a substitute for retrieval evidence.
 
 The Eval detail page uses one vertical flow: properties first, metrics below,
-then plain disclosure rows for captured evidence. Closed rows show only their
-title. Metadata and content appear after expansion. Do not render cards, tinted
-containers, or placeholder rows for provider-hidden instructions and
-provider-managed tool definitions.
+then plain disclosure rows for captured evidence. Property and metric rows keep
+their label and value together as `Label: value`. Closed disclosure rows show
+only their title. Metadata and content appear after expansion. Do not render
+cards, tinted containers, or placeholder rows for provider-hidden instructions
+and provider-managed tool definitions.
 
 ### Prompt boundary
 

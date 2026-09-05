@@ -185,8 +185,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .run-summary { margin: 22px 0 0; }
 .run-summary h2 { margin: 0 0 5px; color: var(--text-subtle); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .run-metrics { display: grid; grid-template-columns: 1fr; gap: 0; margin: 0; }
-.run-metric { min-width: 0; display: grid; gap: 4px; border-bottom: 1px solid rgba(255,255,255,.055); padding: 9px 0; background: transparent; }
+.run-metric { min-width: 0; display: grid; grid-template-columns: minmax(210px, max-content) minmax(0, 1fr); align-items: baseline; gap: 10px; border-bottom: 1px solid rgba(255,255,255,.055); padding: 9px 0; background: transparent; }
 .run-metric span { color: var(--text-subtle); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.run-metric span::after { content: ":"; }
 .run-metric strong { min-width: 0; color: #d8d9dd; font-size: 13px; font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-metric.warning strong { color: #d18c8c; }
 .token-explanation { margin: 10px 0 22px; color: var(--text-subtle); font-size: 10px; line-height: 1.45; }
@@ -223,8 +224,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .evidence-meta { display: grid; grid-template-columns: 1fr; justify-items: start; gap: 5px; margin: 0 0 10px; color: var(--text-subtle); font-size: 10px; }
 .evidence-meta code { overflow-wrap: anywhere; }
 .eval-detail .properties-grid { grid-template-columns: 1fr; }
-.eval-detail .property, .eval-detail .properties-grid > .field { display: grid; grid-template-columns: 1fr; justify-items: start; align-items: start; gap: 4px; padding: 5px 0; }
-.eval-detail .property > div { display: grid; grid-template-columns: 1fr; justify-items: start; align-items: start; gap: 5px; }
 .run-object-title { max-width: min(500px, 55vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-related-objects { display: grid; gap: 4px; }
 .run-related-object { min-width: 0; display: grid; grid-template-columns: max-content max-content minmax(140px,1fr) max-content max-content; align-items: center; gap: 7px; min-height: 42px; border-bottom: 1px solid rgba(255,255,255,.045); }
