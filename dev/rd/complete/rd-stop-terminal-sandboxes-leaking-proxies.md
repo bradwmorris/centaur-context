@@ -1,6 +1,6 @@
 # 2 — RD: Stop Terminal Sandboxes Leaking Proxies
 
-**Status:** `in_progress — implementation ready; local image proof blocked by Docker I/O`
+**Status:** `complete`
 **Created:** 2026-09-05
 **Upstream GitHub Issue:** [bradwmorris/centaur#15](https://github.com/bradwmorris/centaur/issues/15)
 **Upstream Pull Request:** [bradwmorris/centaur#16](https://github.com/bradwmorris/centaur/pull/16)
@@ -17,11 +17,8 @@ The incident snapshot contained 105 proxy pods: 80 Running, 3 Pending, and 22
 Failed. Of the Running proxies, 76 belonged to Sandbox CRs whose agent pods were
 Failed, one had no matching agent pod, and only three had Running agents.
 
-**Missing:** local deployment of the repaired api-rs image. Docker Desktop's
-internal containerd metadata store returned an I/O error after the host reached
-100% storage during the image build. Restarting/pruning the shared Docker engine
-is outside this job's safe mutation boundary. Merge and non-local rollout remain
-requester-owned.
+**Missing:** none. The requester approved the Docker restart, local deployment,
+and merge on 2026-09-05. Non-local rollout remains requester-owned.
 
 1. Make terminal post-execution cleanup stop backend resources and atomically
    clear only the still-matching session assignment after the configured idle
@@ -85,9 +82,15 @@ requester-owned.
   with warnings denied; formatting, diff checks, and Helm lint pass. The default
   concurrent workspace run exposed four existing shared-database test races, and
   each passed independently before the serialized suite passed in full.
-- Deployment limitation: the local image build failed in Docker Desktop's
-  containerd metadata store with an I/O error. No repaired image was deployed;
-  current containment is the exact-target resource cleanup above.
+- Deployment proof: after the approved Docker Desktop restart, image
+  `centaur-api-rs:issue-15-proxy-cleanup` built and rolled out successfully. A
+  deliberately orphaned, labeled proxy Service was observed and automatically
+  reaped by the repaired two-sweep janitor. Three formerly healthy pairs became
+  terminal during the forced engine restart; their proxy registrations and exact
+  resource sets were removed. The final state was one Running proxy paired with
+  one Running agent, zero bad Running pairs, one proxy Service, two proxy
+  NetworkPolicies, 15 namespace pods, and a successful `/readyz` response. The
+  cleanup interval was restored from the five-second proof setting to 300 seconds.
 
 ## Approval Boundary
 
