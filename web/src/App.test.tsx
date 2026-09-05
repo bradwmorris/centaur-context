@@ -98,6 +98,61 @@ describe("minimal canonical UI", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v2/runs"), expect.anything()));
   });
 
+  it("explains a captured eval run and labels historical gaps", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    const explainable = {
+      ...run,
+      id: "run-explain",
+      kind: "slack_interaction",
+      primary_object_id: null,
+      input: { request_message: { content: "What changed?", provider_message_id: "123.1", sender: { display_name: "Brad" }, source_created_at: now } },
+      result: { summary: "Answered", response_message: { content: "The launch changed.", provider_message_id: "123.2", sender: { display_name: "Rez" }, source_created_at: now } },
+      trace: [
+        { id: "input", entry_type: "input_snapshot", status: "completed", facts: { components: [{ kind: "user_message", chars: 13, estimated_tokens: 4, sha256: "input-hash", text: "What changed?" }] } },
+        { id: "instructions", entry_type: "instruction_snapshot", status: "completed", facts: { application_instructions: { status: "captured", source: "workspace/AGENTS.md", chars: 22, estimated_tokens: 6, sha256: "prompt-hash", text: "# Agent instructions" }, provider_instructions: { status: "unavailable", reason: "Provider-controlled hidden instructions are not exposed to Centaur." } } },
+        { id: "context", entry_type: "context_retrieval", status: "completed", created_at: now, facts: { packet: { query: "What changed?", retrieval: "hybrid", injected_text: "# Centaur Context\nLaunch memory", transport_truncated: false, omitted_object_count: 3, budget: { omitted_connections: 8 }, objects: [{ id: "memory-1", kind: "memory", title: "Launch memory", description: "Launch moved.", revision: 4, relevance: { score: 0.92, rationale: "Semantic match" } }] } } },
+        { id: "tool", entry_type: "tool_call", name: "centaur-context read-object", status: "completed", facts: { command: "centaur-context read-object memory-1", output: "ok" } },
+        { id: "usage", entry_type: "model_attempt", status: "completed", model_id: "gpt-test", input_tokens: 100, cache_read_tokens: 60, output_tokens: 20, reasoning_tokens: 5, total_tokens: 120 },
+      ],
+    };
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-explain") ? envelope({ run: explainable, children: [], objects: [], events: [] }) : defaultFetch(input, init));
+    window.history.replaceState({}, "", "/evals/run-explain");
+    render(<App />);
+    expect((await screen.findAllByText("What changed?")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("The launch changed.")).toBeVisible();
+    expect(screen.getByText("Application instructions")).toBeVisible();
+    expect(screen.getByText("~6 tokens estimated", { exact: false })).toBeVisible();
+    expect(screen.getByText("Provider-controlled hidden instructions are not exposed to Centaur.")).toBeVisible();
+    expect(screen.getByText("Semantic match")).toBeVisible();
+    expect(screen.getByText("Omitted: 3 objects · 8 connections")).toBeVisible();
+    expect(screen.getByText("Fresh input (derived)")).toBeVisible();
+    expect(screen.getByText("40")).toBeVisible();
+  });
+
+  it("does not reconstruct evidence for an older run", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-history") ? envelope({ run: { ...run, id: "run-history" }, children: [], objects: [], events: [] }) : defaultFetch(input, init));
+    window.history.replaceState({}, "", "/evals/run-history");
+    render(<App />);
+    expect((await screen.findAllByText("Not captured for this Run.")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("Not captured for this Run. Historical Runs are never reconstructed.").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("renders database date tuples captured by early explainable Runs", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    const tupleRun = {
+      ...run,
+      id: "run-tuple-time",
+      input: { request_message: { content: "Tuple request", source_created_at: [2026, 248, 5, 56, 51, 729000000, 0, 0, 0] } },
+      result: { response_message: { content: "Tuple response", source_created_at: [2026, 248, 5, 57, 8, 823000000, 0, 0, 0] } },
+    };
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-tuple-time") ? envelope({ run: tupleRun, children: [], objects: [], events: [] }) : defaultFetch(input, init));
+    window.history.replaceState({}, "", "/evals/run-tuple-time");
+    render(<App />);
+    expect(await screen.findByText("Tuple request")).toBeVisible();
+    expect(screen.queryByText(/Time unavailable/)).not.toBeInTheDocument();
+  });
+
   it("opens Connections as a first-class active navigation surface", async () => {
     render(<App />);
     const button = await screen.findByRole("button", { name: "Connections" });

@@ -948,13 +948,17 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
       <RunMetric label="Model" value={metrics.model} />
       <RunMetric label="Total tokens" value={metrics.tokens.total} />
       <RunMetric label="Input" value={metrics.tokens.input} />
+      <RunMetric label="Fresh input (derived)" value={metrics.tokens.freshInput} />
+      <RunMetric label="Cache creation" value={metrics.tokens.cacheCreation} />
       <RunMetric label="Cache read" value={metrics.tokens.cacheRead} />
       <RunMetric label="Output" value={metrics.tokens.output} />
+      <RunMetric label="Non-reasoning output (derived)" value={metrics.tokens.nonReasoningOutput} />
       <RunMetric label="Reasoning" value={metrics.tokens.reasoning} />
       <RunMetric label="Tool calls" value={String(metrics.toolCalls)} />
       <RunMetric label="Readiness polls" value={String(metrics.polls)} />
       <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
     </section>
+    <p className="token-explanation">Provider total = input + output. Cache figures are part of input; reasoning is part of output. Fresh input is derived, while captured component sizes below are estimates.</p>
     <section className="properties-block" aria-label="Run properties"><h2>Properties</h2><div className="properties-grid">
       <Property label="Run ID"><span className="object-id-pill">{shortId(run.id)}</span></Property>
       <Property label="Type"><span className="visual-badge run-type-badge">↻ {runType(run, objects)}</span></Property><Property label="Status"><StateBadge state={run.status} /></Property><Property label="Verdict"><span className={`eval-verdict ${run.verdict}`}>{run.verdict}</span></Property><Property label="Golden eval">{run.pinned ? "Pinned" : "Not pinned"}</Property>
@@ -966,12 +970,81 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
     <section className="eval-annotation" aria-label="Run review"><div className="verdict-segments" role="group" aria-label="Review verdict"><button type="button" className={run.verdict === "pass" ? "active pass" : "pass"} disabled={busy} aria-pressed={run.verdict === "pass"} onClick={() => void chooseVerdict("pass")}>Pass</button><button type="button" className={run.verdict === "fail" ? "active fail" : "fail"} disabled={busy} aria-pressed={run.verdict === "fail"} onClick={() => void chooseVerdict("fail")}>Fail</button>{!(["pass", "fail"] as string[]).includes(run.verdict) && <span className={`eval-verdict ${run.verdict}`}>Legacy: {run.verdict}</span>}</div><InlineEditor label="Review notes" value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add review notes" className="review-notes-editor" onSave={async (value) => { const updated = await saveReview(run.verdict, value || null); return updated.review_notes ?? ""; }} onReload={load} /></section>
     {events.some((item) => item.reversible) && <button className="danger-button" type="button" disabled={busy} onClick={() => void undo()}>{busy ? "Creating reversal…" : "Undo with compensating run"}</button>}
+    <ConversationEvidence run={run} />
+    <AgentInputEvidence trace={run.trace} />
+    <RetrievedContextEvidence trace={run.trace} />
+    <ToolEvidence trace={run.trace} />
     <Section title="Execution trace"><div className="run-trace-list">{run.trace.map((entry, index) => <RunTraceEntry entry={entry} index={index} key={textValue(entry.id, String(index))} />)}{run.trace.length === 0 && <p className="run-empty-trace">No detailed trace was recorded for this run.</p>}</div></Section>
     <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
     {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{children.map((child) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
     <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} compact /><ObjectId id={object.object_id} compact /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectContext visual={visuals.get(object.object_id)} /></article>)}{objects.length === 0 && <p className="muted">No related Objects.</p>}</div></Section>
     <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><strong>{item.action} {item.target_type}</strong><span>revision {item.from_revision ?? "new"} → {item.to_revision}</span>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} compact />}{item.reversible && <span className="change-state">reversible</span>}</article>)}</div></Section>
   </div></div>;
+}
+
+function ConversationEvidence({ run }: { run: Run }) {
+  const request = recordValue(run.input.request_message);
+  const response = recordValue(run.result.response_message);
+  return <Section title="Conversation"><div className="evidence-grid">
+    <EvidenceMessage label="User request" value={request} />
+    <EvidenceMessage label="Agent response" value={response} />
+  </div></Section>;
+}
+
+function EvidenceMessage({ label, value }: { label: string; value?: Record<string, unknown> }) {
+  if (!value) return <article className="evidence-card unavailable"><strong>{label}</strong><p>Not captured for this Run.</p></article>;
+  const sender = recordValue(value.sender);
+  return <article className="evidence-card"><header><strong>{label}</strong><span>{textValue(sender?.display_name, "Unknown sender")} · {formatEvidenceTime(value.source_created_at)}</span></header><pre>{textValue(value.content, "")}</pre><small>Slack message {textValue(value.provider_message_id, "unknown")}</small></article>;
+}
+
+function AgentInputEvidence({ trace }: { trace: Record<string, unknown>[] }) {
+  const turn = trace.find((entry) => entry.entry_type === "input_snapshot");
+  const instructions = trace.find((entry) => entry.entry_type === "instruction_snapshot");
+  const turnFacts = recordValue(turn?.facts);
+  const instructionFacts = recordValue(instructions?.facts);
+  const application = recordValue(instructionFacts?.application_instructions);
+  const provider = recordValue(instructionFacts?.provider_instructions);
+  const toolCatalogue = recordValue(instructionFacts?.tool_catalogue);
+  const applicationTools = recordValue(toolCatalogue?.application);
+  const providerTools = recordValue(toolCatalogue?.provider);
+  const components = arrayRecords(turnFacts?.components);
+  return <Section title="What the agent received">
+    {!turn && !instructions && <p className="evidence-unavailable">Not captured for this Run. Historical Runs are never reconstructed.</p>}
+    {application && <EvidenceText title="Application instructions" value={application} estimated />}
+    {provider && <article className="evidence-card unavailable"><strong>Provider-hidden instructions</strong><p>{textValue(provider.reason, textValue(provider.status, "Unavailable"))}</p></article>}
+    {applicationTools && textValue(applicationTools.status) === "captured" && <EvidenceText title="Application tool catalogue" value={applicationTools} estimated />}
+    {applicationTools && textValue(applicationTools.status) !== "captured" && <article className="evidence-card unavailable"><strong>Application tool catalogue</strong><p>{textValue(applicationTools.reason, textValue(applicationTools.status, "Unavailable"))}</p></article>}
+    {providerTools && <article className="evidence-card unavailable"><strong>Provider-managed tool definitions</strong><p>{textValue(providerTools.reason, textValue(providerTools.status, "Unavailable"))}</p></article>}
+    {toolCatalogue && !applicationTools && !providerTools && <article className="evidence-card unavailable"><strong>Effective tool catalogue</strong><p>{textValue(toolCatalogue.reason, textValue(toolCatalogue.status, "Unavailable"))}</p></article>}
+    {components.length > 0 && <div className="evidence-list">{components.map((component, index) => <EvidenceText key={`${textValue(component.kind)}-${index}`} title={textValue(component.kind, "Input component").replaceAll("_", " ")} value={component} estimated />)}</div>}
+  </Section>;
+}
+
+function EvidenceText({ title, value, estimated = false }: { title: string; value: Record<string, unknown>; estimated?: boolean }) {
+  const chars = numberValue(value.chars);
+  const capturedTokens = numberValue(value.estimated_tokens);
+  const tokens = capturedTokens ?? (estimated && chars !== null ? Math.ceil(chars / 4) : null);
+  return <details className="evidence-card evidence-text"><summary><strong>{title}</strong><span>{chars === null ? "Size unavailable" : `${formatCount(chars)} chars`}{tokens === null ? "" : ` · ~${formatCount(tokens)} tokens${estimated ? " estimated" : ""}`}</span></summary><div className="evidence-meta">{textValue(value.source) && <span>{textValue(value.source)}</span>}{textValue(value.sha256) && <code>sha256 {textValue(value.sha256)}</code>}</div><pre>{textValue(value.text, "No text captured.")}</pre></details>;
+}
+
+function RetrievedContextEvidence({ trace }: { trace: Record<string, unknown>[] }) {
+  const retrieval = trace.find((entry) => entry.entry_type === "context_retrieval");
+  const facts = recordValue(retrieval?.facts);
+  const packet = recordValue(facts?.packet);
+  const objects = arrayRecords(packet?.objects);
+  return <Section title="Retrieved Context">
+    {!packet ? <p className="evidence-unavailable">Not captured for this Run. Historical Runs are never reconstructed.</p> : <>
+      <div className="evidence-meta"><span>Query: {textValue(packet.query, "Unavailable")}</span><span>Method: {textValue(packet.retrieval, "Unavailable")}</span><span>Captured: {formatEvidenceTime(packet.captured_at ?? retrieval?.created_at)}</span>{numberValue(packet.duration_ms) !== null && <span>Retrieval: {formatDuration(numberValue(packet.duration_ms) ?? 0)}</span>}<span>Omitted: {formatCount(numberValue(recordValue(packet.budget)?.omitted_objects) ?? numberValue(packet.omitted_object_count) ?? 0)} objects · {formatCount(numberValue(recordValue(packet.budget)?.omitted_connections) ?? 0)} connections</span></div>
+      <div className="evidence-list">{objects.map((object, index) => { const relevance = recordValue(object.relevance); return <article className="evidence-card" key={textValue(object.id, String(index))}><header><strong>{index + 1}. {textValue(object.title, "Untitled Object")}</strong><span>{textValue(object.kind)} · revision {scalarValue(object.revision, "?")} · score {scalarValue(relevance?.score, "?")}</span></header><p>{textValue(relevance?.rationale, "No retrieval rationale captured.")}</p><pre>{textValue(object.description, "")}</pre><small>{textValue(object.id)}</small><details className="run-technical"><summary>Evidence and connections</summary><pre>{JSON.stringify(object, null, 2)}</pre></details></article>; })}</div>
+      <details className="evidence-card evidence-text"><summary><strong>Exact injected Context text</strong><span>{packet.transport_truncated === true ? "truncated" : "complete"}</span></summary><pre>{textValue(packet.injected_text, "No Context text was injected.")}</pre></details>
+      {recordValue(packet.budget) && <details className="evidence-card evidence-text"><summary><strong>Retrieval budget</strong></summary><pre>{JSON.stringify(packet.budget, null, 2)}</pre></details>}
+    </>}
+  </Section>;
+}
+
+function ToolEvidence({ trace }: { trace: Record<string, unknown>[] }) {
+  const tools = trace.filter((entry) => entry.entry_type === "tool_call");
+  return <Section title="Tool activity"><div className="evidence-list">{tools.map((entry, index) => { const facts = recordValue(entry.facts); const detail = facts && ["command", "arguments", "output", "result", "error"].some((key) => facts[key] !== undefined); return <details className="evidence-card evidence-text" key={textValue(entry.id, String(index))}><summary><strong>{textValue(entry.name, "Tool call")}</strong><span>{textValue(entry.status, "completed")}</span></summary>{detail ? <pre>{JSON.stringify(facts, null, 2)}</pre> : <p>Arguments and results were not captured for this Run.</p>}</details>; })}{tools.length === 0 && <p className="evidence-unavailable">No tool calls were recorded.</p>}</div></Section>;
 }
 
 function RunMetric({ label, value, warning = false }: { label: string; value: string; warning?: boolean }) {
@@ -997,6 +1070,7 @@ function RunTraceEntry({ entry, index }: { entry: Record<string, unknown>; index
       <div><span>Component</span><strong>{textValue(entry.component, "workflow")}</strong></div>
       {textValue(entry.model_id) && <div><span>Model</span><strong>{textValue(entry.model_id)}</strong></div>}
       {numberValue(entry.input_tokens) !== null && <div><span>Input</span><strong>{formatCount(numberValue(entry.input_tokens) ?? 0)}</strong></div>}
+      {numberValue(entry.cache_creation_tokens) !== null && <div><span>Cache creation</span><strong>{formatCount(numberValue(entry.cache_creation_tokens) ?? 0)}</strong></div>}
       {numberValue(entry.output_tokens) !== null && <div><span>Output</span><strong>{formatCount(numberValue(entry.output_tokens) ?? 0)}</strong></div>}
       {numberValue(entry.cache_read_tokens) !== null && <div><span>Cache read</span><strong>{formatCount(numberValue(entry.cache_read_tokens) ?? 0)}</strong></div>}
       {numberValue(entry.reasoning_tokens) !== null && <div><span>Reasoning</span><strong>{formatCount(numberValue(entry.reasoning_tokens) ?? 0)}</strong></div>}
@@ -1007,8 +1081,8 @@ function RunTraceEntry({ entry, index }: { entry: Record<string, unknown>; index
 }
 
 function runMetrics(run: Run) {
-  const tokenTotals = { total: 0, input: 0, cacheRead: 0, output: 0, reasoning: 0 };
-  const hasTokens = { total: false, input: false, cacheRead: false, output: false, reasoning: false };
+  const tokenTotals = { total: 0, input: 0, cacheCreation: 0, cacheRead: 0, output: 0, reasoning: 0 };
+  const hasTokens = { total: false, input: false, cacheCreation: false, cacheRead: false, output: false, reasoning: false };
   let toolCalls = 0;
   let polls = 0;
   let failures = 0;
@@ -1020,7 +1094,7 @@ function runMetrics(run: Run) {
       else toolCalls += 1;
     }
     if (entry.status === "failed") failures += 1;
-    for (const [field, key] of [["total_tokens", "total"], ["input_tokens", "input"], ["cache_read_tokens", "cacheRead"], ["output_tokens", "output"], ["reasoning_tokens", "reasoning"]] as const) {
+    for (const [field, key] of [["total_tokens", "total"], ["input_tokens", "input"], ["cache_creation_tokens", "cacheCreation"], ["cache_read_tokens", "cacheRead"], ["output_tokens", "output"], ["reasoning_tokens", "reasoning"]] as const) {
       const value = numberValue(entry[field]);
       if (value !== null) { tokenTotals[key] += value; hasTokens[key] = true; }
     }
@@ -1029,14 +1103,31 @@ function runMetrics(run: Run) {
   const started = run.started_at ? new Date(run.started_at).getTime() : null;
   const completed = run.completed_at ? new Date(run.completed_at).getTime() : null;
   const duration = started !== null && completed !== null ? formatDuration(Math.max(0, completed - started)) : run.status === "running" ? "Running" : "—";
+  const freshInput = hasTokens.input ? formatCount(Math.max(0, tokenTotals.input - tokenTotals.cacheCreation - tokenTotals.cacheRead)) : "—";
+  const nonReasoningOutput = hasTokens.output ? formatCount(Math.max(0, tokenTotals.output - tokenTotals.reasoning)) : "—";
   return {
     duration,
     model,
-    tokens: Object.fromEntries(Object.entries(tokenTotals).map(([key, value]) => [key, hasTokens[key as keyof typeof hasTokens] ? formatCount(value) : "—"])) as Record<keyof typeof tokenTotals, string>,
+    tokens: { ...Object.fromEntries(Object.entries(tokenTotals).map(([key, value]) => [key, hasTokens[key as keyof typeof hasTokens] ? formatCount(value) : "—"])), freshInput, nonReasoningOutput } as Record<keyof typeof tokenTotals | "freshInput" | "nonReasoningOutput", string>,
     toolCalls,
     polls,
     failures,
   };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+function arrayRecords(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.map(recordValue).filter((item): item is Record<string, unknown> => Boolean(item)) : []; }
+function scalarValue(value: unknown, fallback = "") { return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? String(value) : fallback; }
+function formatEvidenceTime(value: unknown) {
+  const text = textValue(value);
+  if (text) return new Date(text).toLocaleString();
+  if (Array.isArray(value) && value.length >= 6 && value.slice(0, 6).every((part) => typeof part === "number")) {
+    const [year, ordinal, hour, minute, second, nanosecond, offsetHour = 0, offsetMinute = 0, offsetSecond = 0] = value as number[];
+    const offset = Math.sign(offsetHour || offsetMinute || offsetSecond) * (Math.abs(offsetHour) * 3600 + Math.abs(offsetMinute) * 60 + Math.abs(offsetSecond));
+    const instant = new Date(Date.UTC(year, 0, ordinal, hour, minute, second, Math.floor(nanosecond / 1_000_000)) - offset * 1000);
+    if (!Number.isNaN(instant.getTime())) return instant.toLocaleString();
+  }
+  return "Time unavailable";
 }
 
 function runTraceDescription(entry: Record<string, unknown>) {
