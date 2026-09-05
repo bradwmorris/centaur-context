@@ -3,6 +3,7 @@
 **Status:** `in_progress — implementation ready; local image proof blocked by Docker I/O`
 **Created:** 2026-09-05
 **Upstream GitHub Issue:** [bradwmorris/centaur#15](https://github.com/bradwmorris/centaur/issues/15)
+**Upstream Pull Request:** [bradwmorris/centaur#16](https://github.com/bradwmorris/centaur/pull/16)
 
 ## Execution Plan
 
