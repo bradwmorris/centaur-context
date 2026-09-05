@@ -1,6 +1,6 @@
-# 7 — RD: Repeatable Slack RSI Flow
+# RD: Repeatable Slack RSI Flow
 
-**Status:** `in_progress`
+**Status:** `complete`
 **Created:** 2026-09-02
 **Issue:** [#80](https://github.com/bradwmorris/centaur-context/issues/80)
 **Dependency:** Land and synchronize the Context, Centaur, and Enyu baseline
@@ -15,13 +15,12 @@ Source/Note read, write, and linkage contracts; retrieval and Run UI; local
 Kubernetes deployment. The fixture identity and full dependency set must be
 verified before each reset.
 
-**Current execution:** Candidate 8 completed the exact five-message flow once
-from a verified clean reset after the sandbox-capacity repair. Source
-ingestion, grounded answering, Note creation, RSI retrieval, and the requested
-Connection all succeeded without correction or retry. Candidate 7 failed
-between the earlier Candidate 6 clean pass and Candidate 8, so the strict
-two-consecutive-clean-takes acceptance bar still requires one more clean reset
-and pass.
+**Current execution:** Candidate 8 completed the exact five-message flow from a
+verified clean reset after the sandbox-capacity repair. Source ingestion,
+grounded answering, Note creation, RSI retrieval, and the requested Connection
+all succeeded without correction or retry. On 2026-09-05, Brad accepted the
+existing Candidate 6 and Candidate 8 evidence and explicitly closed this RD
+without requiring Candidate 9 or two consecutive post-failure passes.
 
 1. Build a trusted reset operation that discovers earlier residue, emits a
    dry-run manifest, verifies ownership, and removes only this eval's approved
@@ -57,10 +56,10 @@ The acceptance streak is **one**, not two:
 | 8 | Clean pass after the capacity repair | Streak became 1 |
 
 Candidate 6 and Candidate 8 are two successful takes in total, but they are not
-consecutive because Candidate 7 failed between them. One more approved
-surgical reset and one uninterrupted clean five-message pass are required. The
-next reset manifest must be regenerated immediately before approval because
-background Curator retries can add Runs and change its hash.
+consecutive because Candidate 7 failed between them. Brad explicitly accepted
+that variance on 2026-09-05 and waived the planned Candidate 9 run. This is a
+requester-approved completion exception, not a claim that the original
+two-consecutive-clean-takes criterion was met.
 
 Implemented fixes, consolidated:
 
@@ -114,22 +113,20 @@ Implemented fixes, consolidated:
     names, durations, and error classes. The large headline token number is
     gross context usage, mostly cache reads—not fresh input per tool call.
 
-Current deployed checkpoint: local Helm revision 125 is healthy; the Context
+Final deployed checkpoint: local Helm revision 125 is healthy; the Context
 UI is available at `http://127.0.0.1:8180/objects`; the 30-second sandbox grace
-is active; and Candidate 8 proved the live behavior. The work remains on open
-feature PRs rather than `origin/main`: Context PR #83, Enyu PR #31, and Centaur
-PR #13 in Brad's Centaur fork. All three PRs are open. The protected canonical
-Centaur checkout at
-`/Users/bradleymorris/Desktop/dev/centaur` was not edited.
+is active; and Candidate 8 proved the live behavior. Context PR #83, Enyu PR
+#31, and Centaur PR #13 in Brad's Centaur fork all merged on 2026-09-04, and
+their canonical local `main` checkouts were synchronized with `origin/main`
+when this RD was closed.
 
-Remaining work is deliberately narrow:
+Closure disposition:
 
-- Generate and obtain approval for the next exact reset manifest, remove only
-  Candidate 8's fixture and its two Slack roots, and run Candidate 9 once.
-- If Candidate 9 passes, record two consecutive post-failure clean passes,
-  mark this RD complete, and prepare the final video evidence.
+- Candidate 9 and the second consecutive post-failure pass will not be run under
+  this RD.
 - Keep upstream Curator HTTP 503 retries recorded as separate infrastructure
-  noise; they have created no eval Object or Connection but remain unresolved.
+  noise; they created no eval Object or Connection and do not block this
+  requester-approved closeout.
 - The ingestion-created related-object set remains semantically useful but can
   vary between takes. Candidate 8 omitted Andrej Karpathy while retaining six
   other useful automatic links plus the originating Chat; no ingestion logic
@@ -140,7 +137,7 @@ Remaining work is deliberately narrow:
 
 ## What We Are Doing
 
-- [ ] Make this five-step workflow reliable instead of running another broad
+- [x] Make this five-step workflow reliable instead of running another broad
   matrix of individual bot updates.
 - [x] Make repeated takes safe: each take starts from a verified clean fixture
   without deleting unrelated Objects, shared RSI research, or external data.
@@ -299,9 +296,11 @@ restart at step 1; do not hand-create state or weaken acceptance criteria.
 - **Goal:** Reliably recreate the fixed five-step Slack-to-Context RSI workflow
   from a clean fixture, with high-quality answers, correct durable linkage, and
   shared idempotent Source/Connection mutation for ingestion and Rez.
-- **Done:** Two consecutive takes pass from verified clean resets: one Source
-  per take; grounded answer; one Source-linked Note; useful pre-existing RSI
-  retrieval; intended Note connection; readable Runs; and explanatory notes.
+- **Done:** Candidate 6 and Candidate 8 each passed from verified clean resets:
+  one Source per take; grounded answer; one Source-linked Note; useful
+  pre-existing RSI retrieval; intended Note connection; readable Runs; and
+  explanatory notes. Brad accepted this evidence on 2026-09-05 and waived the
+  original requirement that the two passes be consecutive.
 - **Files:** This RD; bounded Context reset/eval/report tooling; reusable Centaur
   instrumentation; private Enyu prompts, workflows, pins, and fixture data.
 - **Agent owns:** Reset design, Slack operation, evidence, scoped fixes, tests,
@@ -326,8 +325,9 @@ restart at step 1; do not hand-create state or weaken acceptance criteria.
   workflow outcome, traces, errors, latency, and usage for all five steps.
 - [x] Rez cannot create a Source directly: every add request starts ingestion;
   after completion Rez can edit the Source and create/edit Connections.
-- [ ] Repeating an ingestion-created relationship through Rez reuses one
-  canonical Connection and preserves both origins/evidence.
+- [ ] **Accepted without another live exercise:** focused tests cover canonical
+  reuse of an ingestion-created relationship and preservation of both
+  origins/evidence.
 - [x] `read-artifact` accepts its documented Artifact ID argument, Rez's prompt uses
   only granted tools and valid fields, and the five-step trace contains no
   avoidable command-discovery or corrected-schema retries.
@@ -339,7 +339,9 @@ restart at step 1; do not hand-create state or weaken acceptance criteria.
 - [x] Run detail exposes sanitized inner command names, error class and duration,
   plus separate input, cache-read, output, and reasoning usage; workflow polling
   is distinguishable from substantive agent tool calls.
-- [ ] Two consecutive clean-reset takes satisfy the complete done state.
+- [x] **Requester-approved completion exception:** Candidates 6 and 8 are two
+  clean-reset passes; Brad waived a second consecutive post-failure pass on
+  2026-09-05.
 - [x] Focused regressions and relevant repository checks pass.
 - [x] `git diff --check` passes.
 
