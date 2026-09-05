@@ -1,4 +1,4 @@
-# 1 — RD: Enable Embeddings and Complete Source Capture
+# 3 — RD: Enable Embeddings and Complete Source Capture
 
 **Status:** `review`
 **Created:** 2026-08-31

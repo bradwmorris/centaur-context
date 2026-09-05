@@ -1,4 +1,4 @@
-# 9 — RD: Link Canonical Objects in Slack
+# 4 — RD: Link Canonical Objects in Slack
 
 **Status:** `scoped`
 **Created:** 2026-09-05
