@@ -173,6 +173,7 @@ The public standard agent tool lives in `tools/centaur_context` because it is pa
 - `centaur-context search-objects`
 - `centaur-context read-object`
 - `centaur-context search-sources`
+- `centaur-context list-sources`
 - `centaur-context read-source`
 - `centaur-context read-source-content`
 - `centaur-context search-notes`

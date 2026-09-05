@@ -494,7 +494,22 @@ async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
         )
         .await
         .unwrap();
-    assert_eq!(write.status(), StatusCode::NOT_FOUND);
+    assert_eq!(write.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    let invalid_window = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/sources?created_after=2026-09-05T00%3A00%3A00Z&created_through=2026-09-05T00%3A00%3A00Z&sort=oldest")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "prn_test")
+                .header("x-centaur-thread-key", "slack:test:test:test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_window.status(), StatusCode::BAD_REQUEST);
 
     for uri in [
         "/api/v2/sources/00000000-0000-0000-0000-000000000001/content?offset=-1",

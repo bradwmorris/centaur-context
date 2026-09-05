@@ -134,6 +134,7 @@ pub fn agent_router(state: AppState, token: String) -> Router {
                 .route("/objects/{id}/artifacts", get(list_artifacts))
                 .route("/artifacts/{id}/content", get(read_artifact_by_id))
                 .route("/embeddings/status", get(read_embedding_status))
+                .route("/sources", get(list_sources))
                 .route("/search/sources", get(search_sources))
                 .route("/sources/{id}", get(read_source))
                 .route("/sources/{id}/content", get(read_artifact))
@@ -707,6 +708,8 @@ async fn read_context_object(
 struct SourceListQuery {
     q: Option<String>,
     source_kind: Option<String>,
+    created_after: Option<String>,
+    created_through: Option<String>,
     cursor: Option<Uuid>,
     limit: Option<i64>,
     sort: Option<String>,
@@ -714,6 +717,8 @@ struct SourceListQuery {
 
 async fn source_page(state: &AppState, query: SourceListQuery) -> Result<Value, ApiError> {
     let limit = bounded_limit(query.limit);
+    let (created_after, created_through) =
+        source_created_window(query.created_after, query.created_through)?;
     let mut items = db::list_sources(
         &state.pool,
         db::SourceListFilter {
@@ -722,9 +727,11 @@ async fn source_page(state: &AppState, query: SourceListQuery) -> Result<Value, 
                 .source_kind
                 .map(|value| allowed(value, "source_kind", SOURCE_KINDS))
                 .transpose()?,
+            created_after,
+            created_through,
             cursor: query.cursor,
             limit: limit + 1,
-            sort: list_sort(query.sort)?,
+            sort: source_list_sort(query.sort)?,
         },
     )
     .await?;
@@ -2109,6 +2116,35 @@ fn list_sort(value: Option<String>) -> Result<db::ListSort, ApiError> {
     }
 }
 
+fn source_list_sort(value: Option<String>) -> Result<db::ListSort, ApiError> {
+    match value.as_deref().unwrap_or("recent") {
+        "recent" => Ok(db::ListSort::Recent),
+        "connections" => Ok(db::ListSort::Connections),
+        "oldest" => Ok(db::ListSort::Oldest),
+        _ => Err(ApiError::BadRequest(
+            "sort must be recent, connections, or oldest".to_owned(),
+        )),
+    }
+}
+
+fn source_created_window(
+    created_after: Option<String>,
+    created_through: Option<String>,
+) -> Result<(Option<OffsetDateTime>, Option<OffsetDateTime>), ApiError> {
+    let created_after = created_after
+        .map(|value| parse_timestamp(value, "created_after"))
+        .transpose()?;
+    let created_through = created_through
+        .map(|value| parse_timestamp(value, "created_through"))
+        .transpose()?;
+    if created_after.is_some_and(|after| created_through.is_some_and(|through| after >= through)) {
+        return Err(ApiError::BadRequest(
+            "created_after must be earlier than created_through".into(),
+        ));
+    }
+    Ok((created_after, created_through))
+}
+
 fn idempotency_key(
     headers: &HeaderMap,
     required: bool,
@@ -2263,7 +2299,10 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_limit, bounded_object_limit, inferred_publication_precision, list_sort};
+    use super::{
+        bounded_limit, bounded_object_limit, inferred_publication_precision, list_sort,
+        source_created_window, source_list_sort,
+    };
     use crate::db::ListSort;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -2290,5 +2329,28 @@ mod tests {
             ListSort::Connections
         ));
         assert!(list_sort(Some("updated".into())).is_err());
+        assert!(matches!(
+            source_list_sort(Some("oldest".into())).unwrap(),
+            ListSort::Oldest
+        ));
+        assert!(source_list_sort(Some("updated".into())).is_err());
+    }
+
+    #[test]
+    fn source_created_window_is_bounded_and_strict() {
+        let (after, through) = source_created_window(
+            Some("2026-09-04T00:00:00Z".into()),
+            Some("2026-09-05T00:00:00Z".into()),
+        )
+        .unwrap();
+        assert!(after < through);
+        assert!(
+            source_created_window(
+                Some("2026-09-05T00:00:00Z".into()),
+                Some("2026-09-05T00:00:00Z".into())
+            )
+            .is_err()
+        );
+        assert!(source_created_window(Some("not-a-time".into()), None).is_err());
     }
 }

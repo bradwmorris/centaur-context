@@ -61,6 +61,35 @@ def test_search_uses_v2():
     assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-1"
 
 
+def test_lists_sources_in_created_window_oldest_first():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"items": [], "next_cursor": None})
+
+    result = client(handler).list_sources(
+        created_after="2026-09-04T00:00:00Z",
+        created_through="2026-09-05T00:00:00Z",
+        limit=1000,
+        cursor="source-1",
+        sort="oldest",
+    )
+    assert result == {"items": [], "next_cursor": None}
+    assert requests[0].url.path == "/api/v2/sources"
+    assert requests[0].url.params["created_after"] == "2026-09-04T00:00:00Z"
+    assert requests[0].url.params["created_through"] == "2026-09-05T00:00:00Z"
+    assert requests[0].url.params["limit"] == "100"
+    assert requests[0].url.params["cursor"] == "source-1"
+    assert requests[0].url.params["sort"] == "oldest"
+
+
+@pytest.mark.parametrize("sort", ["", "updated", "OLDest"])
+def test_list_sources_rejects_unknown_sort(sort):
+    with pytest.raises(ValueError):
+        client(lambda _: response({})).list_sources(sort=sort)
+
+
 def test_explicit_lexical_search_tool_operation():
     requests = []
     def handler(request):

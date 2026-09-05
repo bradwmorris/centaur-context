@@ -62,6 +62,7 @@ The standard agent tool is in `tools/centaur_context`. It provides:
 - `search-objects`
 - `read-object`
 - `search-sources` (bounded metadata and content excerpts)
+- `list-sources` (optional created-time window with stable pagination)
 - `read-source` (metadata without long-form content)
 - `read-artifact` (a bounded window from one Source artifact)
 - `search-notes` (bounded Note excerpts)
