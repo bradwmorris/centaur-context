@@ -1,6 +1,6 @@
-# 4 — RD: Run Slack Bot Golden Scenarios and Evals
+# RD: Run Slack Bot Golden Scenarios and Evals
 
-**Status:** `review`
+**Status:** `complete`
 **Created:** 2026-08-30
 **Issue:** [#78](https://github.com/bradwmorris/centaur-context/issues/78)
 **Dependencies:** Active priority 3 and the completed canonical-data,
@@ -16,10 +16,10 @@ paths; Slack interaction ingestion; Chat-aware Context Builder; Source-intake
 workflow; Curator reconciliation; Run list/detail UI; tool and usage traces;
 Enyu personas and role grants; deployed Kubernetes workloads.
 
-**Missing:** No further implementation is planned in this RD. The repeatable
-golden matrix, deterministic evidence bundle, automated scoring/reporting, and
-clean repeat pass are deliberately transferred to the Evals V2 RD. Landing the
-three feature branches remains a separate review and merge step.
+**Missing:** none. The repeatable golden matrix, deterministic evidence bundle,
+automated scoring/reporting, and clean repeat pass were deliberately transferred
+to the Evals V2 RD. The three baseline implementation branches landed and their
+canonical local `main` checkouts were synchronized on 2026-09-05.
 
 1. Establish and repair the minimum Slack→agent→Context→Run baseline.
 2. Verify representative Source, Note, Task, retrieval, denial, replay, and
@@ -39,7 +39,7 @@ three feature branches remains a separate review and merge step.
   exact `derived_from` connection to its Chat.
 - [x] Separate the unfinished full golden matrix from this baseline and carry it
   forward into a clean Evals V2 RD without claiming it passed here.
-- [ ] Land and synchronize the Context, Centaur, and Enyu changes.
+- [x] Land and synchronize the Context, Centaur, and Enyu changes.
 
 ## Contract
 
@@ -318,17 +318,17 @@ rubric. Fluency never compensates for a failed hard gate.
   failure.
 - [ ] **Transferred to Evals V2:** two clean runs and exact replays.
 
-## Branch and Landing State
+## Final Landing State
 
-- Context: `codex/78-slack-bot-golden-evals` at
-  `a172ca9fa6a92a4749796ce97813184b2470f178` before this RD closeout commit.
-- Centaur: `codex/78-universal-slack-runs` at
-  `5ac746896e61a18474216dc30bffde82fd230fc1`.
-- Enyu: `codex/78-slack-bot-golden-evals` at
-  `fe2898ca4aa231586e331db44f8b996319bc6439` (runtime implementation pin
-  `be7c61d8e66be02abea58fcaf7162721a177d640`).
-- All three branches are pushed. No PR is open and none of the changes is
-  landed on `origin/main`.
+- Context PR [#79](https://github.com/bradwmorris/centaur-context/pull/79)
+  merged on 2026-09-02.
+- Centaur PR [#11](https://github.com/bradwmorris/centaur/pull/11) merged on
+  2026-09-02.
+- Enyu PR [#30](https://github.com/bradwmorris/centaur-enyu/pull/30) merged on
+  2026-09-02.
+- On 2026-09-05, each canonical local `main` matched its repository's
+  `origin/main`. The transferred repeatability work remains in the active
+  Evals V2 RD and is not part of this RD's completion claim.
 
 ## Approval Boundary
 
