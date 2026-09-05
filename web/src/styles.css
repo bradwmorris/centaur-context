@@ -225,11 +225,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .eval-detail .properties-grid { grid-template-columns: 1fr; }
 .eval-detail .property, .eval-detail .properties-grid > .field { display: grid; grid-template-columns: 1fr; justify-items: start; align-items: start; gap: 4px; padding: 5px 0; }
 .eval-detail .property > div { display: grid; grid-template-columns: 1fr; justify-items: start; align-items: start; gap: 5px; }
-.eval-detail .run-trace-list { gap: 0; }
-.eval-detail .run-trace-card { border: 0; border-bottom: 1px solid rgba(255,255,255,.055); border-radius: 0; background: transparent; }
-.eval-detail .run-trace-card > summary { grid-template-columns: 1fr; justify-items: start; gap: 4px; padding: 10px 0; }
-.eval-detail .run-trace-detail { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px 0 14px; background: transparent; }
-.eval-detail .run-related-object, .eval-detail .run-child, .eval-detail .change { grid-template-columns: 1fr; justify-items: start; align-items: start; padding: 9px 0; background: transparent; }
 .run-object-title { max-width: min(500px, 55vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-related-objects { display: grid; gap: 4px; }
 .run-related-object { min-width: 0; display: grid; grid-template-columns: max-content max-content minmax(140px,1fr) max-content max-content; align-items: center; gap: 7px; min-height: 42px; border-bottom: 1px solid rgba(255,255,255,.045); }
