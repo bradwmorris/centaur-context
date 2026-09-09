@@ -1,5 +1,10 @@
 # Centaur Context
 
+> [!IMPORTANT]
+> **Centaur Context is an app/extension for [Centaur](https://github.com/paradigmxyz/centaur).** Centaur is an open-source control plane for running and owning your own agent infrastructure. We've created a [Centaur walkthrough video](https://youtu.be/993XrWfg34U).
+>
+> Install Centaur and become comfortable operating it before adding Centaur Context. If you haven't installed Centaur yet, start with [Centaur's official quickstart](https://centaur.run/quickstart). Then return here and follow the [Centaur Context setup instructions](docs/setup.md).
+
 Shared, durable context for Centaur agents—hosted by you.
 
 Centaur runs your agents. Centaur Context keeps useful knowledge available across
@@ -9,11 +14,6 @@ for future work. A web UI lets you inspect and manage that knowledge.
 
 The database schema is the ontology: it defines the things the system knows
 about and how they relate. Humans and agents use the same shared structure.
-
-Centaur Context is not a standalone agent platform. It is installed beside an
-existing Centaur deployment. To install Centaur itself, use Centaur's official
-[Quickstart](https://centaur.run/quickstart); this repository only documents
-Centaur Context.
 
 ## Proposed Centaur App
 
