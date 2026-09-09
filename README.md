@@ -5,8 +5,6 @@
 >
 > Install Centaur and become comfortable operating it before adding Centaur Context. If you haven't installed Centaur yet, start with [Centaur's official quickstart](https://centaur.run/quickstart). Then return here and follow the [Centaur Context setup instructions](docs/setup.md).
 
-Shared, durable context for Centaur agents—hosted by you.
-
 Centaur runs your agents. Centaur Context keeps useful knowledge available across
 conversations and agent runs. It turns completed conversations into structured
 records, connects them to what is already known, and retrieves relevant context
