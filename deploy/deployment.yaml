@@ -1,0 +1,208 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: centaur-context
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: centaur-context
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: centaur-context
+        app.kubernetes.io/version: "0.3.0"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: centaur-context
+          image: centaur-context:0.3.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: human
+              containerPort: 8080
+            - name: agent
+              containerPort: 8081
+            - name: ingest
+              containerPort: 8082
+            - name: curator
+              containerPort: 8083
+            - name: note-write
+              containerPort: 8084
+            - name: source-intake
+              containerPort: 8086
+            - name: research-mutation
+              containerPort: 8087
+            - name: external-action
+              containerPort: 8088
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: DATABASE_URL
+            - name: AGENT_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: AGENT_API_TOKEN
+            - name: NOTE_WRITE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: NOTE_WRITE_API_TOKEN
+            - name: CHAT_INGEST_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CHAT_INGEST_API_TOKEN
+            - name: CURATOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_API_TOKEN
+            - name: APPROVED_SLACK_SURFACES
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: APPROVED_SLACK_SURFACES
+            - name: INTERACTION_INACTIVITY_SECONDS
+              value: "600"
+            - name: TEXT_SEARCH_CONFIG
+              value: simple
+            - name: EMBEDDING_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EMBEDDING_API_URL
+                  optional: true
+            - name: EMBEDDING_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EMBEDDING_API_TOKEN
+                  optional: true
+            - name: EMBEDDING_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EMBEDDING_MODEL
+                  optional: true
+            - name: EMBEDDING_DIMENSIONS
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EMBEDDING_DIMENSIONS
+                  optional: true
+            - name: EMBEDDING_INPUT_MODE
+              value: shared
+            - name: CURATOR_MODEL_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_API_URL
+                  optional: true
+            - name: CURATOR_MODEL_TRANSPORT
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_TRANSPORT
+                  optional: true
+            - name: CURATOR_MODEL_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_API_TOKEN
+                  optional: true
+            - name: CURATOR_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL
+                  optional: true
+            - name: CURATOR_PROMPT_VERSION
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_PROMPT_VERSION
+                  optional: true
+            - name: CURATOR_MODEL_TIMEOUT_SECONDS
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: CURATOR_MODEL_TIMEOUT_SECONDS
+                  optional: true
+            - name: SOURCE_INTAKE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: SOURCE_INTAKE_API_TOKEN
+                  optional: true
+            - name: SOURCE_INTAKE_ALLOWED_PRINCIPAL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: SOURCE_INTAKE_ALLOWED_PRINCIPAL
+                  optional: true
+            - name: RESEARCH_MUTATION_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: RESEARCH_MUTATION_API_TOKEN
+                  optional: true
+            - name: RESEARCH_MUTATION_ALLOWED_PRINCIPAL
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: RESEARCH_MUTATION_ALLOWED_PRINCIPAL
+                  optional: true
+            - name: EXTERNAL_ACTION_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EXTERNAL_ACTION_API_TOKEN
+                  optional: true
+            - name: EXTERNAL_ACTION_ALLOWED_PRINCIPALS
+              valueFrom:
+                secretKeyRef:
+                  name: centaur-context-env
+                  key: EXTERNAL_ACTION_ALLOWED_PRINCIPALS
+                  optional: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: human
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: human
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: human
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      terminationGracePeriodSeconds: 30

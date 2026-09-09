@@ -1,0 +1,41 @@
+[project]
+name = "centaur-context"
+description = "Use the constrained Centaur Context agent API"
+version = "0.3.0"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/bradwmorris/centaur-context"
+Repository = "https://github.com/bradwmorris/centaur-context"
+Documentation = "https://github.com/bradwmorris/centaur-context/tree/main/docs"
+
+[project.optional-dependencies]
+test = ["httpx>=0.27.0,<1", "pytest>=9.0.3,<10"]
+
+[project.scripts]
+centaur-context = "centaur_tool_centaur_context.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "centaur_tool_centaur_context"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.centaur]
+module = "client.py"
+secrets = [
+    {type = "http", name = "CENTAUR_CONTEXT_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_OS_API_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-os.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-note-write.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-intake.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-source-intake.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-research-mutation.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN", match_headers = ["Authorization"], hosts = ["centaur-context-external-action.centaur.svc.cluster.local"]},
+]

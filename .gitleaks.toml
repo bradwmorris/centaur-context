@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented example-only Secret placeholders"
+regexTarget = "secret"
+regexes = ['''replace-(?:with|through)-[a-z0-9-]+''']

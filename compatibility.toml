@@ -1,0 +1,23 @@
+[centaur_context]
+version = "0.3.0"
+api_version = "v2"
+ontology_version = "v3"
+database_schema_version = 23
+tool_version = "0.3.0"
+
+[runtime]
+postgres_major = 16
+buildable_container_architectures = ["linux/amd64", "linux/arm64"]
+verified_container_architecture = "linux/arm64"
+deployment_profile = "single-organization-local-or-private-network"
+
+[centaur]
+integration = "pinned overlay tool source plus authenticated Slack post-response ingestion"
+compatibility = "contract-based"
+notes = "The full Slack loop requires interaction-sink and context-builder hooks carried in the maintainer's Centaur fork. The tested subscription Curator transport also uses a fork-only inference route. No upstream Centaur semantic-version range is claimed. See docs/centaur-integration.md."
+
+[policy]
+public_ingress = false
+interactive_agent_writes = true
+interactive_agent_write_scope = "note_create_only_with_separate_credential"
+automatic_external_model_access = false

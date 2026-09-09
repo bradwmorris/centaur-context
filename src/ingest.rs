@@ -1,0 +1,1323 @@
+use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};
+
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    http::{StatusCode, header},
+    middleware::{self, Next},
+    response::Response,
+    routing::{get, post},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sqlx::{PgPool, Postgres, Transaction};
+use subtle::ConstantTimeEq;
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
+use tower_http::trace::TraceLayer;
+use uuid::Uuid;
+
+use crate::{
+    api::{ApiError, AppState},
+    db::{self, DbError},
+    domain::{ActorContext, ValidationError, allowed, optional_text, required_text},
+};
+
+const INGESTOR_ACTOR_ID: &str = "chat-ingestor";
+const MAX_MESSAGES_PER_REQUEST: usize = 500;
+const MAX_USAGE_ATTEMPTS_PER_REQUEST: usize = 100;
+const MAX_TRACE_ENTRIES_PER_REQUEST: usize = 500;
+const MAX_TRACE_ENTRY_BYTES: usize = 256 * 1024;
+const MAX_TRACE_TOTAL_BYTES: usize = 1024 * 1024;
+const MAX_AFFECTED_OBJECTS_PER_REQUEST: usize = 100;
+
+#[derive(Clone, Debug)]
+pub struct ApprovedSlackSurfaces {
+    entries: Arc<BTreeSet<(String, String)>>,
+}
+
+impl ApprovedSlackSurfaces {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let mut entries = BTreeSet::new();
+        for raw in value.split(',') {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                continue;
+            }
+            let (workspace_id, channel_id) = raw.split_once(':').ok_or_else(|| {
+                format!("approved Slack surface {raw:?} must be workspace_id:channel_id")
+            })?;
+            let workspace_id = workspace_id.trim();
+            let channel_id = channel_id.trim();
+            if workspace_id.is_empty() || channel_id.is_empty() {
+                return Err(format!(
+                    "approved Slack surface {raw:?} must contain non-empty IDs"
+                ));
+            }
+            entries.insert((workspace_id.to_owned(), channel_id.to_owned()));
+        }
+        if entries.is_empty() {
+            return Err("APPROVED_SLACK_SURFACES must contain at least one surface".to_owned());
+        }
+        Ok(Self {
+            entries: Arc::new(entries),
+        })
+    }
+
+    pub fn contains(&self, workspace_id: &str, channel_id: &str) -> bool {
+        self.entries
+            .contains(&(workspace_id.to_owned(), channel_id.to_owned()))
+    }
+}
+
+#[derive(Clone)]
+struct IngestState {
+    pool: PgPool,
+    approved_surfaces: ApprovedSlackSurfaces,
+}
+
+#[derive(Clone)]
+struct IngestAuth {
+    token: Arc<String>,
+}
+
+pub fn router(state: AppState, token: String, approved_surfaces: ApprovedSlackSurfaces) -> Router {
+    Router::new()
+        .route("/healthz", get(health))
+        .route("/readyz", get(ready))
+        .route(
+            "/api/v2/ingest/slack/interactions",
+            post(ingest_slack_interaction),
+        )
+        .route("/api/v2/ingest/runs/usage", post(ingest_run_usage))
+        .with_state(IngestState {
+            pool: state.pool,
+            approved_surfaces,
+        })
+        .layer(middleware::from_fn_with_state(
+            IngestAuth {
+                token: Arc::new(token),
+            },
+            ingest_auth,
+        ))
+        .layer(TraceLayer::new_for_http())
+}
+
+async fn ingest_auth(
+    State(auth): State<IngestAuth>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let bearer = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .ok_or(ApiError::Unauthorized)?;
+    let expected = auth.token.as_bytes();
+    let supplied = bearer.as_bytes();
+    if expected.len() != supplied.len() || expected.ct_eq(supplied).unwrap_u8() != 1 {
+        return Err(ApiError::Unauthorized);
+    }
+    Ok(next.run(request).await)
+}
+
+async fn health() -> Json<Value> {
+    Json(json!({"ok": true}))
+}
+
+async fn ready(State(state): State<IngestState>) -> Result<Json<Value>, ApiError> {
+    db::ready(&state.pool).await?;
+    Ok(Json(json!({"ok": true, "ready": true})))
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackAvatarAssetInput {
+    pub sha256: String,
+    pub filename: String,
+    #[serde(default = "empty_json_object")]
+    pub provenance: Value,
+}
+
+fn empty_json_object() -> Value {
+    json!({})
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackSenderInput {
+    pub provider_user_id: String,
+    pub display_name: String,
+    pub user_kind: String,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub avatar_asset: Option<SlackAvatarAssetInput>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub profile_refreshed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackMessageInput {
+    pub provider_message_id: String,
+    pub sender: SlackSenderInput,
+    pub content: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub source_created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackInteractionInput {
+    pub workspace_id: String,
+    pub channel_id: String,
+    pub thread_id: String,
+    pub surface_kind: String,
+    pub channel_name: Option<String>,
+    pub title: Option<String>,
+    pub messages: Vec<SlackMessageInput>,
+    #[serde(default)]
+    pub interaction_finished: bool,
+    #[serde(default)]
+    pub agent_usage: Vec<Value>,
+    pub run: SlackRunInput,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SlackRunInput {
+    pub interaction_id: String,
+    pub status: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub completed_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub trace: Vec<Value>,
+    #[serde(default)]
+    pub affected_object_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub consulted_object_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedSlackSender {
+    provider_user_id: String,
+    display_name: String,
+    user_kind: String,
+    avatar_url: Option<String>,
+    avatar_asset: Option<ValidatedAvatarAsset>,
+    profile_refreshed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedAvatarAsset {
+    sha256: String,
+    filename: String,
+    provenance: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedSlackMessage {
+    provider_message_id: String,
+    sender: ValidatedSlackSender,
+    content: String,
+    source_created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedSlackInteraction {
+    workspace_id: String,
+    channel_id: String,
+    thread_id: String,
+    surface_kind: String,
+    channel_name: Option<String>,
+    title: Option<String>,
+    messages: Vec<ValidatedSlackMessage>,
+    interaction_finished: bool,
+    agent_usage: Vec<Value>,
+    run: ValidatedSlackRun,
+}
+
+#[derive(Clone, Debug)]
+struct ValidatedSlackRun {
+    interaction_id: String,
+    status: String,
+    started_at: OffsetDateTime,
+    completed_at: Option<OffsetDateTime>,
+    trace: Vec<Value>,
+    affected_object_ids: Vec<Uuid>,
+    consulted_object_ids: Vec<Uuid>,
+    error: Option<String>,
+}
+
+impl SlackInteractionInput {
+    pub fn validate(self) -> Result<ValidatedSlackInteraction, ValidationError> {
+        if self.messages.is_empty() {
+            return Err(ValidationError::Required("messages"));
+        }
+        if self.messages.len() > MAX_MESSAGES_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "messages",
+                max: MAX_MESSAGES_PER_REQUEST,
+            });
+        }
+        if self.agent_usage.len() > MAX_USAGE_ATTEMPTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "agent_usage",
+                max: MAX_USAGE_ATTEMPTS_PER_REQUEST,
+            });
+        }
+        if self.agent_usage.iter().any(|value| !value.is_object()) {
+            return Err(ValidationError::Unsupported {
+                field: "agent_usage",
+                value: "every usage attempt must be an object".to_owned(),
+            });
+        }
+        if self.run.trace.len() > MAX_TRACE_ENTRIES_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.trace",
+                max: MAX_TRACE_ENTRIES_PER_REQUEST,
+            });
+        }
+        if self.run.trace.iter().any(|value| !value.is_object()) {
+            return Err(ValidationError::Unsupported {
+                field: "run.trace",
+                value: "every trace entry must be an object".to_owned(),
+            });
+        }
+        let trace_sizes = self
+            .run
+            .trace
+            .iter()
+            .map(|value| {
+                serde_json::to_vec(value)
+                    .map(|bytes| bytes.len())
+                    .unwrap_or(usize::MAX)
+            })
+            .collect::<Vec<_>>();
+        if trace_sizes.iter().any(|size| *size > MAX_TRACE_ENTRY_BYTES) {
+            return Err(ValidationError::TooLong {
+                field: "run.trace entry bytes",
+                max: MAX_TRACE_ENTRY_BYTES,
+            });
+        }
+        if trace_sizes
+            .iter()
+            .fold(0usize, |total, size| total.saturating_add(*size))
+            > MAX_TRACE_TOTAL_BYTES
+        {
+            return Err(ValidationError::TooLong {
+                field: "run.trace total bytes",
+                max: MAX_TRACE_TOTAL_BYTES,
+            });
+        }
+        if self.run.affected_object_ids.len() > MAX_AFFECTED_OBJECTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.affected_object_ids",
+                max: MAX_AFFECTED_OBJECTS_PER_REQUEST,
+            });
+        }
+        if self.run.consulted_object_ids.len() > MAX_AFFECTED_OBJECTS_PER_REQUEST {
+            return Err(ValidationError::TooLong {
+                field: "run.consulted_object_ids",
+                max: MAX_AFFECTED_OBJECTS_PER_REQUEST,
+            });
+        }
+        let run_input = self.run;
+        let run = ValidatedSlackRun {
+            interaction_id: required_text(run_input.interaction_id, "run.interaction_id", 300)?,
+            status: allowed(
+                run_input.status,
+                "run.status",
+                &["running", "completed", "failed"],
+            )?,
+            started_at: run_input.started_at,
+            completed_at: run_input.completed_at,
+            trace: run_input.trace,
+            affected_object_ids: run_input.affected_object_ids,
+            consulted_object_ids: run_input.consulted_object_ids,
+            error: optional_text(run_input.error, "run.error", 4_000)?,
+        };
+        let mut seen = BTreeSet::new();
+        let mut messages = Vec::with_capacity(self.messages.len());
+        for message in self.messages {
+            let provider_message_id =
+                required_text(message.provider_message_id, "provider_message_id", 300)?;
+            if !seen.insert(provider_message_id.clone()) {
+                return Err(ValidationError::Unsupported {
+                    field: "duplicate provider_message_id",
+                    value: provider_message_id,
+                });
+            }
+            messages.push(ValidatedSlackMessage {
+                provider_message_id,
+                sender: ValidatedSlackSender {
+                    provider_user_id: required_text(
+                        message.sender.provider_user_id,
+                        "sender.provider_user_id",
+                        300,
+                    )?,
+                    display_name: required_text(
+                        message.sender.display_name,
+                        "sender.display_name",
+                        300,
+                    )?,
+                    user_kind: allowed(
+                        message.sender.user_kind,
+                        "sender.user_kind",
+                        &["human", "agent"],
+                    )?,
+                    avatar_url: validate_avatar_url(message.sender.avatar_url)?,
+                    avatar_asset: validate_avatar_asset(message.sender.avatar_asset)?,
+                    profile_refreshed_at: message.sender.profile_refreshed_at,
+                },
+                content: required_text(message.content, "content", 20_000)?,
+                source_created_at: message.source_created_at,
+            });
+        }
+        messages.sort_by(|a, b| {
+            a.source_created_at
+                .cmp(&b.source_created_at)
+                .then_with(|| a.provider_message_id.cmp(&b.provider_message_id))
+        });
+        Ok(ValidatedSlackInteraction {
+            workspace_id: required_text(self.workspace_id, "workspace_id", 300)?,
+            channel_id: required_text(self.channel_id, "channel_id", 300)?,
+            thread_id: required_text(self.thread_id, "thread_id", 300)?,
+            surface_kind: allowed(self.surface_kind, "surface_kind", &["channel", "dm"])?,
+            channel_name: optional_text(self.channel_name, "channel_name", 300)?,
+            title: optional_text(self.title, "title", 300)?,
+            messages,
+            interaction_finished: self.interaction_finished,
+            agent_usage: self.agent_usage,
+            run,
+        })
+    }
+}
+
+fn validate_avatar_url(value: Option<String>) -> Result<Option<String>, ValidationError> {
+    let value = optional_text(value, "sender.avatar_url", 2048)?;
+    if value
+        .as_deref()
+        .is_some_and(|url| !url.starts_with("https://") && !url.starts_with("http://"))
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_url",
+            value: value.unwrap_or_default(),
+        });
+    }
+    Ok(value)
+}
+
+fn validate_avatar_asset(
+    value: Option<SlackAvatarAssetInput>,
+) -> Result<Option<ValidatedAvatarAsset>, ValidationError> {
+    let Some(value) = value else { return Ok(None) };
+    let sha256 = required_text(value.sha256, "sender.avatar_asset.sha256", 64)?;
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.sha256",
+            value: sha256,
+        });
+    }
+    let filename = required_text(value.filename, "sender.avatar_asset.filename", 128)?;
+    if filename.contains("..")
+        || !filename.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric() || (index > 0 && matches!(byte, b'.' | b'_' | b'-'))
+        })
+    {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.filename",
+            value: filename,
+        });
+    }
+    if !value.provenance.is_object() {
+        return Err(ValidationError::Unsupported {
+            field: "sender.avatar_asset.provenance",
+            value: "must be an object".to_owned(),
+        });
+    }
+    Ok(Some(ValidatedAvatarAsset {
+        sha256,
+        filename,
+        provenance: value.provenance,
+    }))
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IngestResult {
+    pub run_id: Uuid,
+    pub chat_object_id: Uuid,
+    pub participant_object_ids: Vec<Uuid>,
+    pub inserted_message_count: usize,
+    pub duplicate_message_count: usize,
+    pub curator_run_id: Option<Uuid>,
+    pub interaction_state: &'static str,
+    pub run_state: String,
+}
+
+async fn ingest_slack_interaction(
+    State(state): State<IngestState>,
+    Json(input): Json<SlackInteractionInput>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let input = input.validate()?;
+    if !state
+        .approved_surfaces
+        .contains(&input.workspace_id, &input.channel_id)
+    {
+        return Err(ApiError::Forbidden(
+            "This Slack surface is not approved for ingestion.".to_owned(),
+        ));
+    }
+    let result = ingest(&state.pool, input).await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({"data": result}))))
+}
+
+async fn ingest_run_usage(
+    State(state): State<IngestState>,
+    Json(input): Json<crate::runs::NormalizedUsage>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    input.validate().map_err(ApiError::BadRequest)?;
+    let id = crate::runs::record_usage(&state.pool, &input).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"data":{"trace_entry_id":id}})),
+    ))
+}
+
+pub async fn ingest(
+    pool: &PgPool,
+    input: ValidatedSlackInteraction,
+) -> Result<IngestResult, DbError> {
+    let actor = ActorContext::system(INGESTOR_ACTOR_ID);
+    let mut tx = pool.begin().await?;
+    advisory_lock(
+        &mut tx,
+        &format!(
+            "slack-chat:{}:{}:{}",
+            input.workspace_id, input.channel_id, input.thread_id
+        ),
+    )
+    .await?;
+    let request = input
+        .messages
+        .iter()
+        .find(|message| message.provider_message_id == input.run.interaction_id);
+    let (run_id, _) = crate::runs::open_slack_interaction(
+        &mut tx,
+        crate::runs::SlackInteractionOpen {
+            workspace_id: &input.workspace_id,
+            channel_id: &input.channel_id,
+            thread_id: &input.thread_id,
+            interaction_id: &input.run.interaction_id,
+            started_at: input.run.started_at,
+            title: interaction_title(&input),
+            request_message: request.map(slack_message_evidence),
+        },
+    )
+    .await?;
+    let chat_object_id = get_or_create_chat(&mut tx, &actor, run_id, &input).await?;
+    crate::runs::attach_slack_chat(&mut tx, run_id, chat_object_id).await?;
+    let mut participants = BTreeSet::new();
+    let mut inserted_message_count = 0usize;
+
+    for message in &input.messages {
+        let user_object_id = get_or_create_user(
+            &mut tx,
+            &actor,
+            run_id,
+            &input.workspace_id,
+            &message.sender,
+        )
+        .await?;
+        participants.insert(user_object_id);
+        crate::runs::link_object(&mut tx, run_id, user_object_id, "participant").await?;
+        ensure_participant_connection(
+            &mut tx,
+            &actor,
+            run_id,
+            chat_object_id,
+            user_object_id,
+            &message.sender.display_name,
+        )
+        .await?;
+        if insert_message(
+            &mut tx,
+            &actor,
+            run_id,
+            chat_object_id,
+            user_object_id,
+            message,
+        )
+        .await?
+        .is_some()
+        {
+            inserted_message_count += 1;
+        }
+    }
+
+    let latest_message_at = input
+        .messages
+        .iter()
+        .map(|message| message.source_created_at)
+        .max()
+        .expect("validated interactions contain messages");
+    sqlx::query(
+        r#"UPDATE chats
+           SET latest_source_message_at=GREATEST(COALESCE(latest_source_message_at, $2), $2),
+               channel_name=COALESCE($3, channel_name),
+               processing_updated_at=now()
+           WHERE object_id=$1"#,
+    )
+    .bind(chat_object_id)
+    .bind(latest_message_at)
+    .bind(&input.channel_name)
+    .execute(&mut *tx)
+    .await?;
+
+    let curator_run_id = if input.interaction_finished {
+        queue_next_window(&mut tx, &actor, run_id, chat_object_id, "explicit_finish").await?
+    } else {
+        None
+    };
+    for raw_usage in &input.agent_usage {
+        let mut value = raw_usage.clone();
+        value
+            .as_object_mut()
+            .expect("validated agent usage is an object")
+            .insert("run_id".to_owned(), Value::String(run_id.to_string()));
+        let usage: crate::runs::NormalizedUsage =
+            serde_json::from_value(value).map_err(|error| {
+                DbError::Validation(ValidationError::Unsupported {
+                    field: "agent_usage",
+                    value: error.to_string(),
+                })
+            })?;
+        usage.validate().map_err(|error| {
+            DbError::Validation(ValidationError::Unsupported {
+                field: "agent_usage",
+                value: error,
+            })
+        })?;
+        crate::runs::record_usage_in_tx(&mut tx, &usage).await?;
+    }
+    for entry in &input.run.trace {
+        crate::runs::append_external_trace(&mut tx, run_id, entry).await?;
+    }
+    let response = request.and_then(|request| {
+        input.messages.iter().find(|message| {
+            message.sender.user_kind == "agent"
+                && message.source_created_at >= request.source_created_at
+        })
+    });
+    crate::runs::record_slack_response_evidence(
+        &mut tx,
+        run_id,
+        response.map(slack_message_evidence),
+    )
+    .await?;
+    let mut affected_object_ids = Vec::new();
+    for object_id in &input.run.affected_object_ids {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND archived_at IS NULL)",
+        )
+        .bind(object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            crate::runs::link_object(&mut tx, run_id, *object_id, "affected").await?;
+            affected_object_ids.push(*object_id);
+        }
+    }
+    for object_id in &input.run.consulted_object_ids {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND archived_at IS NULL)",
+        )
+        .bind(object_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if exists {
+            crate::runs::link_object(&mut tx, run_id, *object_id, "consulted").await?;
+        }
+    }
+    crate::runs::finish_slack_interaction(
+        &mut tx,
+        run_id,
+        &input.run.status,
+        input.run.completed_at,
+        input.run.error.as_deref(),
+        &affected_object_ids,
+    )
+    .await?;
+    let persisted_run_state: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(IngestResult {
+        run_id,
+        chat_object_id,
+        participant_object_ids: participants.into_iter().collect(),
+        inserted_message_count,
+        duplicate_message_count: input.messages.len() - inserted_message_count,
+        curator_run_id,
+        interaction_state: if input.interaction_finished {
+            "finished"
+        } else {
+            "open"
+        },
+        run_state: persisted_run_state,
+    })
+}
+
+fn slack_message_evidence(message: &ValidatedSlackMessage) -> Value {
+    json!({
+        "content": message.content,
+        "provider_message_id": message.provider_message_id,
+        "sender": {
+            "display_name": message.sender.display_name,
+            "provider_user_id": message.sender.provider_user_id,
+            "user_kind": message.sender.user_kind,
+        },
+        "source_created_at": message.source_created_at.format(&Rfc3339).expect("RFC 3339 formatting is valid"),
+    })
+}
+
+fn interaction_title(input: &ValidatedSlackInteraction) -> String {
+    let content = input
+        .messages
+        .iter()
+        .find(|message| message.provider_message_id == input.run.interaction_id)
+        .map(|message| message.content.as_str())
+        .unwrap_or("Slack interaction");
+    let mut words = content.split_whitespace();
+    let first = words.next().unwrap_or("Slack interaction");
+    let compact = if first.starts_with('@') {
+        words.collect::<Vec<_>>().join(" ")
+    } else {
+        std::iter::once(first)
+            .chain(words)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    if compact.is_empty() {
+        "Slack interaction".to_owned()
+    } else {
+        compact.chars().take(160).collect()
+    }
+}
+
+async fn advisory_lock(tx: &mut Transaction<'_, Postgres>, key: &str) -> Result<(), DbError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(key)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn get_or_create_chat(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    run_id: Uuid,
+    input: &ValidatedSlackInteraction,
+) -> Result<Uuid, DbError> {
+    if let Some(id) = sqlx::query_scalar(
+        r#"SELECT object_id FROM chats
+           WHERE provider='slack' AND workspace_id=$1 AND channel_id=$2 AND thread_id=$3"#,
+    )
+    .bind(&input.workspace_id)
+    .bind(&input.channel_id)
+    .bind(&input.thread_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        return Ok(id);
+    }
+
+    let id = Uuid::new_v4();
+    let title = input.title.clone().unwrap_or_else(|| {
+        match (input.surface_kind.as_str(), input.channel_name.as_deref()) {
+            ("channel", Some(name)) => format!("#{name} Slack conversation"),
+            ("channel", None) => "Slack channel conversation".to_owned(),
+            ("dm", _) => "Slack direct-message conversation".to_owned(),
+            _ => unreachable!(),
+        }
+    });
+    let description = match (input.surface_kind.as_str(), input.channel_name.as_deref()) {
+        ("channel", Some(name)) => format!("A Slack conversation in the #{name} channel."),
+        ("channel", None) => "A conversation in an approved Slack channel.".to_owned(),
+        ("dm", _) => "A direct-message conversation with a Centaur agent on Slack.".to_owned(),
+        _ => unreachable!(),
+    };
+    crate::domain::validate_object_description(&title, &description)?;
+    sqlx::query(
+        r#"INSERT INTO objects
+           (id,kind,title,description,created_by_type,created_by_id,
+            updated_by_type,updated_by_id,provenance)
+           VALUES ($1,'chat',$2,$3,$4,$5,$4,$5,$6)"#,
+    )
+    .bind(id)
+    .bind(&title)
+    .bind(&description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(json!({
+        "source_type": "slack",
+        "source_ref": format!("{}:{}:{}", input.workspace_id, input.channel_id, input.thread_id)
+    }))
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        r#"INSERT INTO chats
+           (object_id,provider,workspace_id,channel_id,thread_id,surface_kind,channel_name)
+           VALUES ($1,'slack',$2,$3,$4,$5,$6)"#,
+    )
+    .bind(id)
+    .bind(&input.workspace_id)
+    .bind(&input.channel_id)
+    .bind(&input.thread_id)
+    .bind(&input.surface_kind)
+    .bind(&input.channel_name)
+    .execute(&mut **tx)
+    .await?;
+    insert_event(
+        tx,
+        actor,
+        run_id,
+        "object",
+        id,
+        id,
+        "created",
+        Some(&format!(
+            "slack-chat:{}:{}:{}",
+            input.workspace_id, input.channel_id, input.thread_id
+        )),
+        json!({"kind": "chat", "title": title}),
+    )
+    .await?;
+    Ok(id)
+}
+
+async fn get_or_create_user(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    run_id: Uuid,
+    workspace_id: &str,
+    sender: &ValidatedSlackSender,
+) -> Result<Uuid, DbError> {
+    advisory_lock(
+        tx,
+        &format!("slack-user:{workspace_id}:{}", sender.provider_user_id),
+    )
+    .await?;
+    if let Some((id, existing_kind)) = sqlx::query_as::<_, (Uuid, String)>(
+        r#"SELECT u.object_id,u.user_kind FROM users u
+           CROSS JOIN LATERAL jsonb_array_elements(u.identities) identity
+           WHERE identity->>'provider'='slack' AND identity->>'workspace_id'=$1
+             AND identity->>'provider_user_id'=$2"#,
+    )
+    .bind(workspace_id)
+    .bind(&sender.provider_user_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
+        if existing_kind != sender.user_kind {
+            return Err(DbError::Validation(ValidationError::Unsupported {
+                field: "sender.user_kind for existing Slack identity",
+                value: sender.user_kind.clone(),
+            }));
+        }
+        let mut identities: Value =
+            sqlx::query_scalar("SELECT identities FROM users WHERE object_id=$1 FOR UPDATE")
+                .bind(id)
+                .fetch_one(&mut **tx)
+                .await?;
+        if let Some(identity) = identities.as_array_mut().and_then(|items| {
+            items.iter_mut().find(|identity| {
+                identity.get("provider").and_then(Value::as_str) == Some("slack")
+                    && identity.get("workspace_id").and_then(Value::as_str) == Some(workspace_id)
+                    && identity.get("provider_user_id").and_then(Value::as_str)
+                        == Some(sender.provider_user_id.as_str())
+            })
+        }) {
+            let object = identity.as_object_mut().expect("validated identity object");
+            object.insert("display_name".into(), json!(sender.display_name));
+            if let Some(value) = &sender.avatar_url {
+                object.insert("avatar_url".into(), json!(value));
+            }
+            if let Some(asset) = &sender.avatar_asset {
+                object.insert("avatar_asset_sha256".into(), json!(asset.sha256));
+                object.insert("avatar_asset_filename".into(), json!(asset.filename));
+                object.insert("avatar_provenance".into(), asset.provenance.clone());
+            }
+            if let Some(value) = sender.profile_refreshed_at {
+                object.insert("profile_refreshed_at".into(), json!(value));
+            }
+        }
+        sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+            .bind(id)
+            .bind(identities)
+            .execute(&mut **tx)
+            .await?;
+        let before: Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM objects o WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let revision: Option<i64> = sqlx::query_scalar(
+            r#"UPDATE objects SET title=$2,
+               description=CASE WHEN $3='human' THEN 'A human Slack user named ' || $2 || '.'
+                                ELSE 'A Centaur agent on Slack named ' || $2 || '.' END,
+               revision=revision+1,updated_by_type=$4,updated_by_id=$5,updated_at=now()
+               WHERE id=$1 AND title IS DISTINCT FROM $2 RETURNING revision"#,
+        )
+        .bind(id)
+        .bind(&sender.display_name)
+        .bind(&sender.user_kind)
+        .bind(actor.actor_type)
+        .bind(&actor.actor_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(revision) = revision {
+            insert_object_update_event(tx, actor, run_id, id, revision, before).await?;
+        }
+        return Ok(id);
+    }
+
+    let id = Uuid::new_v4();
+    let description = if sender.user_kind == "human" {
+        format!("A human Slack user named {}.", sender.display_name)
+    } else {
+        format!("A Centaur agent on Slack named {}.", sender.display_name)
+    };
+    crate::domain::validate_object_description(&sender.display_name, &description)?;
+    sqlx::query(
+        r#"INSERT INTO objects
+           (id,kind,title,description,created_by_type,created_by_id,
+            updated_by_type,updated_by_id,provenance)
+           VALUES ($1,'user',$2,$3,$4,$5,$4,$5,$6)"#,
+    )
+    .bind(id)
+    .bind(&sender.display_name)
+    .bind(description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(json!({
+        "source_type": "slack",
+        "source_ref": format!("{workspace_id}:{}", sender.provider_user_id)
+    }))
+    .execute(&mut **tx)
+    .await?;
+    let identity = json!({"id":Uuid::new_v4(),"provider":"slack","workspace_id":workspace_id,
+      "provider_user_id":sender.provider_user_id,"display_name":sender.display_name,
+      "avatar_url":sender.avatar_url,"avatar_asset_sha256":sender.avatar_asset.as_ref().map(|asset|&asset.sha256),
+      "avatar_asset_filename":sender.avatar_asset.as_ref().map(|asset|&asset.filename),
+      "avatar_provenance":sender.avatar_asset.as_ref().map(|asset|asset.provenance.clone()).unwrap_or_else(||json!({})),
+      "profile_refreshed_at":sender.profile_refreshed_at});
+    sqlx::query("INSERT INTO users (object_id,user_kind,identities) VALUES ($1,$2,jsonb_build_array($3::jsonb))")
+        .bind(id)
+        .bind(&sender.user_kind)
+        .bind(identity)
+    .execute(&mut **tx)
+    .await?;
+    insert_event(
+        tx,
+        actor,
+        run_id,
+        "object",
+        id,
+        id,
+        "created",
+        Some(&format!(
+            "slack-user:{workspace_id}:{}",
+            sender.provider_user_id
+        )),
+        json!({"kind": "user", "user_kind": sender.user_kind}),
+    )
+    .await?;
+    Ok(id)
+}
+
+async fn ensure_participant_connection(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    run_id: Uuid,
+    chat_object_id: Uuid,
+    user_object_id: Uuid,
+    display_name: &str,
+) -> Result<(), DbError> {
+    let id = Uuid::new_v4();
+    let inserted: Option<Uuid> = sqlx::query_scalar(
+        r#"INSERT INTO connections
+           (id,source_object_id,kind,target_object_id,description,
+            created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
+           VALUES ($1,$2,'involves',$3,$4,$5,$6,$5,$6,$7)
+           ON CONFLICT (source_object_id,kind,target_object_id)
+               WHERE archived_at IS NULL DO NOTHING
+           RETURNING id"#,
+    )
+    .bind(id)
+    .bind(chat_object_id)
+    .bind(user_object_id)
+    .bind(format!("This Slack conversation includes {display_name}."))
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(json!({"source_type": "slack_ingestion"}))
+    .fetch_optional(&mut **tx)
+    .await?;
+    if inserted.is_some() {
+        insert_event(
+            tx,
+            actor,
+            run_id,
+            "connection",
+            id,
+            chat_object_id,
+            "connected",
+            Some(&format!(
+                "slack-participant:{chat_object_id}:{user_object_id}"
+            )),
+            json!({"kind": "involves", "target_object_id": user_object_id}),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn insert_message(
+    tx: &mut Transaction<'_, Postgres>,
+    _actor: &ActorContext,
+    run_id: Uuid,
+    chat_object_id: Uuid,
+    user_object_id: Uuid,
+    message: &ValidatedSlackMessage,
+) -> Result<Option<Uuid>, DbError> {
+    let id = Uuid::new_v4();
+    let inserted: Option<Uuid> = sqlx::query_scalar(
+        r#"INSERT INTO chat_messages
+           (id,chat_object_id,provider_message_id,sender_user_object_id,content,source_created_at)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (chat_object_id,provider_message_id) DO NOTHING
+           RETURNING id"#,
+    )
+    .bind(id)
+    .bind(chat_object_id)
+    .bind(&message.provider_message_id)
+    .bind(user_object_id)
+    .bind(&message.content)
+    .bind(message.source_created_at)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if inserted.is_none() {
+        return Ok(None);
+    }
+    crate::runs::append_trace(
+        tx,
+        run_id,
+        "message_ingested",
+        json!({
+            "message_id": id,
+            "provider_message_id": message.provider_message_id,
+            "chat_object_id": chat_object_id,
+            "sender_user_object_id": user_object_id
+        }),
+    )
+    .await?;
+    Ok(Some(id))
+}
+
+async fn queue_next_window(
+    tx: &mut Transaction<'_, Postgres>,
+    _actor: &ActorContext,
+    run_id: Uuid,
+    chat_object_id: Uuid,
+    trigger: &str,
+) -> Result<Option<Uuid>, DbError> {
+    let messages: Vec<(Uuid,)> = sqlx::query_as(
+        r#"SELECT m.id
+           FROM chat_messages m
+           WHERE m.chat_object_id=$1
+             AND m.ingestion_sequence > COALESCE(
+                 (SELECT previous.ingestion_sequence FROM chat_messages previous
+                  JOIN chats c ON c.curation_queued_through_message_id=previous.id
+                  WHERE c.object_id=$1), 0)
+           ORDER BY m.ingestion_sequence"#,
+    )
+    .bind(chat_object_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let Some((first_message_id,)) = messages.first().copied() else {
+        return Ok(None);
+    };
+    let (last_message_id,) = messages.last().copied().expect("non-empty message window");
+    let id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO runs
+           (id,parent_run_id,kind,status,actor_type,actor_id,chat_object_id,idempotency_key,input,result,available_at)
+           VALUES ($1,$8,'curator','queued','system','context-curator',$2,$7,$9,'{}',now())"#,
+    )
+    .bind(id)
+    .bind(chat_object_id)
+    .bind(first_message_id)
+    .bind(last_message_id)
+    .bind(trigger)
+    .bind(i32::try_from(messages.len()).expect("message request is bounded"))
+    .bind(format!(
+        "curator-window:{chat_object_id}:{last_message_id}"
+    ))
+    .bind(run_id)
+    .bind(json!({"trigger":trigger,"first_message_id":first_message_id,"last_message_id":last_message_id,"message_count":messages.len()}))
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
+        .bind(chat_object_id)
+        .bind(last_message_id)
+        .execute(&mut **tx)
+        .await?;
+    crate::runs::append_trace(tx, run_id, "curator_queued", json!({"curator_run_id":id})).await?;
+    crate::runs::attach_curator_run(tx, run_id, id).await?;
+    Ok(Some(id))
+}
+
+pub async fn queue_inactive_interactions(
+    pool: &PgPool,
+    inactivity: StdDuration,
+) -> Result<usize, DbError> {
+    let inactivity = Duration::try_from(inactivity).map_err(|_| {
+        DbError::Validation(ValidationError::Unsupported {
+            field: "inactivity duration",
+            value: "out of range".to_owned(),
+        })
+    })?;
+    let cutoff = OffsetDateTime::now_utc() - inactivity;
+    let actor = ActorContext::system(INGESTOR_ACTOR_ID);
+    let mut tx = pool.begin().await?;
+    let chats: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        r#"SELECT c.object_id,c.workspace_id,c.channel_id,c.thread_id
+           FROM chats c
+           WHERE c.provider='slack' AND c.latest_source_message_at <= $1
+             AND EXISTS (
+                 SELECT 1 FROM chat_messages m
+                 WHERE m.chat_object_id=c.object_id
+                   AND m.ingestion_sequence > COALESCE(
+                       (SELECT previous.ingestion_sequence FROM chat_messages previous
+                        WHERE previous.id=c.curation_queued_through_message_id), 0)
+             )
+           ORDER BY c.latest_source_message_at,c.object_id
+           LIMIT 100 FOR UPDATE SKIP LOCKED"#,
+    )
+    .bind(cutoff)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut queued = 0usize;
+    for (chat_object_id, workspace_id, channel_id, thread_id) in chats {
+        let run_id = if let Some(id) =
+            crate::runs::latest_slack_run(&mut tx, chat_object_id).await?
+        {
+            id
+        } else {
+            let fallback_id = format!("inactivity:{}", OffsetDateTime::now_utc().unix_timestamp());
+            let (id, _) = crate::runs::open_slack_interaction(
+                &mut tx,
+                crate::runs::SlackInteractionOpen {
+                    workspace_id: &workspace_id,
+                    channel_id: &channel_id,
+                    thread_id: &thread_id,
+                    interaction_id: &fallback_id,
+                    started_at: OffsetDateTime::now_utc(),
+                    title: "Slack conversation inactivity".to_owned(),
+                    request_message: None,
+                },
+            )
+            .await?;
+            crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
+            id
+        };
+        if queue_next_window(&mut tx, &actor, run_id, chat_object_id, "inactivity")
+            .await?
+            .is_some()
+        {
+            queued += 1;
+        }
+    }
+    tx.commit().await?;
+    Ok(queued)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_event(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    run_id: Uuid,
+    entity_type: &str,
+    entity_id: Uuid,
+    object_id: Uuid,
+    action: &str,
+    idempotency_key: Option<&str>,
+    _changes: Value,
+) -> Result<(), DbError> {
+    let target_type = if entity_type == "connection" {
+        "connection"
+    } else {
+        "object"
+    };
+    let target_id = if target_type == "connection" {
+        entity_id
+    } else {
+        object_id
+    };
+    let sequence: i32 =
+        sqlx::query_scalar("SELECT COALESCE(max(sequence),0)+1 FROM object_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let after = crate::db::target_snapshot(tx, target_type, target_id).await?;
+    let revision = after.get("revision").and_then(Value::as_i64).unwrap_or(1);
+    sqlx::query(
+        r#"INSERT INTO object_events
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            idempotency_key,from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10,NULL,$11,true,now())"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(run_id).bind(sequence).bind(target_type).bind(target_id)
+    .bind(if action=="connected"{"created"}else{action})
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(idempotency_key)
+    .bind(revision).bind(after)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn insert_object_update_event(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    run_id: Uuid,
+    object_id: Uuid,
+    revision: i64,
+    before: Value,
+) -> Result<(), DbError> {
+    let sequence: i32 =
+        sqlx::query_scalar("SELECT COALESCE(max(sequence),0)+1 FROM object_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    let after: Value = sqlx::query_scalar("SELECT to_jsonb(o) FROM objects o WHERE id=$1")
+        .bind(object_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    sqlx::query(
+        r#"INSERT INTO object_events
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,$3,'object',$4,'updated',$5,$6,$7,$8,$9,$10,true,now())"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(run_id)
+    .bind(sequence)
+    .bind(object_id)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(revision - 1)
+    .bind(revision)
+    .bind(before)
+    .bind(after)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approved_surfaces_are_exact() {
+        let approved = ApprovedSlackSurfaces::parse("T1:C1, T1:D2").unwrap();
+        assert!(approved.contains("T1", "C1"));
+        assert!(approved.contains("T1", "D2"));
+        assert!(!approved.contains("T1", "C2"));
+        assert!(!approved.contains("T2", "C1"));
+    }
+
+    #[test]
+    fn approved_surfaces_reject_wildcards_and_bad_entries() {
+        assert!(ApprovedSlackSurfaces::parse("").is_err());
+        assert!(ApprovedSlackSurfaces::parse("T1").is_err());
+        assert!(ApprovedSlackSurfaces::parse(":C1").is_err());
+    }
+
+    #[test]
+    fn provider_avatar_references_require_http_urls() {
+        assert_eq!(
+            validate_avatar_url(Some(" https://example.test/avatar.png ".to_owned())).unwrap(),
+            Some("https://example.test/avatar.png".to_owned())
+        );
+        assert!(validate_avatar_url(Some("data:image/png;base64,secret".to_owned())).is_err());
+        assert!(validate_avatar_url(Some("javascript:alert(1)".to_owned())).is_err());
+        assert_eq!(validate_avatar_url(None).unwrap(), None);
+    }
+
+    #[test]
+    fn identity_assets_require_safe_content_addressed_paths() {
+        let asset = validate_avatar_asset(Some(SlackAvatarAssetInput {
+            sha256: "a".repeat(64),
+            filename: "agent.png".to_owned(),
+            provenance: json!({"source": "overlay"}),
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(asset.filename, "agent.png");
+        assert!(
+            validate_avatar_asset(Some(SlackAvatarAssetInput {
+                sha256: "A".repeat(64),
+                filename: "agent.png".to_owned(),
+                provenance: json!({}),
+            }))
+            .is_err()
+        );
+        assert!(
+            validate_avatar_asset(Some(SlackAvatarAssetInput {
+                sha256: "a".repeat(64),
+                filename: "../agent.png".to_owned(),
+                provenance: json!({}),
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn slack_message_evidence_preserves_the_visible_message_and_sender() {
+        let message = ValidatedSlackMessage {
+            provider_message_id: "1700000000.000100".to_owned(),
+            sender: ValidatedSlackSender {
+                provider_user_id: "U123".to_owned(),
+                display_name: "Alex".to_owned(),
+                user_kind: "human".to_owned(),
+                avatar_url: None,
+                avatar_asset: None,
+                profile_refreshed_at: None,
+            },
+            content: "What changed?".to_owned(),
+            source_created_at: OffsetDateTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            slack_message_evidence(&message),
+            json!({
+                "content": "What changed?",
+                "provider_message_id": "1700000000.000100",
+                "sender": {
+                    "display_name": "Alex",
+                    "provider_user_id": "U123",
+                    "user_kind": "human",
+                },
+                "source_created_at": "1970-01-01T00:00:00Z",
+            })
+        );
+    }
+}

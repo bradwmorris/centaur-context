@@ -1,0 +1,11 @@
+.git
+.env
+target
+web/node_modules
+web/dist
+.venv-tool
+__pycache__
+.pytest_cache
+*.py[cod]
+*.egg-info
+*.log

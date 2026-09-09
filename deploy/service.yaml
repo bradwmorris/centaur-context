@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: agent
+      port: 8081
+      targetPort: agent
+    - name: ingest
+      port: 8082
+      targetPort: ingest
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-note-write
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: note-write
+      port: 8084
+      targetPort: note-write
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-source-intake
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: source-intake
+      port: 8086
+      targetPort: source-intake
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-research-mutation
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: research-mutation
+      port: 8087
+      targetPort: research-mutation
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-external-action
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: external-action
+      port: 8088
+      targetPort: external-action
