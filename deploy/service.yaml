@@ -61,9 +61,9 @@ spec:
   selector:
     app.kubernetes.io/name: centaur-context
   ports:
-    - name: research-mutation
+    - name: research-write
       port: 8087
-      targetPort: research-mutation
+      targetPort: research-write
 ---
 apiVersion: v1
 kind: Service

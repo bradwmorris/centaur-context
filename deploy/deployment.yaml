@@ -38,7 +38,7 @@ spec:
               containerPort: 8084
             - name: source-intake
               containerPort: 8086
-            - name: research-mutation
+            - name: research-write
               containerPort: 8087
             - name: external-action
               containerPort: 8088

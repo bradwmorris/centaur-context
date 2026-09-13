@@ -23,6 +23,7 @@ configures, verifies, upgrades, or removes Centaur Context only.
   documentation
 - PostgreSQL 16 with pgvector
 - Docker, `kubectl`, `psql`, `pg_dump`, and `pg_restore`
+- `kind` when the existing Centaur installation runs in a kind cluster
 - An existing Kubernetes namespace
 - Four different random API tokens, each at least 32 characters
 - The Slack workspace and channel IDs Centaur Context may accept
@@ -35,6 +36,20 @@ configures, verifies, upgrades, or removes Centaur Context only.
 ```
 
 Record the image identity printed by the build.
+
+Building places the image in the local Docker image store. If the Kubernetes
+cluster does not share that image store, make the image available to the cluster
+before installation. For a kind-based Centaur installation, load it into the
+exact existing cluster (the kind cluster name normally omits the `kind-` prefix
+shown by `kubectl config current-context`):
+
+```bash
+kind load docker-image centaur-context:0.3.0 --name <exact-kind-cluster-name>
+```
+
+For other Kubernetes environments, push the image to an accessible registry and
+use that immutable image reference during installation. Do not continue with a
+tag that the cluster cannot pull or resolve.
 
 ## 2. Create the database
 
