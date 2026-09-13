@@ -846,11 +846,11 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DbError> {
     Ok(())
 }
 
-fn allowed_database_name(database: &str) -> bool {
+pub(crate) fn allowed_database_name(database: &str) -> bool {
     database == "centaur_context"
-        || database.contains("centaur_context_test")
+        || database.starts_with("centaur_context_")
         || database == "centaur_os"
-        || database.contains("centaur_os_test")
+        || database.starts_with("centaur_os_")
 }
 
 pub async fn ready(pool: &PgPool) -> Result<(), DbError> {
@@ -4141,15 +4141,23 @@ mod rename_compatibility_tests {
         for allowed in [
             "centaur_context",
             "centaur_context_test_issue_10",
+            "centaur_context_enyu",
             "centaur_os",
             "centaur_os_test_upgrade",
+            "centaur_os_enyu",
         ] {
             assert!(
                 allowed_database_name(allowed),
                 "expected {allowed} to be accepted"
             );
         }
-        for rejected in ["postgres", "ai_v2", "centaur_contextual", "centaur_test"] {
+        for rejected in [
+            "postgres",
+            "ai_v2",
+            "centaur_contextual",
+            "other_centaur_context_test",
+            "centaur_test",
+        ] {
             assert!(
                 !allowed_database_name(rejected),
                 "expected {rejected} to be rejected"
