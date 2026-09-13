@@ -150,7 +150,21 @@ copy of its database.
 
 Do not rename or recreate its database or role. Create `centaur-context-env`
 with the retained values, including the existing `centaur_os` `DATABASE_URL`,
-then take and validate a backup. Scale `deployment/centaur-os` to zero and run:
+then take and validate a backup.
+
+If the pre-public database uses an organization-specific name such as
+`centaur_context_example`, explicitly confirm that connected database when
+backing it up:
+
+```bash
+./scripts/backup.sh /secure/path/centaur-context.dump \
+  --confirm-database centaur_context_example
+```
+
+The confirmation is accepted only for a valid `centaur_context_*` or
+`centaur_os_*` name and must match the connected database exactly.
+
+Then scale `deployment/centaur-os` to zero and run:
 
 ```bash
 ./scripts/install-kubernetes.sh --image centaur-context:0.3.0 --apply --legacy-cutover
@@ -248,7 +262,8 @@ Curator Runs usually warrant checking the model settings above.
 ## Maintenance
 
 Database scripts only operate on Context's canonical or legacy database names,
-or explicitly confirmed Context test databases. Never target Centaur's databases.
+explicitly confirmed Context test databases, or the narrowly confirmed private
+backup case below. Never target Centaur's databases.
 
 ### Backup
 
@@ -260,8 +275,15 @@ new output path:
 ./scripts/backup.sh /secure/path/centaur-context.dump
 ```
 
-This produces a PostgreSQL custom-format dump, SHA-256 checksum, and small JSON
-metadata file. Existing outputs are never overwritten.
+Canonical `centaur_context`, legacy `centaur_os`, and guarded test databases do
+not need an extra argument. For an existing private/pre-public database named
+`centaur_context_*` or `centaur_os_*`, add
+`--confirm-database <exact-connected-name>`. This exception is backup-only and
+does not authorize restoring over or dropping that database.
+
+This produces a PostgreSQL custom-format dump of Context's owned `public`
+schema, SHA-256 checksum, and small JSON metadata file. Extension-owned schemas
+and Centaur databases are excluded. Existing outputs are never overwritten.
 
 ### Restore
 

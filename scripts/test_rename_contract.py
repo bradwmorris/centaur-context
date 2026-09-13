@@ -41,6 +41,41 @@ def test_conflicting_environment_values_fail_closed() -> None:
     assert "conflicts with legacy" in result.stderr
 
 
+def test_private_database_requires_exact_backup_confirmation() -> None:
+    env = {"PATH": "/usr/bin:/bin"}
+    unconfirmed = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored",
+        env,
+    )
+    assert unconfirmed.returncode != 0
+    assert "refusing operation" in unconfirmed.stderr
+
+    confirmed = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored centaur_context_enyu true",
+        env,
+    )
+    assert confirmed.returncode == 0
+    assert confirmed.stdout == "centaur_context_enyu"
+
+
+def test_private_database_confirmation_must_match_exactly() -> None:
+    env = {"PATH": "/usr/bin:/bin"}
+    result = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored centaur_context_other true",
+        env,
+    )
+    assert result.returncode != 0
+    assert "refusing operation" in result.stderr
+
+
+def test_backup_is_limited_to_the_context_owned_public_schema() -> None:
+    backup = (ROOT / "scripts/backup.sh").read_text(encoding="utf-8")
+    assert "--schema=public" in backup
+
+
 def test_backup_metadata_accepts_canonical_and_legacy_products(tmp_path: Path) -> None:
     validator = ROOT / "scripts/validate-backup-metadata.py"
     for product, database in [

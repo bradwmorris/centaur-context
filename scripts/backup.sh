@@ -12,13 +12,22 @@ resolve_legacy_env CENTAUR_CONTEXT_DATABASE_PASSWORD CENTAUR_OS_DATABASE_PASSWOR
 require_env CENTAUR_CONTEXT_DATABASE_URL
 require_password CENTAUR_CONTEXT_DATABASE_PASSWORD
 require_passwordless_database_url "$CENTAUR_CONTEXT_DATABASE_URL"
-[[ $# -eq 1 ]] || die "usage: backup.sh /path/to/backup.dump"
+[[ $# -eq 1 || ($# -eq 3 && "$2" == "--confirm-database") ]] || \
+  die "usage: backup.sh /path/to/backup.dump [--confirm-database DATABASE]"
 
 output="$1"
+expected=""
+confirmed_private=false
+if [[ $# -eq 3 ]]; then
+  expected="$3"
+  validate_identifier "$expected"
+  confirmed_private=true
+fi
 [[ -d "$(dirname "$output")" ]] || die "backup directory does not exist"
 [[ ! -e "$output" && ! -e "$output.sha256" && ! -e "$output.json" ]] || \
   die "backup output already exists"
-database="$(require_centaur_context_database "$CENTAUR_CONTEXT_DATABASE_URL" "$CENTAUR_CONTEXT_DATABASE_PASSWORD")"
+database="$(require_centaur_context_database "$CENTAUR_CONTEXT_DATABASE_URL" \
+  "$CENTAUR_CONTEXT_DATABASE_PASSWORD" "$expected" "$confirmed_private")"
 partial="${output}.partial.$$"
 checksum_partial="${output}.sha256.partial.$$"
 metadata_partial="${output}.json.partial.$$"
@@ -26,6 +35,7 @@ trap 'rm -f "$partial" "$checksum_partial" "$metadata_partial"' EXIT
 
 PGPASSWORD="$CENTAUR_CONTEXT_DATABASE_PASSWORD" \
   pg_dump "$CENTAUR_CONTEXT_DATABASE_URL" --format=custom --no-owner --no-privileges \
+  --schema=public \
   --file="$partial"
 schema="$(PGPASSWORD="$CENTAUR_CONTEXT_DATABASE_PASSWORD" psql "$CENTAUR_CONTEXT_DATABASE_URL" --no-psqlrc --tuples-only --no-align \
   --set=ON_ERROR_STOP=1 --command='SELECT COALESCE(max(version),0) FROM _sqlx_migrations')"

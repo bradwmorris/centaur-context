@@ -97,11 +97,18 @@ require_centaur_context_database() {
   local url="$1"
   local password="$2"
   local expected="${3:-}"
+  local confirmed_private="${4:-false}"
   local actual
   actual="$(database_name "$url" "$password")"
-  [[ "$actual" == "centaur_context" || "$actual" == *centaur_context_test* || \
-    "$actual" == "centaur_os" || "$actual" == *centaur_os_test* ]] || \
+  if [[ "$actual" == "centaur_context" || "$actual" == *centaur_context_test* || \
+    "$actual" == "centaur_os" || "$actual" == *centaur_os_test* ]]; then
+    :
+  elif [[ "$confirmed_private" == "true" && -n "$expected" && "$actual" == "$expected" && \
+    ("$actual" == centaur_context_* || "$actual" == centaur_os_*) ]]; then
+    validate_identifier "$actual"
+  else
     die "refusing operation against unexpected database $actual"
+  fi
   [[ -z "$expected" || "$actual" == "$expected" ]] || \
     die "database confirmation mismatch: expected $expected, connected to $actual"
   printf '%s' "$actual"
