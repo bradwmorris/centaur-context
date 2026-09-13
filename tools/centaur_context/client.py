@@ -714,6 +714,7 @@ class CentaurContextClient:
         owner_object_id: str | None = None,
         agent_suitable: bool = False,
         brief_markdown: str | None = None,
+        github_issue_url: str | None = None,
         provenance: dict[str, Any] | None = None,
         originating_chat_object_id: str | None = None,
         derived_from_source_object_ids: list[str] | None = None,
@@ -726,6 +727,7 @@ class CentaurContextClient:
         due_at = _clean(due_at)
         owner_object_id = _clean(owner_object_id)
         brief_markdown = _clean(brief_markdown)
+        github_issue_url = _clean(github_issue_url)
         idempotency_key = _clean(idempotency_key)
         if not title:
             raise ValueError("title is required")
@@ -735,8 +737,8 @@ class CentaurContextClient:
             raise ValueError("description is required")
         if len(description) > 2_000:
             raise ValueError("description must be at most 2000 characters")
-        if priority not in {"low", "medium", "high", "urgent"}:
-            raise ValueError("priority must be low, medium, high, or urgent")
+        if priority not in {"low", "medium", "high"}:
+            raise ValueError("priority must be low, medium, or high")
         if len(brief_markdown) > MAX_NOTE_CONTENT:
             raise ValueError("brief_markdown must be at most 100000 characters")
         provenance = _validated_provenance(provenance)
@@ -760,9 +762,107 @@ class CentaurContextClient:
             payload["owner_object_id"] = owner_object_id
         if brief_markdown:
             payload["brief_markdown"] = brief_markdown
+        if github_issue_url:
+            payload["github_issue_url"] = github_issue_url
         return self._request(
             "POST",
             "/api/v2/tasks",
+            json=payload,
+            idempotency_key=idempotency_key,
+            token=self._note_write_token(),
+            base_url=self.note_write_url,
+        )
+
+    def update_task(
+        self,
+        task_id: str,
+        expected_revision: int,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        priority: str | None = None,
+        owner_object_id: str | None = None,
+        clear_owner: bool = False,
+        agent_suitable: bool | None = None,
+        blocked_reason: str | None = None,
+        clear_blocked_reason: bool = False,
+        due_at: str | None = None,
+        clear_due_at: bool = False,
+        github_issue_url: str | None = None,
+        clear_github_issue_url: bool = False,
+        brief_markdown: str | None = None,
+        clear_brief_markdown: bool = False,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Update one Task with optimistic concurrency and the scoped write credential."""
+        task_id = _required(task_id, "task_id")
+        if expected_revision < 1:
+            raise ValueError("expected_revision must be positive")
+        idempotency_key = _required(idempotency_key, "idempotency_key")
+        if len(idempotency_key) > 200:
+            raise ValueError("idempotency_key must be at most 200 characters")
+        status = _clean(status).lower()
+        priority = _clean(priority).lower()
+        title = _clean(title)
+        description = _clean(description)
+        owner_object_id = _clean(owner_object_id)
+        blocked_reason = _clean(blocked_reason)
+        due_at = _clean(due_at)
+        github_issue_url = _clean(github_issue_url)
+        brief_markdown = _clean(brief_markdown)
+        if status and status not in {"backlog", "todo", "doing", "review", "done", "blocked"}:
+            raise ValueError("status must be backlog, todo, doing, review, done, or blocked")
+        if priority and priority not in {"low", "medium", "high"}:
+            raise ValueError("priority must be low, medium, or high")
+        if title and len(title) > 300:
+            raise ValueError("title must be at most 300 characters")
+        if description and len(description) > 2_000:
+            raise ValueError("description must be at most 2000 characters")
+        if blocked_reason and len(blocked_reason) > 2_000:
+            raise ValueError("blocked_reason must be at most 2000 characters")
+        if len(brief_markdown) > MAX_NOTE_CONTENT:
+            raise ValueError("brief_markdown must be at most 100000 characters")
+        conflicts = [
+            (owner_object_id, clear_owner, "owner_object_id"),
+            (blocked_reason, clear_blocked_reason, "blocked_reason"),
+            (due_at, clear_due_at, "due_at"),
+            (github_issue_url, clear_github_issue_url, "github_issue_url"),
+            (brief_markdown, clear_brief_markdown, "brief_markdown"),
+        ]
+        for value, clear, field in conflicts:
+            if value and clear:
+                raise ValueError(f"{field} cannot be supplied and cleared together")
+        if status == "blocked" and not blocked_reason:
+            raise ValueError("blocked_reason is required when status is blocked")
+        payload: dict[str, Any] = {"expected_revision": expected_revision}
+        for field, value in {
+            "title": title,
+            "description": description,
+            "status": status,
+            "priority": priority,
+            "owner_object_id": owner_object_id,
+            "blocked_reason": blocked_reason,
+            "due_at": due_at,
+            "github_issue_url": github_issue_url,
+            "brief_markdown": brief_markdown,
+        }.items():
+            if value:
+                payload[field] = value
+        if agent_suitable is not None:
+            payload["agent_suitable"] = bool(agent_suitable)
+        for field, value in {
+            "clear_owner": clear_owner,
+            "clear_blocked_reason": clear_blocked_reason,
+            "clear_due_at": clear_due_at,
+            "clear_github_issue_url": clear_github_issue_url,
+            "clear_brief_markdown": clear_brief_markdown,
+        }.items():
+            if value:
+                payload[field] = True
+        return self._request(
+            "PATCH",
+            f"/api/v2/tasks/{quote(task_id, safe='')}",
             json=payload,
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
