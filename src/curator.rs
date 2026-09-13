@@ -2527,7 +2527,7 @@ fn reconciliation_plan_schema() -> Value {
                     "media_type": {"$ref": "#/$defs/nullable_string"},
                     "language": {"$ref": "#/$defs/nullable_string"},
                     "captured_at": {"$ref": "#/$defs/nullable_string"},
-                    "metadata": {"type": "object", "additionalProperties": true}
+                    "metadata": {"type": "object", "additionalProperties": false, "properties": {}}
                 }
             },
             "source_fields": {
