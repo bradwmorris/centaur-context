@@ -15,7 +15,12 @@ current="$(kubectl config current-context)"
   die "kubectl context mismatch: expected $CENTAUR_CONTEXT_KUBE_CONTEXT, current $current"
 
 kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" --namespace "$CENTAUR_CONTEXT_NAMESPACE" delete \
-  deployment/centaur-context service/centaur-context \
+  deployment/centaur-context \
+  service/centaur-context \
+  service/centaur-context-note-write \
+  service/centaur-context-source-intake \
+  service/centaur-context-research-mutation \
+  service/centaur-context-external-action \
   networkpolicy/centaur-context \
   --ignore-not-found
 if [[ $# -eq 3 ]]; then

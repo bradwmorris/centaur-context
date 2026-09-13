@@ -121,7 +121,7 @@ def main() -> None:
     ]
     for manifest in manifests:
         subprocess.run(
-            ["kubectl", "apply", "--dry-run=client", "--validate=false", "-f", str(ROOT / manifest)],
+            ["kubectl", "apply", "--dry-run=server", "-f", str(ROOT / manifest)],
             check=True,
             stdout=subprocess.DEVNULL,
         )

@@ -41,6 +41,42 @@ def test_conflicting_environment_values_fail_closed() -> None:
     assert "conflicts with legacy" in result.stderr
 
 
+def test_private_database_requires_exact_backup_confirmation() -> None:
+    env = {"PATH": "/usr/bin:/bin"}
+    unconfirmed = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored",
+        env,
+    )
+    assert unconfirmed.returncode != 0
+    assert "refusing operation" in unconfirmed.stderr
+
+    confirmed = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored centaur_context_enyu true",
+        env,
+    )
+    assert confirmed.returncode == 0
+    assert confirmed.stdout == "centaur_context_enyu"
+
+
+def test_private_database_confirmation_must_match_exactly() -> None:
+    env = {"PATH": "/usr/bin:/bin"}
+    result = run_common(
+        "database_name() { printf centaur_context_enyu; }; "
+        "require_centaur_context_database ignored ignored centaur_context_other true",
+        env,
+    )
+    assert result.returncode != 0
+    assert "refusing operation" in result.stderr
+
+
+def test_backup_is_limited_to_the_context_owned_public_schema() -> None:
+    backup = (ROOT / "scripts/backup.sh").read_text(encoding="utf-8")
+    assert "--schema=public" in backup
+    assert "--exclude-table=public.spatial_ref_sys" in backup
+
+
 def test_backup_metadata_accepts_canonical_and_legacy_products(tmp_path: Path) -> None:
     validator = ROOT / "scripts/validate-backup-metadata.py"
     for product, database in [
@@ -96,7 +132,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 18,
+                "schema_version": 24,
                 "format": "pg_dump-custom",
             }
         ),
@@ -110,6 +146,30 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "unsupported schema version" in result.stderr
+
+
+def test_backup_metadata_accepts_current_private_database(tmp_path: Path) -> None:
+    metadata = tmp_path / "private-backup.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "product": "centaur-context",
+                "product_version": "0.3.0",
+                "database": "centaur_context_enyu",
+                "schema_version": 23,
+                "format": "pg_dump-custom",
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/validate-backup-metadata.py"),
+            str(metadata),
+        ],
+        check=True,
+    )
 
 
 def fake_kubectl(tmp_path: Path) -> Path:
@@ -180,3 +240,47 @@ def test_installer_allows_explicit_scaled_down_handoff(tmp_path: Path) -> None:
         tmp_path, "--legacy-cutover", replicas="0", ready="0"
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_uninstaller_removes_every_installed_service(tmp_path: Path) -> None:
+    kubectl = tmp_path / "kubectl"
+    log = tmp_path / "kubectl.log"
+    kubectl.write_text(
+        """#!/usr/bin/env bash
+if [[ "$*" == "config current-context" ]]; then printf test-context; exit 0; fi
+printf '%s\\n' "$*" >> "$KUBECTL_LOG"
+""",
+        encoding="utf-8",
+    )
+    kubectl.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{tmp_path}:{env['PATH']}",
+            "KUBECTL_LOG": str(log),
+            "CENTAUR_CONTEXT_KUBE_CONTEXT": "test-context",
+            "CENTAUR_CONTEXT_NAMESPACE": "test-namespace",
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts/uninstall-kubernetes.sh"),
+            "--confirm",
+            "centaur-context",
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    invocation = log.read_text(encoding="utf-8")
+    for resource in [
+        "service/centaur-context",
+        "service/centaur-context-note-write",
+        "service/centaur-context-source-intake",
+        "service/centaur-context-research-mutation",
+        "service/centaur-context-external-action",
+    ]:
+        assert resource in invocation

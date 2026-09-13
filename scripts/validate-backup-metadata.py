@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import json
+import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -10,12 +12,18 @@ def fail(message: str) -> None:
 
 
 def allowed_database(name: object) -> bool:
-    return isinstance(name, str) and (
-        name == "centaur_context"
-        or "centaur_context_test" in name
-        or name == "centaur_os"
-        or "centaur_os_test" in name
-    )
+    return isinstance(name, str) and re.fullmatch(
+        r"(?:centaur_context|centaur_os)(?:_[a-z0-9_]+)?", name
+    ) is not None
+
+
+def supported_schema_version() -> int:
+    compatibility = Path(__file__).resolve().parents[1] / "compatibility.toml"
+    with compatibility.open("rb") as handle:
+        value = tomllib.load(handle)["centaur_context"]["database_schema_version"]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        fail("invalid compatibility schema version")
+    return value
 
 
 def main() -> None:
@@ -34,7 +42,11 @@ def main() -> None:
     if not allowed_database(metadata.get("database")):
         fail("unexpected source database")
     schema = metadata.get("schema_version")
-    if not isinstance(schema, int) or isinstance(schema, bool) or not 1 <= schema <= 17:
+    if (
+        not isinstance(schema, int)
+        or isinstance(schema, bool)
+        or not 1 <= schema <= supported_schema_version()
+    ):
         fail("unsupported schema version")
     if not isinstance(metadata.get("product_version"), str) or not metadata["product_version"]:
         fail("missing product version")
