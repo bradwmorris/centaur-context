@@ -35,7 +35,7 @@ trap 'rm -f "$partial" "$checksum_partial" "$metadata_partial"' EXIT
 
 PGPASSWORD="$CENTAUR_CONTEXT_DATABASE_PASSWORD" \
   pg_dump "$CENTAUR_CONTEXT_DATABASE_URL" --format=custom --no-owner --no-privileges \
-  --schema=public \
+  --schema=public --exclude-table=public.spatial_ref_sys \
   --file="$partial"
 schema="$(PGPASSWORD="$CENTAUR_CONTEXT_DATABASE_PASSWORD" psql "$CENTAUR_CONTEXT_DATABASE_URL" --no-psqlrc --tuples-only --no-align \
   --set=ON_ERROR_STOP=1 --command='SELECT COALESCE(max(version),0) FROM _sqlx_migrations')"

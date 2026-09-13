@@ -74,6 +74,7 @@ def test_private_database_confirmation_must_match_exactly() -> None:
 def test_backup_is_limited_to_the_context_owned_public_schema() -> None:
     backup = (ROOT / "scripts/backup.sh").read_text(encoding="utf-8")
     assert "--schema=public" in backup
+    assert "--exclude-table=public.spatial_ref_sys" in backup
 
 
 def test_backup_metadata_accepts_canonical_and_legacy_products(tmp_path: Path) -> None:
@@ -131,7 +132,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 18,
+                "schema_version": 24,
                 "format": "pg_dump-custom",
             }
         ),
@@ -145,6 +146,30 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "unsupported schema version" in result.stderr
+
+
+def test_backup_metadata_accepts_current_private_database(tmp_path: Path) -> None:
+    metadata = tmp_path / "private-backup.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "product": "centaur-context",
+                "product_version": "0.3.0",
+                "database": "centaur_context_enyu",
+                "schema_version": 23,
+                "format": "pg_dump-custom",
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/validate-backup-metadata.py"),
+            str(metadata),
+        ],
+        check=True,
+    )
 
 
 def fake_kubectl(tmp_path: Path) -> Path:
