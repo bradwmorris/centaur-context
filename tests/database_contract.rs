@@ -285,6 +285,36 @@ async fn narrow_write_listener_creates_and_replays_one_open_task() {
     let object_id = created["data"]["object_id"].as_str().unwrap();
     assert_eq!(created["data"]["status"], "todo");
 
+    let update_body = json!({
+        "expected_revision":created["data"]["revision"],
+        "status":"doing",
+        "github_issue_url":"https://github.com/example/project/issues/12"
+    });
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v2/tasks/{object_id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-centaur-principal-id", "dev")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", format!("task-update-{fixture}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&update_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated: serde_json::Value =
+        serde_json::from_slice(&updated.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(updated["data"]["status"], "doing");
+    assert_eq!(
+        updated["data"]["github_issue_url"],
+        "https://github.com/example/project/issues/12"
+    );
+
     let connections: Vec<(Uuid, String, Uuid)> = sqlx::query_as(
         "SELECT source_object_id,kind,target_object_id FROM connections WHERE (source_object_id=$1 OR target_object_id=$1) AND archived_at IS NULL ORDER BY kind",
     )

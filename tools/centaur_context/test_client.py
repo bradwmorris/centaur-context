@@ -171,9 +171,17 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         title="Follow up on research",
         description="A bounded follow-up Task created through the narrow write listener.",
         brief_markdown="Review the captured evidence.",
+        github_issue_url="https://github.com/example/project/issues/12",
         originating_chat_object_id="chat-1",
         derived_from_source_object_ids=["source-1"],
         idempotency_key="task-1",
+    )
+    scoped.update_task(
+        "task-1",
+        2,
+        status="doing",
+        github_issue_url="https://github.com/example/project/issues/12",
+        idempotency_key="task-update-1",
     )
     scoped.validate_intake_batch({"batch_id": "batch-1", "manifest_sha256": "a" * 64})
     scoped.source_intake_validate({"version": "centaur-context-source-intake-v2"})
@@ -211,6 +219,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     assert [(request.url.host, request.url.path) for request in requests] == [
         ("notes.test", "/api/v2/notes"),
         ("notes.test", "/api/v2/tasks"),
+        ("notes.test", "/api/v2/tasks/task-1"),
         ("intake.test", "/api/v2/intake/batches/validate"),
         ("source-intake.test", "/api/v2/source-intake/validate"),
         ("source-intake.test", "/api/v2/source-intake/resolve-connections"),
@@ -223,6 +232,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         ("actions.test", "/api/v2/external-actions/reserve"),
     ]
     assert [request.headers["authorization"] for request in requests] == [
+        "Bearer " + "n" * 32,
         "Bearer " + "n" * 32,
         "Bearer " + "n" * 32,
         "Bearer " + "i" * 32,
@@ -242,6 +252,15 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
     task_payload = json.loads(requests[1].content)
     assert task_payload["originating_chat_object_id"] == "chat-1"
     assert task_payload["derived_from_source_object_ids"] == ["source-1"]
+    assert task_payload["github_issue_url"] == "https://github.com/example/project/issues/12"
+    update_payload = json.loads(requests[2].content)
+    assert requests[2].method == "PATCH"
+    assert requests[2].headers["idempotency-key"] == "task-update-1"
+    assert update_payload == {
+        "expected_revision": 2,
+        "status": "doing",
+        "github_issue_url": "https://github.com/example/project/issues/12",
+    }
 
 
 def test_source_intake_wait_allows_long_transcripts_to_finish_after_twelve_polls():
@@ -324,6 +343,12 @@ def test_create_note_rejects_undocumented_passage_provenance_before_request():
             title="Follow up on research",
             description="A bounded follow-up Task created through a narrow listener.",
             idempotency_key="task-1",
+        ),
+        lambda value: value.update_task(
+            "task-1",
+            1,
+            status="doing",
+            idempotency_key="task-update-1",
         ),
         lambda value: value.validate_intake_batch(
             {"batch_id": "batch-1", "manifest_sha256": "a" * 64}

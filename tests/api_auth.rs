@@ -597,6 +597,26 @@ async fn note_and_task_write_listener_is_a_separate_attributed_idempotent_grant(
         .unwrap();
     assert_eq!(task_missing_retry_key.status(), StatusCode::BAD_REQUEST);
 
+    let task_update_body = r##"{"expected_revision":1,"status":"doing"}"##;
+    let task_update_missing_retry_key = note_write_router(state(), "w".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v2/tasks/00000000-0000-0000-0000-000000000001")
+                .header("authorization", format!("Bearer {}", "w".repeat(32)))
+                .header("x-centaur-principal-id", "dev")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("content-type", "application/json")
+                .body(Body::from(task_update_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        task_update_missing_retry_key.status(),
+        StatusCode::BAD_REQUEST
+    );
+
     let read_surface = agent_router(state(), "a".repeat(32))
         .oneshot(
             Request::builder()
@@ -630,6 +650,23 @@ async fn note_and_task_write_listener_is_a_separate_attributed_idempotent_grant(
         .await
         .unwrap();
     assert_eq!(task_read_surface.status(), StatusCode::NOT_FOUND);
+
+    let task_update_read_surface = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v2/tasks/00000000-0000-0000-0000-000000000001")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "dev")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", "task-update-1")
+                .header("content-type", "application/json")
+                .body(Body::from(task_update_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task_update_read_surface.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

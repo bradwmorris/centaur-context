@@ -149,6 +149,7 @@ def create_task(
     owner_object_id: str | None = None,
     agent_suitable: bool = False,
     brief_markdown: str | None = None,
+    github_issue_url: str | None = None,
     provenance_json: str = "{}",
     originating_chat_object_id: str | None = None,
     derived_from_source_object_id: list[str] | None = None,
@@ -168,9 +169,51 @@ def create_task(
             owner_object_id=owner_object_id,
             agent_suitable=agent_suitable,
             brief_markdown=brief_markdown,
+            github_issue_url=github_issue_url,
             provenance=provenance,
             originating_chat_object_id=originating_chat_object_id,
             derived_from_source_object_ids=derived_from_source_object_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+def update_task(
+    task_id: str,
+    expected_revision: int,
+    status: str | None = None,
+    priority: str | None = None,
+    owner_object_id: str | None = None,
+    clear_owner: bool = False,
+    agent_suitable: bool | None = None,
+    blocked_reason: str | None = None,
+    clear_blocked_reason: bool = False,
+    due_at: str | None = None,
+    clear_due_at: bool = False,
+    github_issue_url: str | None = None,
+    clear_github_issue_url: bool = False,
+    brief_markdown: str | None = None,
+    clear_brief_markdown: bool = False,
+    idempotency_key: str = "",
+) -> None:
+    """Update a Task using CENTAUR_CONTEXT_NOTE_WRITE_TOKEN."""
+    _print(
+        _client().update_task(
+            task_id,
+            expected_revision,
+            status=status,
+            priority=priority,
+            owner_object_id=owner_object_id,
+            clear_owner=clear_owner,
+            agent_suitable=agent_suitable,
+            blocked_reason=blocked_reason,
+            clear_blocked_reason=clear_blocked_reason,
+            due_at=due_at,
+            clear_due_at=clear_due_at,
+            github_issue_url=github_issue_url,
+            clear_github_issue_url=clear_github_issue_url,
+            brief_markdown=brief_markdown,
+            clear_brief_markdown=clear_brief_markdown,
             idempotency_key=idempotency_key,
         )
     )

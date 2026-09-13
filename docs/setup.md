@@ -376,7 +376,8 @@ For one-time imports, embedding rollout, and trace accounting, see
 the [agent client](../tools/centaur_context/client.py) and
 [CLI](../tools/centaur_context/cli.py) define the tool contract.
 
-General reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation requires the separate
+General reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation and Task creation or
+updates require the separate
 `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`, a per-operation idempotency key, and the private
 `centaur-context-note-write:8084` service. It never falls back to the read token.
 Theme creation is human-controlled; authorized agents can assign existing Themes.
