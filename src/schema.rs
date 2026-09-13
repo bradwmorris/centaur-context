@@ -667,11 +667,7 @@ async fn validate_database(pool: &PgPool) -> Result<(), SchemaError> {
     let database = sqlx::query_scalar::<_, String>("SELECT current_database()")
         .fetch_one(pool)
         .await?;
-    let allowed = database == "centaur_context"
-        || database == "centaur_os"
-        || database.contains("centaur_context_test")
-        || database.contains("centaur_os_test");
-    if allowed {
+    if crate::db::allowed_database_name(&database) {
         Ok(())
     } else {
         Err(SchemaError::UnsafeDatabase(database))

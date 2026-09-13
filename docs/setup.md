@@ -265,6 +265,11 @@ Database scripts only operate on Context's canonical or legacy database names,
 explicitly confirmed Context test databases, or the narrowly confirmed private
 backup case below. Never target Centaur's databases.
 
+The application runtime accepts the canonical `centaur_context` name and
+private/pre-public names in the bounded `centaur_context_*` family. Legacy
+`centaur_os` and `centaur_os_*` names remain supported during migration. Other
+database names are refused before migrations or schema inspection run.
+
 ### Backup
 
 Provide password-free `CENTAUR_CONTEXT_DATABASE_URL` and the separate
