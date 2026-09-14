@@ -45,6 +45,8 @@ not an installation recipe.
   Centaur Context beside an existing Centaur deployment.
 - [Centaur integration contract](docs/centaur-integration.md) — the small
   connection between the proposed App and Centaur core.
+- [Integration API](docs/api.md) — supported endpoints, credentials, headers,
+  and minimal request examples.
 
 Centaur Context runs alongside Centaur with its own PostgreSQL database. Centaur
 owns agent execution; Context owns shared knowledge. Company-specific prompts,
