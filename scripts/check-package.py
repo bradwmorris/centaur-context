@@ -76,7 +76,7 @@ def main() -> None:
         "scripts/test_rename_contract.py",
         "scripts/uninstall-kubernetes.sh",
         "scripts/validate-backup-metadata.py",
-        "src/db.rs",
+        "src/db/objects.rs",
         "src/schema.rs",
         "tests/database_contract.rs",
         "tests/artifact_embeddings.rs",
