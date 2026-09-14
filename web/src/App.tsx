@@ -6,6 +6,7 @@ import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph"
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { InlineEditor } from "./InlineEditor";
+import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
@@ -127,6 +128,7 @@ export default function App() {
 
   const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, runs, query);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
+  const activeModule = resolveActiveModule(section, window.location.search);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
 
@@ -176,7 +178,9 @@ export default function App() {
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} query={query} onQuery={setQuery} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             <header className="list-view-head">
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
+              <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
             </header>
+            {activeModule ? <ContextModuleView module={activeModule} context={{ tasks, visuals: visualsById, loading, onTasksChange: setTasks, onReload: load }} /> : <>
             <div className="list-toolbar">
               {section !== "tasks" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
               {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={(event) => setSort(event.target.value as ListSort)}><option value="recent">Recently added</option><option value="connections">Most connected</option></select></label>}
@@ -200,6 +204,7 @@ export default function App() {
               ))}
               {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
             </div>
+            </>}
           </section> : <section className="detail-page">
             {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}

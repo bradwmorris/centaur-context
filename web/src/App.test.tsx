@@ -168,6 +168,19 @@ describe("minimal canonical UI", () => {
     expect(await screen.findByRole("region", { name: "Connections graph" })).toBeVisible();
   });
 
+  it("switches the Tasks section between its canonical list and registered board", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Tasks" }));
+    expect(await screen.findByRole("button", { name: "Board" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "tasks views" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/tasks?view=kanban");
+    expect(await screen.findByRole("region", { name: "Task board" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/tasks");
+    expect(screen.getByRole("region", { name: "tasks records" })).toBeVisible();
+  });
+
   it("renders canonical row slots in order and sends server-side sort choices", async () => {
     const { container } = render(<App />);
     expect(await screen.findByText(source.title)).toBeVisible();
