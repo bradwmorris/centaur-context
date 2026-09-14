@@ -45,6 +45,8 @@ not an installation recipe.
   Centaur Context beside an existing Centaur deployment.
 - [Centaur integration contract](docs/centaur-integration.md) — the small
   connection between the proposed App and Centaur core.
+- [UI modules](docs/ui-modules.md) — trusted compile-time views over canonical
+  Context data.
 - [Integration API](docs/api.md) — supported endpoints, credentials, headers,
   and minimal request examples.
 
