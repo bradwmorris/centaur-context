@@ -191,6 +191,8 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 This section describes the Context endpoints and credentials that an existing
 Centaur deployment must call. It does not install or operate Centaur. Follow
 Centaur's documentation for applying configuration to that deployment.
+The concise [Integration API reference](api.md) lists every supported endpoint
+and its authentication requirements.
 
 - Load this release's `tools` directory through Centaur's overlay mechanism.
 - Give iron-proxy `AGENT_API_TOKEN`. Do not give it to the sandbox.

@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.3.0"
@@ -111,6 +112,8 @@ def main() -> None:
         not legacy_violations,
         f"unallowlisted legacy product names found in: {', '.join(legacy_violations)}",
     )
+
+    subprocess.run([sys.executable, ROOT / "scripts/check-api-docs.py"], check=True)
 
     manifests = [
         "deploy/deployment.yaml",
