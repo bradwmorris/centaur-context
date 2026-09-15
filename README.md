@@ -56,23 +56,13 @@ The request passes through Centaur’s credential proxy, so the agent sandbox do
 
 More information here:
 
-[https://github.com/bradwmorris/centaur-context/blob/main/docs/architecture.md](https://github.com/bradwmorris/centaur-context/blob/main/docs/architecture.md)
+[https://github.com/bradwmorris/centaur-context/blob/main/docs/schema.md](https://github.com/bradwmorris/centaur-context/blob/main/docs/schema.md)
 
 I’ve tried a few ways to build agent memory: Neo4j and graph queries, and the opposite raw-dog wiki with simple search tools. Main lesson is that ‘the perfect architecture’ choice matters less than whether the system actually captures useful information, retrieves it at the right time, and lets you inspect the results. Most people focus far too much on the choice, and far too little on the evals.
 
 Centaur Context takes a middle path. It uses PostgreSQL, but stores knowledge in a graph-shaped structure. Each first-class thing is an **Object** with a stable ID, a type, a title, and a clear description. The current types are Tasks, Chats, Users, Entities, Memories, Sources, Notes, and Themes.
 
-```mermaid
-flowchart TB
-    O["Object · shared identity and description"] -->|One matching subtype| T["Task · Chat · User · Entity
-Memory · Source · Note · Theme"]
-    O -->|From| C["Connection · type and explanation"]
-    C -->|To| O2["Another Object"]
-    O --> A["Artifacts · supporting evidence"]
-    R["Run · operation that made a change"] --> E["Object Events · immutable change history"]
-    E -.->|Records changes to| O
-    E -.->|Records changes to| C
-```
+![Centaur Context Objects, Connections, Object types, and supporting records](docs/images/schema-diagram-v2.png)
 
 **Connections** link Objects. Each Connection says what the relationship is and explains *why* it exists. For example, a Memory might be `derived_from` a Chat, or a Task might `depend_on` another Object. This lets agents search for something and then look at nearby, related knowledge without a separate graph database.
 
@@ -90,7 +80,7 @@ If you want to try it, make the Centaur changes in your own fork. See the [setup
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — the system, schema, and context loop.
+- [Schema and ontology](docs/schema.md) — Objects, Connections, evidence, and history.
 - [Setup and operations](docs/setup.md) — install, connect, verify, and maintain
   Centaur Context beside an existing Centaur deployment.
 - [Centaur integration contract](docs/centaur-integration.md) — the small

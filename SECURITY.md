@@ -25,5 +25,5 @@ version, configuration, impact, and a minimal reproduction.
 - Review NetworkPolicy and any optional model-provider egress before applying it.
 - Back up and verify the Context database before upgrading.
 
-See [Architecture](docs/architecture.md) and
+See [Centaur integration contract](docs/centaur-integration.md) and
 [Setup and operations](docs/setup.md) for the full trust boundary.
