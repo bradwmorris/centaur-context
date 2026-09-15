@@ -225,11 +225,16 @@ class CentaurContextClient:
     def _token(self) -> str:
         value = self._explicit_token or _compatible_env(TOKEN_NAME, LEGACY_TOKEN_NAME)
         if not value:
-            value = _compatible_value(
-                _tool_secret(TOKEN_NAME),
-                _tool_secret(LEGACY_TOKEN_NAME),
-                source="tool secret",
-            )
+            canonical = _tool_secret(TOKEN_NAME)
+            legacy = _tool_secret(LEGACY_TOKEN_NAME)
+            if canonical == TOKEN_NAME and legacy == LEGACY_TOKEN_NAME:
+                # Centaur's sandbox backend returns key names as proxy placeholders.
+                # They are distinct even when no real credential is available here.
+                host = urlparse(self.base_url).hostname or ""
+                use_legacy = host == "centaur-os" or host.startswith("centaur-os.")
+                value = legacy if use_legacy else canonical
+            else:
+                value = _compatible_value(canonical, legacy, source="tool secret")
         if not value:
             raise RuntimeError(f"{TOKEN_NAME} is required")
         return value

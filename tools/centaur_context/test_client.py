@@ -5,9 +5,41 @@ import httpx
 import pytest
 
 try:
-    from tools.centaur_context.client import CentaurContextClient
+    from tools.centaur_context import client as context_client
 except ModuleNotFoundError:
-    from client import CentaurContextClient
+    import client as context_client
+
+CentaurContextClient = context_client.CentaurContextClient
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("http://centaur-context-enyu.centaur.svc.cluster.local:8081", context_client.TOKEN_NAME),
+        ("http://centaur-os.centaur.svc.cluster.local:8081", context_client.LEGACY_TOKEN_NAME),
+    ],
+)
+def test_proxy_placeholders_select_the_listener_credential(monkeypatch, base_url, expected):
+    monkeypatch.delenv(context_client.TOKEN_NAME, raising=False)
+    monkeypatch.delenv(context_client.LEGACY_TOKEN_NAME, raising=False)
+    monkeypatch.setattr(context_client, "_tool_secret", lambda name: name)
+    value = CentaurContextClient(base_url=base_url)
+    assert value._token() == expected
+    value.close()
+
+
+def test_conflicting_real_tool_secrets_still_fail_closed(monkeypatch):
+    monkeypatch.delenv(context_client.TOKEN_NAME, raising=False)
+    monkeypatch.delenv(context_client.LEGACY_TOKEN_NAME, raising=False)
+    secrets = {
+        context_client.TOKEN_NAME: "canonical-real-value",
+        context_client.LEGACY_TOKEN_NAME: "legacy-real-value",
+    }
+    monkeypatch.setattr(context_client, "_tool_secret", lambda name: secrets[name])
+    value = CentaurContextClient(base_url="http://centaur-context.test")
+    with pytest.raises(RuntimeError, match="conflicting canonical and legacy tool secret values"):
+        value._token()
+    value.close()
 
 
 def client(handler):
