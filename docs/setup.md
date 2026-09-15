@@ -1,4 +1,4 @@
-# Setup and operations
+# Add Centaur Context to an existing Centaur deployment
 
 > [!IMPORTANT]
 > This is an independent proof of concept, not a change to Paradigm's original
@@ -11,13 +11,25 @@
 > optional integration. This repository does not yet pin a freshly end-to-end
 > tested Centaur revision, so these are not supported production instructions.
 
-Centaur Context is a separate service with a separate database. It does not use
-or change Centaur's database.
+This guide starts **after Centaur is already running**. It does not tell you to
+reinstall Centaur, move its database, or adopt the maintainer's deployment
+layout. Centaur Context is another service with its own database. It exchanges
+information with Centaur through authenticated HTTP requests.
 
-Start with an existing Centaur deployment created using Centaur's official
-[Quickstart](https://centaur.run/quickstart). Steps 1–5 below install Centaur
-Context only. Step 6 connects it to a compatible Centaur fork. Read the
-[Centaur integration contract](centaur-integration.md) for the design boundary.
+There are two different parts to this guide:
+
+1. The [integration plan](#0-plan-for-your-existing-deployment) applies no
+   matter how Centaur is hosted. An agent helping a Centaur developer should
+   complete it before changing anything.
+2. The [installation commands](#1-check-and-build) are a **Kubernetes recipe**
+   for the current proof of concept. They are not a universal Centaur installer.
+   If Centaur is run on a VM, with Docker Compose, or in a different cluster
+   layout, use the plan and API contract but do not run the Kubernetes installer
+   unchanged.
+
+Read the [Centaur integration contract](centaur-integration.md) for the design
+boundary. The [Integration API](api.md) lists the HTTP endpoints and credentials;
+its example service names also need to be mapped to the real deployment.
 
 For a plain-English explanation of **every change in the maintainer's fork and
 its exact files**, read `docs/FORK.md` in a local checkout of
@@ -27,18 +39,80 @@ to GitHub yet. The published
 [fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
 contains the commit-by-commit evidence in the meantime.
 
-## Requirements
+## 0. Plan for your existing deployment
 
-- A working compatible Centaur installation, set up using Centaur's own
-  documentation
-- PostgreSQL 16 with pgvector
-- Docker, `kubectl`, `psql`, `pg_dump`, and `pg_restore`
-- `kind` when the existing Centaur installation runs in a kind cluster
-- An existing Kubernetes namespace
-- Four different random API tokens, each at least 32 characters
-- The Slack workspace and channel IDs Centaur Context may accept
+Do not start by copying the example URLs or applying manifests. A developer or
+their agent should first record the following facts from **their own** Centaur
+deployment. Use read-only checks; do not print credentials or change a running
+service just to gather this information.
+
+| Find out | Why it matters |
+| --- | --- |
+| Which Centaur commit and configuration are running? Is Slackbot v2 used? | Stock Centaur does not have the automatic Context hooks. The current proof uses the maintainer's fork; another revision needs a code and contract review before its settings can be used. This guide only proves the Slack path, not every Centaur client. |
+| How is Centaur deployed: Kubernetes, a local stack, a VM, or something else? | The supplied install and uninstall scripts operate on Kubernetes only. Other environments need their own reviewed deployment procedure. |
+| Where could a new private Context service run, and how will Slackbot reach it? | Choose actual service names, routes, namespaces, ports, TLS, and network rules for that deployment. The examples below assume one Kubernetes namespace and will not automatically work elsewhere. |
+| Where can Context have its own PostgreSQL 16 database with pgvector? | Context must have separate database credentials and data. It must not connect to or migrate Centaur's operational database. The bootstrap script creates a `centaur_context` database and role on the selected PostgreSQL server; get approval before using it on a shared server. |
+| How are application secrets managed, and who may change them? | Retrieval, ingestion, writing, and Curator use different tokens. Keep them in trusted services, not an agent sandbox or source control. Kubernetes Secrets cannot be read across namespaces. |
+| Which Slack workspace and channels are approved for capture? | Context refuses unapproved surfaces. Get an explicit data/privacy decision before sending conversations or using embeddings. |
+| How will Curator call a model? | Subscription mode needs the separate private Curator route in the Centaur fork. Direct-provider mode needs an approved provider credential and egress; it does not need that Centaur route. Decide this separately from the two Slack hooks. |
+| Can this be tried in a disposable or staging environment, and who approves rollout? | First prove capture, retrieval, curation, and normal Centaur replies during a Context outage. Do not treat local unit tests as proof in this deployment. |
+
+The output should be a short deployment plan naming: the reviewed Centaur
+revision, chosen Context image, separate database location, approved Slack
+surfaces, model transport, real endpoint URLs, secret owners, required network
+paths, rollback method, and end-to-end checks. **Stop if any of these are
+unknown.** This proof of concept does not pin a current live-tested Centaur
+revision in [`compatibility.toml`](../compatibility.toml), so compatibility with
+the developer's exact revision must be checked rather than assumed.
+
+If you are an agent helping the developer, show them that plan before making
+changes. Do not infer permission to create a database, copy a credential,
+alter Centaur code, apply a NetworkPolicy, or deploy into a live environment
+from the fact that this page contains commands. Keep Centaur's database and
+Paradigm's original repository out of scope unless the developer separately
+requests work on them. Report any missing hook, route, or network path as a
+gap; do not silently claim the setup is complete.
+
+### Choose an installation path
+
+- **Centaur on Kubernetes:** the recipe below can be adapted after checking its
+  assumptions against the real cluster. It currently assumes Context and
+  Centaur are in one namespace, Context has a Secret named
+  `centaur-context-env`, and the provided NetworkPolicy selectors match the
+  Centaur pods. Review the manifests before applying them. If labels,
+  namespaces, database location, or network policy differ, change the
+  deployment configuration and prove the rendered result first.
+- **Centaur elsewhere:** do not run `install-kubernetes.sh`. The Context image,
+  separate PostgreSQL database, environment contract, and authenticated HTTP
+  API are usable design inputs, but this repository does not provide a tested
+  non-Kubernetes installation recipe. Build and test one for that environment
+  before claiming the integration works there.
+- **Stock Centaur or another client:** installing Context alone will not create
+  automatic capture or retrieval. The current implementation is in the
+  maintainer's Slackbot v2 fork. Review the [fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
+  and port only the needed behavior to the developer's own Centaur fork, or
+  agree on a general Centaur extension point. Do not modify Paradigm's original
+  repository as part of this setup.
+
+### Requirements for the Kubernetes recipe below
+
+- An existing, reviewed Centaur deployment using compatible Slackbot v2 code
+- PostgreSQL 16 with pgvector for a **separate Context database**
+- Docker, `kubectl`, and PostgreSQL 16 client tools (`psql`, `pg_dump`,
+  `pg_restore`) where the corresponding steps are run
+- `kind` only if the target is an existing kind cluster
+- A reviewed namespace, image source, Secret store, and network policy
+- Four distinct random API tokens, each at least 32 characters
+- The approved Slack workspace and channel IDs
 
 ## 1. Check and build
+
+The commands in Steps 1–5 are for the reviewed Kubernetes path above. Do not
+run them against an unknown production cluster. Choose the actual image
+registry, architecture, namespace, and rollout procedure in the deployment
+plan first. `check-package.py` also asks the **current** Kubernetes API to
+validate manifests with a server-side dry run. Check the active `kubectl`
+context before using it, or run the check against a disposable cluster.
 
 ```bash
 ./scripts/check-package.py
@@ -57,11 +131,19 @@ shown by `kubectl config current-context`):
 kind load docker-image centaur-context:0.3.0 --name <exact-kind-cluster-name>
 ```
 
-For other Kubernetes environments, push the image to an accessible registry and
-use that immutable image reference during installation. Do not continue with a
-tag that the cluster cannot pull or resolve.
+For other Kubernetes environments, make the image available through an
+approved registry and use its immutable identity during installation. Do not
+continue with a tag that the cluster cannot pull or resolve. The image is
+buildable for `linux/amd64` and `linux/arm64`, but this release's verified
+container architecture is `linux/arm64`; prove the image on the target
+architecture rather than assuming it works there.
 
 ## 2. Create the database
+
+This step runs against the **PostgreSQL server chosen for Context**, not
+Centaur's application database. If that server is shared, the script still
+creates a new database and role; the server owner should review and authorize
+that change first. Do not run it with a URL pointing at a Centaur database.
 
 Set these values outside source control:
 
@@ -81,6 +163,13 @@ password. Then run:
 This creates the `centaur_context` database and `centaur_context_app` role.
 
 ## 3. Create the Kubernetes Secret
+
+Create this Secret in the **Context namespace chosen in the plan**. The
+provided Kubernetes deployment expects its name to be `centaur-context-env`.
+If Centaur's Slackbot runs in another namespace, it cannot reference this
+Secret directly. Provide only the required purpose-bound tokens through
+Centaur's own approved Secret mechanism in that namespace; do not copy
+Context's `DATABASE_URL` into Centaur.
 
 Copy the keys from [`deploy/secret.example.yaml`](../deploy/secret.example.yaml)
 into a protected Secret named `centaur-context-env`:
@@ -111,11 +200,14 @@ CURATOR_MODEL_TRANSPORT
 CURATOR_MODEL_TIMEOUT_SECONDS
 ```
 
-The tested proof of concept uses `centaur_subscription`, Centaur's private
+The audited proof of concept uses `centaur_subscription`, Centaur's private
 inference URL, a purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model
 `gpt-5.6-luna`. That private inference route is another change in the
 maintainer's Centaur fork. It is separate from the two Slack hooks described in
-Step 6 and is not available in stock Centaur.
+Step 6 and is not available in stock Centaur. Use the actual **private**
+api-rs address from the deployment plan, not an example hostname. Context
+must be able to reach that route; its token must not grant broader Centaur API
+access.
 
 Without model settings, Curator Runs stay queued. `direct_api` exists as a
 rollback path. If its model provider is outside the cluster, review
@@ -147,9 +239,16 @@ these values, Artifact and Object full-text search remains available.
 
 ## 4. Install
 
+This script applies the repository's Context Deployment, Services, and
+NetworkPolicy to the chosen Kubernetes namespace. Its policy assumes specific
+same-namespace Centaur pod labels and service destinations. Check those labels
+and all required paths against the real cluster before `--apply`; if they do
+not match, do not use the default policy unchanged. The script does not deploy
+or modify Centaur, and it does not install into a non-Kubernetes environment.
+
 ```bash
 export CENTAUR_CONTEXT_KUBE_CONTEXT=<exact-kubectl-context>
-export CENTAUR_CONTEXT_NAMESPACE=<existing-centaur-namespace>
+export CENTAUR_CONTEXT_NAMESPACE=<reviewed-context-namespace>
 ./scripts/install-kubernetes.sh --image centaur-context:0.3.0 --apply
 ```
 
@@ -192,6 +291,11 @@ scaled-down resources for rollback. Do not delete them during the rename.
 
 ## 5. Open the UI
 
+In the Kubernetes recipe, the human UI is intentionally private; use an
+approved port-forward from the chosen namespace. In another hosting layout,
+use that environment's private access method. Do not add public ingress
+merely to make this example URL work.
+
 ```bash
 kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" \
   --namespace "$CENTAUR_CONTEXT_NAMESPACE" \
@@ -203,10 +307,12 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 
 ## 6. Connect Centaur
 
-This is the only step that connects to Centaur. The settings below do not add
-code to stock Centaur. They turn on code that already exists in a compatible
-fork. Installing Context beside stock Centaur without those fork changes will
-not create an automatic Slack-to-Context connection.
+This is the only step that configures an existing Centaur deployment to talk to
+Context. The settings below do not add code to stock Centaur. They turn on
+code that already exists in a compatible fork. Installing Context beside stock
+Centaur without those fork changes will not create an automatic
+Slack-to-Context connection. Have the developer review the exact fork changes
+before enabling them in their environment.
 
 ### What changed in the maintainer's Centaur fork
 
@@ -258,13 +364,19 @@ The hooks are automatic. The Python tool in [`tools/centaur_context`](../tools/c
 is different: an agent can use it when it needs an extra search or an authorized
 Note or Task write.
 
-Load this release's `tools` directory through Centaur's overlay mechanism. Give
+If the developer wants explicit agent searches or authorized Note/Task writes,
+load this release's `tools` directory through Centaur's overlay mechanism. Give
 iron-proxy `AGENT_API_TOKEN` for reads and the separate `NOTE_WRITE_API_TOKEN`
-for Note and Task writes. Never give either real token to the agent sandbox.
+for writes. Never give either real token to the agent sandbox. This tool is
+optional; an overlay can deliver the tool, but an overlay alone does not add
+the automatic Slackbot hooks.
 
 ### Hook configuration
 
-In a compatible Centaur fork, configure Slackbot v2 like this:
+This is **one example for a shared Kubernetes namespace**, not a set of URLs
+to paste into every Centaur deployment. In a compatible Centaur fork, adapt
+Slackbot v2's values to the actual private Context endpoints and approved
+Secrets from the deployment plan:
 
 ```yaml
 slackbotv2:
@@ -274,7 +386,7 @@ slackbotv2:
     secretName: centaur-context-env
     secretKey: CHAT_INGEST_API_TOKEN
     usage:
-      provider: openai
+      provider: unknown
       authMode: unknown
       billingMode: unknown
       upstreamService: unknown
@@ -287,17 +399,28 @@ slackbotv2:
     secretKey: AGENT_API_TOKEN
 ```
 
-The required network access is:
+The required paths for the features shown above are:
 
 - Slackbot v2 to port `8082` for conversation ingestion.
 - Slackbot v2 to port `8081` for automatic context retrieval.
-- Iron-proxy to port `8081` for explicit agent reads.
-- Iron-proxy to port `8084` for authorized Note and Task writes.
+- Iron-proxy to port `8081` for explicit agent reads **only if the optional
+  tool is enabled**.
+- Iron-proxy to port `8084` for authorized Note and Task writes **only if
+  those writes are enabled**.
+- Context to api-rs port `8080` **only if subscription Curator inference is
+  enabled**; direct-provider mode instead needs reviewed provider egress.
 
-The checked-in Context NetworkPolicy currently allows Slackbot v2 to reach port
-`8082`, but not port `8081`. This is a known proof-of-concept gap. Automatic
-context injection is not complete until the deployed policy also permits that
-Slackbot-to-`8081` connection.
+Check **both sides** of each path: the caller's egress rule, the receiver's
+ingress rule, DNS/routing, and the actual listening service. In the checked-in
+Kubernetes package, Context's NetworkPolicy permits ingress from a specifically
+labelled Slackbot to `8082`, but **not** to `8081`. The public Centaur fork chart
+also does not add Slackbot egress to in-cluster Context ports `8081` and `8082`.
+The example will therefore not complete automatic retrieval merely by setting
+the URLs. The deployment owner must provide reviewed policy for those paths,
+or use an approved **private** reachable HTTPS route, and then prove it with a
+real request. Do not add public ingress merely to make the example work.
+If pod labels or namespaces differ, the checked-in selectors will not match;
+adapt them rather than assuming Centaur uses the maintainer's labels.
 
 Context checks the bearer token and exact Slack workspace/channel pair. It also
 requires the canonical Chat ID to match the Slack thread identity. Rejected
@@ -316,10 +439,12 @@ surfaces are not stored.
 If either hook fails, the normal Centaur reply should still continue. The hooks
 add Context; they must not make Context a requirement for ordinary Centaur use.
 
-## 7. Prove the loop
+## 7. Prove the loop in your deployment
 
-This proof requires a compatible fork and network policy; stock Centaur cannot
-run it yet.
+This proof requires compatible Slackbot fork code, reachable endpoints, and
+the approved network policy; stock Centaur cannot run it yet. Use a staging or
+otherwise approved Slack surface. A successful container rollout or `/readyz`
+response alone does not prove that Context is being used.
 
 1. Send a Slack message on an approved surface.
 2. Confirm the Chat and completed interaction Run appear in the Context UI.
@@ -329,12 +454,27 @@ run it yet.
    conversation contains durable information.
 5. Start a later Slack interaction and confirm its Run records successful context
    retrieval before the LLM starts.
+6. Make Context unavailable in the **test environment** and confirm Centaur
+   still sends an ordinary Slack reply. Restore Context afterward.
+
+If the installation uses subscription Curator inference, also prove one
+purpose-bound private request reaches Centaur's Curator route, returns the
+expected structured result, and stops its temporary sandbox. If it uses a
+direct provider, prove that route and credential instead. If either path
+cannot be exercised, record the missing evidence and do not call the model
+integration verified.
 
 If Slack does not reply, check Centaur's Slack transport. If it replies without
 context, check the context URL, token, NetworkPolicy, and Curator Run. Queued
 Curator Runs usually warrant checking the model settings above.
 
 ## Maintenance
+
+The database backup and restore steps below apply to Context's guarded
+database names. The deployment upgrade, name-handoff rollback, and uninstall
+commands are for the supplied **Kubernetes** package. An operator using a
+different hosting method must provide and test equivalent procedures; these
+commands do not manage their environment.
 
 Database scripts only operate on Context's canonical or legacy database names,
 explicitly confirmed Context test databases, or the narrowly confirmed private
