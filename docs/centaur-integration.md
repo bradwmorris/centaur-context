@@ -5,8 +5,8 @@ and Centaur core. The Context database, UI, Curator, and retrieval system remain
 in the App; Centaur only needs generic points for exchanging completed
 interactions and relevant pre-execution context.
 
-See [Architecture](architecture.md) for the broader packaging, trust, and
-proposed App lifecycle model.
+See [Schema and ontology](schema.md) for the shared knowledge model. This
+contract covers the App boundary and required Centaur hooks.
 
 This repository does not install Centaur. Install and verify Centaur using its
 official [Quickstart](https://centaur.run/quickstart), then return here only to
@@ -17,8 +17,8 @@ evaluate or connect Centaur Context.
 There are two distinct reviews:
 
 1. **Design review, with no installation:** read this contract and
-   [Architecture](architecture.md). This is enough to inspect the proposed App
-   boundary, data ownership, security model, and required Centaur hooks. Do not
+   [Schema and ontology](schema.md). This is enough to inspect the proposed App
+   boundary, data ownership, security boundary, and required Centaur hooks. Do not
    create a Context database merely to review the proposal.
 2. **Working integration review:** first confirm that
    [`compatibility.toml`](../compatibility.toml) names a current tested Centaur
