@@ -1,21 +1,21 @@
 # Setup and operations
 
-This installs Centaur Context beside Centaur. It does not use or change Centaur's
-database.
+> [!IMPORTANT]
+> This is an independent proof of concept. Centaur and Paradigm do not recommend
+> modifying the base Centaur repository for this project. To prove the idea, the
+> maintainer's Centaur fork adds two small, optional hooks so Centaur Context can
+> run beside Centaur. Stock Centaur does not contain these hooks. This repository
+> does not yet name a current, tested Centaur revision, so do not treat these
+> instructions as a supported production installation.
 
-This is not a Centaur installation guide. Begin with an existing Centaur
-deployment created and verified using Centaur's official
-[Quickstart](https://centaur.run/quickstart). Every command below installs,
-configures, verifies, upgrades, or removes Centaur Context only.
+Centaur Context is a separate service with a separate database. It does not use
+or change Centaur's database.
 
-> **Current installation model:** Centaur's proposed App system is not
-> implemented in production, so Context is installed manually as a companion
-> service today. The complete Slack loop also needs two optional hooks currently
-> carried in the maintainer's Centaur fork. Read the
-> [Centaur integration contract](centaur-integration.md) before choosing or
-> modifying a Centaur revision. Do not treat the historical fork commits as a
-> supported installation until [`compatibility.toml`](../compatibility.toml)
-> records a current, tested Centaur revision.
+Start with an existing Centaur deployment created using Centaur's official
+[Quickstart](https://centaur.run/quickstart). Steps 1–5 below install Centaur
+Context only. Step 6 explains the small connection to the maintainer's Centaur
+fork. Read the [Centaur integration contract](centaur-integration.md) for the
+full design boundary.
 
 ## Requirements
 
@@ -89,7 +89,8 @@ surfaces with commas.
 
 Do not apply the example placeholders.
 
-For automatic curation, also add:
+To turn completed conversations into durable Context records automatically, the
+Curator needs access to a model. Add:
 
 ```text
 CURATOR_MODEL_API_URL
@@ -100,10 +101,14 @@ CURATOR_MODEL_TRANSPORT
 CURATOR_MODEL_TIMEOUT_SECONDS
 ```
 
-Use `centaur_subscription` (the default) with Centaur's private inference URL,
-the purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model `gpt-5.6-luna`.
-Use `direct_api` only for rollback. Without these values, curator Runs stay
-queued. If the direct model provider is outside the cluster, review
+The tested proof of concept uses `centaur_subscription`, Centaur's private
+inference URL, a purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model
+`gpt-5.6-luna`. That private inference route is another change in the
+maintainer's Centaur fork. It is separate from the two Slack hooks described in
+Step 6 and is not available in stock Centaur.
+
+Without model settings, Curator Runs stay queued. `direct_api` exists as a
+rollback path. If its model provider is outside the cluster, review
 [`deploy/provider-egress.example.yaml`](../deploy/provider-egress.example.yaml)
 before allowing that traffic.
 
@@ -188,34 +193,40 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 
 ## 6. Connect Centaur
 
-This section describes the Context endpoints and credentials that an existing
-Centaur deployment must call. It does not install or operate Centaur. Follow
-Centaur's documentation for applying configuration to that deployment.
-The concise [Integration API reference](api.md) lists every supported endpoint
-and its authentication requirements.
+This is the only step that connects to Centaur. The settings below do not add
+code to stock Centaur. They only turn on code that already exists in a compatible
+Centaur fork.
 
-- Load this release's `tools` directory through Centaur's overlay mechanism.
-- Give iron-proxy `AGENT_API_TOKEN`. Do not give it to the sandbox.
-- Give the separately authorized Note-writing tool `NOTE_WRITE_API_TOKEN` and
-  route it to `centaur-context-note-write:8084`; the separate service hostname
-  prevents ambiguity with the read credential. Do not reuse the read token or
-  expose either credential to the sandbox.
-- Configure Slack ingestion and context injection using the
-  settings below.
+### The two Slack hooks
 
-Centaur Context does not connect to Slack directly. Centaur needs two optional
-integration hooks: one sends completed interactions to Centaur Context, and the
-other gets context before an agent replies.
+Centaur Context does not connect to Slack itself. The maintainer's Centaur fork
+adds two optional hooks to Slackbot v2:
 
-The tested Centaur integration is this three-commit patch set:
+| Hook | When it runs | What it does |
+| --- | --- | --- |
+| `interactionSink` | At the start and end of a Slack agent run | Sends the Slack conversation to Context. The first call creates or finds the canonical Chat. The final call records the completed run. |
+| `contextBuilder` | Before the LLM starts | Asks Context for relevant records and adds the returned reference text to the LLM's user input. |
 
-- `225a6104` adds `slackbotv2.interactionSink`.
-- `d8a7dfc2` makes that integration portable across Centaur builds.
-- `33e7cd59` adds `slackbotv2.contextBuilder`.
+The original implementation used three historical commits, but later fork work
+added the canonical Chat ID, exact thread binding, identity, trace, usage, and
+evaluation behavior required by the current API. Those old commits are design
+history, not an installation recipe. [`compatibility.toml`](../compatibility.toml)
+must name a current, tested Centaur revision before this can be presented as a
+supported working installation.
 
-These commits modify Centaur, not Centaur Context. They are currently additions to a
-Centaur fork and are not part of Paradigm's upstream Centaur repository. Pin a
-Centaur revision containing all three.
+### Optional agent tool
+
+The hooks are automatic. The Python tool in [`tools/centaur_context`](../tools/centaur_context)
+is different: an agent can use it when it needs an extra search or an authorized
+Note or Task write.
+
+Load this release's `tools` directory through Centaur's overlay mechanism. Give
+iron-proxy `AGENT_API_TOKEN` for reads and the separate `NOTE_WRITE_API_TOKEN`
+for Note and Task writes. Never give either real token to the agent sandbox.
+
+### Hook configuration
+
+In a compatible Centaur fork, configure Slackbot v2 like this:
 
 ```yaml
 slackbotv2:
@@ -238,24 +249,48 @@ slackbotv2:
     secretKey: AGENT_API_TOKEN
 ```
 
-The Slack transport needs network access to port `8082`. Iron-proxy needs
-access to port `8081`. Agent sandboxes receive neither real token.
+The required network access is:
 
-Centaur Context checks the bearer token and the exact Slack workspace/channel pair.
-Rejected surfaces are not stored.
+- Slackbot v2 to port `8082` for conversation ingestion.
+- Slackbot v2 to port `8081` for automatic context retrieval.
+- Iron-proxy to port `8081` for explicit agent reads.
+- Iron-proxy to port `8084` for authorized Note and Task writes.
 
-The standard client lives in [`tools/centaur_context`](../tools/centaur_context).
-Use `get-context`, `search-objects`, and `read-object` for basic retrieval.
-Context requests must carry the canonical Chat ID and matching
-`X-Centaur-Thread-Key`; general search does not require a Chat.
+The checked-in Context NetworkPolicy currently allows Slackbot v2 to reach port
+`8082`, but not port `8081`. This is a known proof-of-concept gap. Automatic
+context injection is not complete until the deployed policy also permits that
+Slackbot-to-`8081` connection.
+
+Context checks the bearer token and exact Slack workspace/channel pair. It also
+requires the canonical Chat ID to match the Slack thread identity. Rejected
+surfaces are not stored.
+
+### One Slack turn, from start to finish
+
+1. A user sends a Slack message to Centaur.
+2. The interaction sink creates or finds the matching Context Chat.
+3. The Context Builder asks Context for records related to the user's message.
+4. Centaur adds that short reference packet to the user input and starts the LLM.
+5. Centaur sends the LLM's answer back to Slack.
+6. The interaction sink sends the completed conversation and run record to
+   Context.
+
+If either hook fails, the normal Centaur reply should still continue. The hooks
+add Context; they must not make Context a requirement for ordinary Centaur use.
 
 ## 7. Prove the loop
 
-1. Send a Slack interaction on an approved surface.
-2. Reply `done` or `finished`, or wait 10 minutes.
-3. Confirm the Chat and completed Curator Run appear in the UI. A Memory is
-   created only when the conversation contains durable information.
-4. Start a new interaction and confirm the agent receives the saved context.
+This proof requires a compatible fork and network policy; stock Centaur cannot
+run it yet.
+
+1. Send a Slack message on an approved surface.
+2. Confirm the Chat and completed interaction Run appear in the Context UI.
+3. Reply `done` or `finished`, or wait 10 minutes, to make the conversation ready
+   for curation.
+4. Confirm the Curator Run completes. A Memory is created only when the
+   conversation contains durable information.
+5. Start a later Slack interaction and confirm its Run records successful context
+   retrieval before the LLM starts.
 
 If Slack does not reply, check Centaur's Slack transport. If it replies without
 context, check the context URL, token, NetworkPolicy, and Curator Run. Queued
