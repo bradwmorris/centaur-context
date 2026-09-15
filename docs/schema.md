@@ -4,7 +4,7 @@ I’ve tried a few approaches to agent memory: Neo4j and graph queries at one en
 
 Centaur Context takes a middle path. It uses PostgreSQL, but arranges knowledge like a small graph. The main things are **Objects**; **Connections** link them. Each Object also has a written description, so it can be found through text search and, when enabled, semantic search. For the relationships this proof of concept needs, there is no separate graph database.
 
-![Centaur Context Objects, Connections, Object types, and supporting records](images/schema-diagram-v2.png)
+![Centaur Context Objects, Connections, Object types, and supporting records](images/schema-diagram-v3.png)
 
 ## Objects
 

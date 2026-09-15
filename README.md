@@ -62,7 +62,7 @@ I’ve tried a few ways to build agent memory: Neo4j and graph queries, and the 
 
 Centaur Context takes a middle path. It uses PostgreSQL, but stores knowledge in a graph-shaped structure. Each first-class thing is an **Object** with a stable ID, a type, a title, and a clear description. The current types are Tasks, Chats, Users, Entities, Memories, Sources, Notes, and Themes.
 
-![Centaur Context Objects, Connections, Object types, and supporting records](docs/images/schema-diagram-v2.png)
+![Centaur Context Objects, Connections, Object types, and supporting records](docs/images/schema-diagram-v3.png)
 
 **Connections** link Objects. Each Connection says what the relationship is and explains *why* it exists. For example, a Memory might be `derived_from` a Chat, or a Task might `depend_on` another Object. This lets agents search for something and then look at nearby, related knowledge without a separate graph database.
 
