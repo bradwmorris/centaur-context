@@ -1,21 +1,31 @@
 # Setup and operations
 
 > [!IMPORTANT]
-> This is an independent proof of concept. Centaur and Paradigm do not recommend
-> modifying the base Centaur repository for this project. To prove the idea, the
-> maintainer's Centaur fork adds two small, optional hooks so Centaur Context can
-> run beside Centaur. Stock Centaur does not contain these hooks. This repository
-> does not yet name a current, tested Centaur revision, so do not treat these
-> instructions as a supported production installation.
+> This is an independent proof of concept, not a change to Paradigm's original
+> Centaur repository. The changes described here are in the maintainer's public
+> fork, `bradwmorris/centaur`. Stock `paradigmxyz/centaur` does not include the
+> Context connection. If you maintain another Centaur fork, review and apply
+> only the changes you need to **your own fork**; do not push them to Paradigm's
+> repository. The fork has more than two changes: the two Slack connection points
+> depend on later identity and evidence work, and Curator inference is a separate
+> optional integration. This repository does not yet pin a freshly end-to-end
+> tested Centaur revision, so these are not supported production instructions.
 
 Centaur Context is a separate service with a separate database. It does not use
 or change Centaur's database.
 
 Start with an existing Centaur deployment created using Centaur's official
 [Quickstart](https://centaur.run/quickstart). Steps 1–5 below install Centaur
-Context only. Step 6 explains the small connection to the maintainer's Centaur
-fork. Read the [Centaur integration contract](centaur-integration.md) for the
-full design boundary.
+Context only. Step 6 connects it to a compatible Centaur fork. Read the
+[Centaur integration contract](centaur-integration.md) for the design boundary.
+
+For a plain-English explanation of **every change in the maintainer's fork and
+its exact files**, read `docs/FORK.md` in a local checkout of
+`bradwmorris/centaur`. If the two repositories are checked out side by side,
+the file is at `../centaur/docs/FORK.md`. That new guide has not been published
+to GitHub yet. The published
+[fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
+contains the commit-by-commit evidence in the meantime.
 
 ## Requirements
 
@@ -194,25 +204,53 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). Check `/readyz` and
 ## 6. Connect Centaur
 
 This is the only step that connects to Centaur. The settings below do not add
-code to stock Centaur. They only turn on code that already exists in a compatible
-Centaur fork.
+code to stock Centaur. They turn on code that already exists in a compatible
+fork. Installing Context beside stock Centaur without those fork changes will
+not create an automatic Slack-to-Context connection.
 
-### The two Slack hooks
+### What changed in the maintainer's Centaur fork
 
 Centaur Context does not connect to Slack itself. The maintainer's Centaur fork
-adds two optional hooks to Slackbot v2:
+adds two optional connection points to Slackbot v2:
 
 | Hook | When it runs | What it does |
 | --- | --- | --- |
 | `interactionSink` | At the start and end of a Slack agent run | Sends the Slack conversation to Context. The first call creates or finds the canonical Chat. The final call records the completed run. |
 | `contextBuilder` | Before the LLM starts | Asks Context for relevant records and adds the returned reference text to the LLM's user input. |
 
-The original implementation used three historical commits, but later fork work
-added the canonical Chat ID, exact thread binding, identity, trace, usage, and
-evaluation behavior required by the current API. Those old commits are design
-history, not an installation recipe. [`compatibility.toml`](../compatibility.toml)
-must name a current, tested Centaur revision before this can be presented as a
-supported working installation.
+Those are **not** the only fork changes. The current Context integration also
+needs these supporting changes:
+
+- **One stable conversation identity:** all replies in a Slack thread use the
+  same Context Chat, based on workspace, channel, and root message timestamp.
+- **Correct people and message identity:** the Slackbot refreshes participant
+  profiles and records the timestamp of the message that triggered each run.
+- **Usage and reviewable Runs:** the Slackbot records model-token usage, whether
+  the run succeeded, what Context was retrieved, what instructions and tools
+  Centaur supplied or used, and which Context Objects were affected. Hidden
+  provider information is marked unavailable, not guessed.
+- **Configuration and Secrets:** the fork's Helm chart supplies the Context
+  URLs, tokens, and timeouts to Slackbot without putting credentials in source
+  control.
+
+The fork has other changes that are **not part of those two Slack connections**:
+
+- **Subscription Curator inference:** a private Centaur API can run Context's
+  Curator through a temporary, tool-free Centaur sandbox. This is needed only
+  for `centaur_subscription` model transport, not for `direct_api`.
+- **Several Slack apps:** separate routes, credentials, personas, and identities
+  are available when one Centaur deployment hosts multiple Slack apps. A
+  single-app installation does not need this.
+- **Optional or unrelated fixes:** YouTube caption access and sandbox proxy
+  cleanup are changes in the fork, but neither is needed merely to connect
+  Context.
+
+Do not copy all fork commits or files into another fork. Choose the required
+parts for the deployment using the Centaur fork's `docs/FORK.md` guide and the
+published [fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md).
+The original hook commits are history, not an installation recipe.
+[`compatibility.toml`](../compatibility.toml) must pin a current, tested Centaur
+revision before this can be presented as a supported working installation.
 
 ### Optional agent tool
 

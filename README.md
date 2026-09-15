@@ -26,12 +26,40 @@ generic points for sending completed interactions and requesting relevant
 context before an agent turn. See [Architecture](docs/architecture.md) and the
 [Centaur integration contract](docs/centaur-integration.md).
 
+## What changed in the maintainer's Centaur fork
+
+The working proof of concept uses changes in `bradwmorris/centaur`, **not** in
+Paradigm's original `paradigmxyz/centaur` repository. Anyone can see the public
+fork on GitHub, but that does not mean its changes were added to Paradigm's
+repository. If you adapt Context for another Centaur installation, make the
+changes in **your own fork** and review them before deploying. Do not treat a
+GitHub comparison page as a request to modify the original repository.
+
+The fork contains more than two modifications:
+
+- Two Slackbot connection points send completed interactions to Context and
+  fetch relevant Context before Centaur answers.
+- Supporting changes keep one stable Context Chat per Slack thread, identify
+  participants and triggering messages correctly, and record model usage,
+  completed Runs, and reviewable retrieval/tool/instruction evidence.
+- A separate private Curator API lets Context use Centaur's subscription-backed
+  model access. Direct-provider mode does not need that fork change.
+- Multi-Slack-app support is optional. YouTube caption access and sandbox proxy
+  cleanup are fork changes but are not Context requirements.
+
+For the exact changed files, reasons, and minimum changes another fork needs,
+read `docs/FORK.md` in a local checkout of `bradwmorris/centaur`. The file is at
+`../centaur/docs/FORK.md` when the repositories are side by side. It has not
+been published to GitHub yet. The published
+[fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
+provides the detailed evidence until then.
+
 ## Evaluate before installing
 
 You do not need to create a database or run any commands to evaluate the design.
 Start with [Architecture](docs/architecture.md) to understand what Context owns,
 then read the [Centaur integration contract](docs/centaur-integration.md) to see
-the two optional hooks it needs from Centaur.
+the two connection points and their supporting requirements.
 
 Only follow [Setup and operations](docs/setup.md) when you already operate a
 compatible Centaur revision and want to evaluate the working integration. The
