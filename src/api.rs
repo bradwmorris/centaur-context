@@ -168,7 +168,8 @@ pub fn note_write_router(state: AppState, token: String) -> Router {
             Router::new()
                 .route("/notes", post(create_note))
                 .route("/tasks", post(create_task))
-                .route("/tasks/{id}", axum::routing::patch(update_task)),
+                .route("/tasks/{id}", axum::routing::patch(update_task))
+                .route("/objects/{id}/artifacts", post(create_artifact)),
         )
         .with_state(state)
         .layer(middleware::from_fn_with_state(

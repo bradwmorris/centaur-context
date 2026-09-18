@@ -659,6 +659,56 @@ class CentaurContextClient:
             raise ValueError("note_id is required")
         return self._request("GET", f"/api/v2/notes/{quote(note_id, safe='')}")
 
+    def append_artifact(
+        self,
+        object_id: str,
+        *,
+        kind: str,
+        content: str,
+        expected_revision: int | None = None,
+        title: str | None = None,
+        media_type: str | None = "text/plain",
+        language: str | None = None,
+        captured_at: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        supersedes_artifact_id: str | None = None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Append complete supporting text through the scoped writer."""
+        object_id = _required(object_id, "object_id")
+        kind = _required(kind, "kind")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("content is required")
+        if len(kind) > 100:
+            raise ValueError("kind must be at most 100 characters")
+        if len(content) > 10_000_000:
+            raise ValueError("content must be at most 10000000 characters")
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("metadata must be a JSON object")
+        payload: dict[str, Any] = {
+            "expected_revision": expected_revision,
+            "kind": kind,
+            "title": _clean(title) or None,
+            "content": content,
+            "uri": None,
+            "media_type": _clean(media_type) or None,
+            "language": _clean(language) or None,
+            "captured_at": _clean(captured_at) or None,
+            "capture_outcome": "complete",
+            "capture_reason": None,
+            "expected_size_bytes": None,
+            "metadata": metadata or {},
+            "supersedes_artifact_id": _clean(supersedes_artifact_id) or None,
+        }
+        return self._request(
+            "POST",
+            f"/api/v2/objects/{quote(object_id, safe='')}/artifacts",
+            json=payload,
+            idempotency_key=idempotency_key,
+            token=self._note_write_token(),
+            base_url=self.note_write_url,
+        )
+
     def create_note(
         self,
         title: str,

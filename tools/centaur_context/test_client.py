@@ -337,6 +337,33 @@ def test_create_note_accepts_documented_provenance_on_first_request():
     assert payload["derived_from_note_object_ids"] == []
 
 
+def test_append_artifact_uses_the_scoped_writer_and_preserves_content():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"id": "artifact-1"})
+
+    result = privileged_client(handler).append_artifact(
+        "source-1",
+        kind="research_notes",
+        title="Session notes",
+        content="  Preserve these exact working notes.  ",
+        expected_revision=3,
+        metadata={"source_type": "human_supplied"},
+        idempotency_key="artifact-1",
+    )
+
+    assert result["id"] == "artifact-1"
+    assert requests[0].url.host == "notes.test"
+    assert requests[0].url.path == "/api/v2/objects/source-1/artifacts"
+    assert requests[0].headers["authorization"] == "Bearer " + "n" * 32
+    payload = json.loads(requests[0].content)
+    assert payload["content"] == "  Preserve these exact working notes.  "
+    assert payload["capture_outcome"] == "complete"
+    assert payload["kind"] == "research_notes"
+
+
 def test_create_note_rejects_unknown_intent_before_request():
     with pytest.raises(ValueError, match="intent must be excerpt, insight, or question"):
         privileged_client(lambda _: response({})).create_note(
