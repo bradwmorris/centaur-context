@@ -83,6 +83,16 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+    let networking_mutation_listener = if let Some(mutation) = config.networking_mutation.as_ref() {
+        Some((
+            TcpListener::bind(mutation.addr)
+                .await
+                .context("bind Networking mutation listener")?,
+            mutation.clone(),
+        ))
+    } else {
+        None
+    };
     let external_action_listener = if let Some(external_actions) = config.external_actions.as_ref()
     {
         Some((
@@ -124,6 +134,13 @@ async fn main() -> Result<()> {
     });
     let research_mutation = research_mutation_listener.as_ref().map(|(_, config)| {
         centaur_context::research_mutation::router(
+            state.clone(),
+            config.api_token.clone(),
+            config.allowed_principal.clone(),
+        )
+    });
+    let networking_mutation = networking_mutation_listener.as_ref().map(|(_, config)| {
+        centaur_context::networking_mutation::router(
             state.clone(),
             config.api_token.clone(),
             config.allowed_principal.clone(),
@@ -208,6 +225,11 @@ async fn main() -> Result<()> {
     } else {
         info!("Research mutation listener disabled");
     }
+    if let Some((_, config)) = networking_mutation_listener.as_ref() {
+        info!(address = %config.addr, "Networking mutation listener ready");
+    } else {
+        info!("Networking mutation listener disabled");
+    }
     if let Some((_, config)) = external_action_listener.as_ref() {
         info!(address = %config.addr, "External-action listener ready");
     } else {
@@ -245,6 +267,18 @@ async fn main() -> Result<()> {
         }
     };
 
+    let networking_mutation_server = async move {
+        if let (Some((listener, _)), Some(router)) =
+            (networking_mutation_listener, networking_mutation)
+        {
+            axum::serve(listener, router)
+                .await
+                .context("Networking mutation server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
+
     let external_action_server = async move {
         if let (Some((listener, _)), Some(router)) = (external_action_listener, external_actions) {
             axum::serve(listener, router)
@@ -264,6 +298,7 @@ async fn main() -> Result<()> {
         result = intake_server => result?,
         result = source_intake_server => result?,
         result = research_mutation_server => result?,
+        result = networking_mutation_server => result?,
         result = external_action_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),

@@ -282,5 +282,6 @@ printf '%s\\n' "$*" >> "$KUBECTL_LOG"
         "service/centaur-context-source-intake",
         "service/centaur-context-research-mutation",
         "service/centaur-context-external-action",
+        "service/centaur-context-networking-mutation",
     ]:
         assert resource in invocation

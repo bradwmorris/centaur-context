@@ -42,6 +42,8 @@ spec:
               containerPort: 8087
             - name: external-action
               containerPort: 8088
+            - name: net-mutation
+              containerPort: 8089
           env:
             - name: DATABASE_URL
               valueFrom:
