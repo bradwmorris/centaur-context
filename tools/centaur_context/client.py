@@ -673,6 +673,7 @@ class CentaurContextClient:
         metadata: dict[str, Any] | None = None,
         supersedes_artifact_id: str | None = None,
         idempotency_key: str,
+        thread_key: str | None = None,
     ) -> dict[str, Any]:
         """Append complete supporting text through the scoped writer."""
         object_id = _required(object_id, "object_id")
@@ -707,6 +708,7 @@ class CentaurContextClient:
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
             base_url=self.note_write_url,
+            thread_key=thread_key,
         )
 
     def create_note(
@@ -724,6 +726,7 @@ class CentaurContextClient:
         derived_from_source_object_ids: list[str] | None = None,
         derived_from_note_object_ids: list[str] | None = None,
         idempotency_key: str,
+        thread_key: str | None = None,
     ) -> dict[str, Any]:
         """Create a Note with the separate, narrowly scoped write credential."""
         title = _clean(title)
@@ -776,6 +779,7 @@ class CentaurContextClient:
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
             base_url=self.note_write_url,
+            thread_key=thread_key,
         )
 
     def create_task(
@@ -793,6 +797,7 @@ class CentaurContextClient:
         originating_chat_object_id: str | None = None,
         derived_from_source_object_ids: list[str] | None = None,
         idempotency_key: str,
+        thread_key: str | None = None,
     ) -> dict[str, Any]:
         """Create an open Task with the separate, narrowly scoped write credential."""
         title = _clean(title)
@@ -845,6 +850,7 @@ class CentaurContextClient:
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
             base_url=self.note_write_url,
+            thread_key=thread_key,
         )
 
     def update_task(
