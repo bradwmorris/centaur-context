@@ -13,7 +13,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
@@ -23,12 +22,12 @@ use uuid::Uuid;
 use crate::{
     api::AppState,
     config::{CuratorModelConfig, CuratorModelTransport},
-    domain::{
-        CONNECTION_KINDS, TASK_PRIORITIES, TASK_STATUSES, allowed, optional_text, required_text,
-    },
+    domain::{allowed, required_text},
 };
 
 const MAX_OPERATIONS: usize = 100;
+const CURATOR_CONNECTION_KINDS: &[&str] =
+    &["involves", "about", "themed", "related_to", "derived_from"];
 
 #[derive(Clone)]
 struct CuratorAuth(Arc<String>);
@@ -48,6 +47,7 @@ pub enum CuratorError {
 use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReconciliationPlan {
     #[serde(default)]
     pub create_objects: Vec<CreateObject>,
@@ -60,6 +60,7 @@ pub struct ReconciliationPlan {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateObject {
     pub client_id: String,
     pub kind: String,
@@ -74,6 +75,7 @@ pub struct CreateObject {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateObject {
     pub object_id: Uuid,
     pub expected_revision: i64,
@@ -84,6 +86,7 @@ pub struct UpdateObject {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskFields {
     pub confirmed: bool,
     #[serde(default = "default_status")]
@@ -101,6 +104,7 @@ pub struct TaskFields {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskPatch {
     pub confirmed: bool,
     pub status: Option<String>,
@@ -125,6 +129,7 @@ pub struct TaskPatch {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryFields {
     pub primary_event: bool,
     #[serde(with = "time::serde::rfc3339")]
@@ -132,6 +137,7 @@ pub struct MemoryFields {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceFields {
     pub source_kind: String,
     pub canonical_uri: Option<String>,
@@ -149,6 +155,7 @@ pub struct SourceFields {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactFields {
     pub kind: String,
     pub title: Option<String>,
@@ -167,13 +174,14 @@ fn empty_object() -> Value {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum ObjectRef {
     Existing { object_id: Uuid },
     Created { client_id: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateConnection {
     pub source: ObjectRef,
     pub kind: String,
@@ -183,6 +191,7 @@ pub struct CreateConnection {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateConnection {
     pub connection_id: Uuid,
     pub expected_revision: i64,
@@ -470,9 +479,23 @@ async fn reconcile_owned(
     let run = lock_run(&mut tx, run_id).await?;
     if run.status == "completed" {
         if run.proposed_plan.as_ref() == Some(&plan_json) {
-            return Ok(run
+            let mut result = run
                 .result
-                .unwrap_or_else(|| json!({"run_id": run_id, "status": "completed"})));
+                .unwrap_or_else(|| json!({"run_id": run_id, "status": "completed"}));
+            if let Some(object) = result.as_object_mut() {
+                object.retain(|key, _| {
+                    [
+                        "run_id",
+                        "status",
+                        "chat_object_id",
+                        "created_objects",
+                        "change_count",
+                        "skipped_operations",
+                    ]
+                    .contains(&key.as_str())
+                });
+            }
+            return Ok(result);
         }
         return Err(CuratorError::Conflict);
     }
@@ -481,6 +504,15 @@ async fn reconcile_owned(
     {
         return Err(CuratorError::Conflict);
     }
+    // Revalidate the normalized plan inside the same transaction that commits it.
+    // The earlier validation is model/API feedback; this is the authority boundary.
+    validate_plan(&mut plan)?;
+    let message_window = load_message_window(&mut tx, &run).await?;
+    let message_ids = message_window.keys().copied().collect::<HashSet<_>>();
+    validate_message_refs(&plan, &message_ids)?;
+    validate_human_grounded_objects(&plan, &message_window)?;
+    validate_commit_policy(&mut tx, &plan, &run).await?;
+
     if run.status != "running" {
         sqlx::query(
             r#"UPDATE runs SET status='running',started_at=COALESCE(started_at,now()),
@@ -497,12 +529,7 @@ async fn reconcile_owned(
             .await?;
     }
 
-    let message_window = load_message_window(&mut tx, &run).await?;
-    let message_ids = message_window.keys().copied().collect::<HashSet<_>>();
-    validate_message_refs(&plan, &message_ids)?;
-    validate_human_grounded_objects(&plan, &message_window)?;
     let mut created = HashMap::new();
-    let mut changed_objects = HashMap::new();
     let mut sequence = 0_i32;
     let mut skipped_operations = 0_i32;
 
@@ -535,93 +562,6 @@ async fn reconcile_owned(
         )
         .await?;
         created.insert(item.client_id.clone(), id);
-        changed_objects.insert(
-            id,
-            item.supporting_message_ids
-                .iter()
-                .copied()
-                .collect::<HashSet<_>>(),
-        );
-    }
-
-    for item in &plan.update_objects {
-        let current = current_object(&mut tx, item.object_id).await?;
-        if current.protected || current.lifecycle != "active" {
-            skipped_operations += 1;
-            continue;
-        }
-        if current.revision != item.expected_revision {
-            return Err(CuratorError::Conflict);
-        }
-        if current.kind == "chat" || current.kind == "user" {
-            skipped_operations += 1;
-            continue;
-        }
-        validate_task_patch(&current.kind, item.task.as_ref())?;
-        crate::domain::validate_object_description(
-            item.title.as_deref().unwrap_or(&current.title),
-            item.description.as_deref().unwrap_or(&current.description),
-        )
-        .map_err(invalid)?;
-        if item
-            .title
-            .as_ref()
-            .is_none_or(|value| value == &current.title)
-            && item
-                .description
-                .as_ref()
-                .is_none_or(|value| value == &current.description)
-            && item.task.is_none()
-        {
-            skipped_operations += 1;
-            continue;
-        }
-        sequence += 1;
-        let before = current_object_json(&current);
-        let provenance = curator_provenance(
-            run_id,
-            run.chat_object_id,
-            &item.supporting_message_ids,
-            model,
-            prompt_version,
-        );
-        update_object(&mut tx, &current, item, &provenance).await?;
-        let after = object_snapshot(&mut tx, item.object_id).await?;
-        insert_change(
-            &mut tx,
-            run_id,
-            sequence,
-            "object",
-            item.object_id,
-            "updated",
-            Some(&before),
-            &after,
-            current.revision + 1,
-        )
-        .await?;
-        insert_event(
-            &mut tx,
-            run_id,
-            if current.kind == "task" {
-                "task"
-            } else {
-                "object"
-            },
-            item.object_id,
-            item.object_id,
-            "updated",
-            Some(current.revision),
-            current.revision + 1,
-            json!({"supporting_message_ids": item.supporting_message_ids}),
-        )
-        .await?;
-        changed_objects.insert(
-            item.object_id,
-            item.supporting_message_ids
-                .iter()
-                .copied()
-                .collect::<HashSet<_>>(),
-        );
     }
 
     for item in &plan.create_connections {
@@ -687,69 +627,6 @@ async fn reconcile_owned(
         insert_event(&mut tx, run_id, "connection", id, source, "connected", None, 1, json!({"kind": item.kind, "target_object_id": target, "supporting_message_ids": item.supporting_message_ids})).await?;
     }
 
-    for item in &plan.update_connections {
-        let current = current_connection(&mut tx, item.connection_id).await?;
-        if current.protected || current.archived_at.is_some() {
-            skipped_operations += 1;
-            continue;
-        }
-        if current.revision != item.expected_revision {
-            return Err(CuratorError::Conflict);
-        }
-        if item
-            .kind
-            .as_ref()
-            .is_none_or(|value| value == &current.kind)
-            && item
-                .description
-                .as_ref()
-                .is_none_or(|value| value == &current.description)
-        {
-            skipped_operations += 1;
-            continue;
-        }
-        sequence += 1;
-        let before = connection_json(&current);
-        let provenance = curator_provenance(
-            run_id,
-            run.chat_object_id,
-            &item.supporting_message_ids,
-            model,
-            prompt_version,
-        );
-        sqlx::query(
-            r#"UPDATE connections SET kind=COALESCE($3,kind),description=COALESCE($4,description),
-                  provenance=$5,revision=revision+1,updated_by_type='system',updated_by_id='context-curator',updated_at=now()
-               WHERE id=$1 AND revision=$2 AND archived_at IS NULL"#,
-        ).bind(item.connection_id).bind(item.expected_revision).bind(&item.kind).bind(&item.description).bind(&provenance).execute(&mut *tx).await?;
-        let after = connection_snapshot(&mut tx, item.connection_id).await?;
-        insert_change(
-            &mut tx,
-            run_id,
-            sequence,
-            "connection",
-            item.connection_id,
-            "updated",
-            Some(&before),
-            &after,
-            current.revision + 1,
-        )
-        .await?;
-        insert_event(
-            &mut tx,
-            run_id,
-            "connection",
-            item.connection_id,
-            current.source_object_id,
-            "updated",
-            Some(current.revision),
-            current.revision + 1,
-            json!({"supporting_message_ids": item.supporting_message_ids}),
-        )
-        .await?;
-    }
-
-    validate_derived_connections(&plan, &created, &changed_objects, run.chat_object_id)?;
     let result = json!({
         "run_id": run_id,
         "status": if sequence == 0 { "no_changes" } else { "completed" },
@@ -760,7 +637,7 @@ async fn reconcile_owned(
     });
     sqlx::query(
         r#"UPDATE runs SET status='completed',completed_at=now(),
-                  result=$3 || jsonb_build_object('committed_plan',$2::jsonb),error=NULL,updated_at=now()
+                  result=result || $3::jsonb || jsonb_build_object('committed_plan',$2::jsonb),error=NULL,updated_at=now()
            WHERE id=$1 AND kind='curator'"#,
     ).bind(run_id).bind(&plan_json).bind(&result).execute(&mut *tx).await?;
     sqlx::query("UPDATE chats SET curated_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
@@ -892,10 +769,6 @@ pub async fn undo_as(
 }
 
 pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> {
-    plan.update_objects
-        .retain(|item| item.title.is_some() || item.description.is_some() || item.task.is_some());
-    plan.update_connections
-        .retain(|item| item.kind.is_some() || item.description.is_some());
     let count = plan.create_objects.len()
         + plan.update_objects.len()
         + plan.create_connections.len()
@@ -903,6 +776,16 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
     if count > MAX_OPERATIONS {
         return Err(CuratorError::Invalid(
             "a reconciliation plan must contain at most 100 operations".into(),
+        ));
+    }
+    if !plan.update_objects.is_empty() {
+        return Err(CuratorError::Invalid(
+            "the curator cannot update or delete Objects, including Memories".into(),
+        ));
+    }
+    if !plan.update_connections.is_empty() {
+        return Err(CuratorError::Invalid(
+            "the curator cannot update or delete connections".into(),
         ));
     }
     let mut clients = HashSet::new();
@@ -914,161 +797,22 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
                 "client_id values must be unique".into(),
             ));
         }
-        item.kind = allowed(
-            std::mem::take(&mut item.kind),
-            "kind",
-            &["task", "entity", "memory", "source"],
-        )
-        .map_err(invalid)?;
+        item.kind = allowed(std::mem::take(&mut item.kind), "kind", &["memory"]).map_err(|_| {
+            CuratorError::Invalid("the curator may create only Memory Objects".into())
+        })?;
         item.title =
             required_text(std::mem::take(&mut item.title), "title", 300).map_err(invalid)?;
         item.description =
             crate::domain::object_description(&item.title, std::mem::take(&mut item.description))
                 .map_err(invalid)?;
-        match item.kind.as_str() {
-            "task" => {
-                let task = item.task.as_mut().ok_or_else(|| {
-                    CuratorError::Invalid("Task creation requires task fields".into())
-                })?;
-                validate_task_fields(task)?;
-                if item.entity_kind.is_some() || item.memory.is_some() {
-                    return Err(CuratorError::Invalid(
-                        "Task creation cannot include memory fields".into(),
-                    ));
-                }
-                if item.source.is_some() {
-                    return Err(CuratorError::Invalid(
-                        "Task creation cannot include source fields".into(),
-                    ));
-                }
-            }
-            "memory" => {
-                if item.entity_kind.is_some()
-                    || item.memory.is_none()
-                    || item.task.is_some()
-                    || item.source.is_some()
-                {
-                    return Err(CuratorError::Invalid(
-                        "Memory creation requires only memory fields".into(),
-                    ));
-                }
-            }
-            "source" => {
-                if item.entity_kind.is_some() || item.task.is_some() || item.memory.is_some() {
-                    return Err(CuratorError::Invalid(
-                        "Source creation requires only source fields".into(),
-                    ));
-                }
-                validate_source_fields(item.source.as_mut().ok_or_else(|| {
-                    CuratorError::Invalid("Source creation requires source fields".into())
-                })?)?;
-            }
-            "entity" => {
-                if item.task.is_some() || item.memory.is_some() || item.source.is_some() {
-                    return Err(CuratorError::Invalid(
-                        "Entity creation cannot include other typed fields".into(),
-                    ));
-                }
-                item.entity_kind = Some(
-                    allowed(
-                        item.entity_kind.take().ok_or_else(|| {
-                            CuratorError::Invalid("Entity creation requires entity_kind".into())
-                        })?,
-                        "entity_kind",
-                        &[
-                            "person",
-                            "organization",
-                            "product",
-                            "project",
-                            "publication",
-                            "place",
-                            "concept",
-                            "other",
-                        ],
-                    )
-                    .map_err(invalid)?,
-                );
-            }
-            _ => unreachable!(),
-        }
-    }
-    let mut updated_object_ids = HashSet::new();
-    for item in &mut plan.update_objects {
-        if !updated_object_ids.insert(item.object_id) {
+        if item.entity_kind.is_some()
+            || item.memory.is_none()
+            || item.task.is_some()
+            || item.source.is_some()
+        {
             return Err(CuratorError::Invalid(
-                "an Object may be updated only once in a reconciliation plan".into(),
+                "Memory creation requires only memory fields".into(),
             ));
-        }
-        if item.expected_revision < 1 {
-            return Err(CuratorError::Invalid(
-                "expected_revision must be positive".into(),
-            ));
-        }
-        item.title = optional_text(item.title.take(), "title", 300).map_err(invalid)?;
-        item.description =
-            optional_text(item.description.take(), "description", 2000).map_err(invalid)?;
-        if let (Some(title), Some(description)) = (&item.title, &item.description) {
-            crate::domain::validate_object_description(title, description).map_err(invalid)?;
-        }
-        if let Some(task) = &mut item.task {
-            if !task.confirmed {
-                return Err(CuratorError::Invalid(
-                    "a Task update requires an explicit confirmed instruction or commitment".into(),
-                ));
-            }
-            task.status = task
-                .status
-                .take()
-                .map(|value| allowed(value, "status", TASK_STATUSES))
-                .transpose()
-                .map_err(invalid)?;
-            task.priority = task
-                .priority
-                .take()
-                .map(|value| allowed(value, "priority", TASK_PRIORITIES))
-                .transpose()
-                .map_err(invalid)?;
-            if task.clear_owner && task.owner_object_id.is_some() {
-                return Err(CuratorError::Invalid(
-                    "clear_owner conflicts with owner_object_id".into(),
-                ));
-            }
-            if task.clear_due_at && task.due_at.is_some() {
-                return Err(CuratorError::Invalid(
-                    "clear_due_at conflicts with due_at".into(),
-                ));
-            }
-            task.blocked_reason = optional_text(task.blocked_reason.take(), "blocked_reason", 2000)
-                .map_err(invalid)?;
-            if task.clear_blocked_reason && task.blocked_reason.is_some() {
-                return Err(CuratorError::Invalid(
-                    "clear_blocked_reason conflicts with blocked_reason".into(),
-                ));
-            }
-            if task.status.as_deref() == Some("blocked")
-                && (task.clear_blocked_reason || task.blocked_reason.is_none())
-            {
-                return Err(CuratorError::Invalid(
-                    "blocked Task updates require blocked_reason".into(),
-                ));
-            }
-            task.github_issue_url =
-                optional_text(task.github_issue_url.take(), "github_issue_url", 2000)
-                    .map_err(invalid)?;
-            validate_github_issue_url(task.github_issue_url.as_deref())?;
-            if task.clear_github_issue_url && task.github_issue_url.is_some() {
-                return Err(CuratorError::Invalid(
-                    "clear_github_issue_url conflicts with github_issue_url".into(),
-                ));
-            }
-            task.brief_markdown =
-                optional_text(task.brief_markdown.take(), "brief_markdown", 100_000)
-                    .map_err(invalid)?;
-            if task.clear_brief_markdown && task.brief_markdown.is_some() {
-                return Err(CuratorError::Invalid(
-                    "clear_brief_markdown conflicts with brief_markdown".into(),
-                ));
-            }
         }
     }
     for item in &mut plan.create_connections {
@@ -1076,12 +820,17 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
             if let ObjectRef::Created { client_id } = reference {
                 *client_id =
                     required_text(std::mem::take(client_id), "client_id", 100).map_err(invalid)?;
+                if !clients.contains(client_id) {
+                    return Err(CuratorError::Invalid(format!(
+                        "unknown created Object client_id: {client_id}"
+                    )));
+                }
             }
         }
         item.kind = allowed(
             std::mem::take(&mut item.kind),
             "connection kind",
-            CONNECTION_KINDS,
+            CURATOR_CONNECTION_KINDS,
         )
         .map_err(invalid)?;
         item.description = required_text(
@@ -1091,100 +840,22 @@ pub fn validate_plan(plan: &mut ReconciliationPlan) -> Result<(), CuratorError> 
         )
         .map_err(invalid)?;
     }
-    let mut updated_connection_ids = HashSet::new();
-    for item in &mut plan.update_connections {
-        if !updated_connection_ids.insert(item.connection_id) {
+    for memory in &plan.create_objects {
+        let has_provenance = plan.create_connections.iter().any(|connection| {
+            connection.kind == "derived_from"
+                && matches!(
+                    &connection.source,
+                    ObjectRef::Created { client_id } if client_id == &memory.client_id
+                )
+                && matches!(&connection.target, ObjectRef::Existing { .. })
+                && same_message_ids(
+                    &connection.supporting_message_ids,
+                    &memory.supporting_message_ids,
+                )
+        });
+        if !has_provenance {
             return Err(CuratorError::Invalid(
-                "a connection may be updated only once in a reconciliation plan".into(),
-            ));
-        }
-        if item.expected_revision < 1 {
-            return Err(CuratorError::Invalid(
-                "expected_revision must be positive".into(),
-            ));
-        }
-        item.kind = item
-            .kind
-            .take()
-            .map(|v| allowed(v, "connection kind", CONNECTION_KINDS))
-            .transpose()
-            .map_err(invalid)?;
-        item.description = optional_text(item.description.take(), "connection description", 1000)
-            .map_err(invalid)?;
-    }
-    Ok(())
-}
-
-fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError> {
-    source.source_kind = allowed(
-        std::mem::take(&mut source.source_kind),
-        "source_kind",
-        crate::domain::SOURCE_KINDS,
-    )
-    .map_err(invalid)?;
-    source.canonical_uri =
-        optional_text(source.canonical_uri.take(), "canonical_uri", 2000).map_err(invalid)?;
-    if source
-        .canonical_uri
-        .as_ref()
-        .is_some_and(|uri| !(uri.starts_with("https://") || uri.starts_with("http://")))
-    {
-        return Err(CuratorError::Invalid(
-            "canonical_uri must use HTTP or HTTPS".into(),
-        ));
-    }
-    source.byline = optional_text(source.byline.take(), "byline", 500).map_err(invalid)?;
-    source.publisher = optional_text(source.publisher.take(), "publisher", 300).map_err(invalid)?;
-    source.published_at_precision = source
-        .published_at_precision
-        .take()
-        .map(|value| {
-            allowed(
-                value,
-                "published_at_precision",
-                &["instant", "day", "month", "year"],
-            )
-        })
-        .transpose()
-        .map_err(invalid)?;
-    if source.published_at.is_some() != source.published_at_precision.is_some() {
-        return Err(CuratorError::Invalid(
-            "published_at and published_at_precision must be provided together".into(),
-        ));
-    }
-    source.original_language =
-        optional_text(source.original_language.take(), "original_language", 35).map_err(invalid)?;
-    source.original_media_type = optional_text(
-        source.original_media_type.take(),
-        "original_media_type",
-        255,
-    )
-    .map_err(invalid)?;
-    source.original_artifact_reference = optional_text(
-        source.original_artifact_reference.take(),
-        "original_artifact_reference",
-        1000,
-    )
-    .map_err(invalid)?;
-    if let Some(content) = &mut source.content {
-        content.kind = required_text(std::mem::take(&mut content.kind), "artifact kind", 100)
-            .map_err(invalid)?;
-        content.title =
-            optional_text(content.title.take(), "artifact title", 500).map_err(invalid)?;
-        content.content = crate::domain::required_preserved_text(
-            std::mem::take(&mut content.content),
-            "artifact content",
-            10_000_000,
-        )
-        .map_err(invalid)?;
-        content.uri = optional_text(content.uri.take(), "artifact uri", 2000).map_err(invalid)?;
-        content.media_type = optional_text(content.media_type.take(), "artifact media_type", 255)
-            .map_err(invalid)?;
-        content.language =
-            optional_text(content.language.take(), "language", 35).map_err(invalid)?;
-        if !content.metadata.is_object() {
-            return Err(CuratorError::Invalid(
-                "Artifact metadata must be a JSON object".into(),
+                "every new Memory must propose a derived_from connection to its originating Chat with the same exact supporting message IDs".into(),
             ));
         }
     }
@@ -1193,70 +864,6 @@ fn validate_source_fields(source: &mut SourceFields) -> Result<(), CuratorError>
 
 fn invalid(error: impl std::fmt::Display) -> CuratorError {
     CuratorError::Invalid(error.to_string())
-}
-
-fn validate_task_fields(task: &mut TaskFields) -> Result<(), CuratorError> {
-    if !task.confirmed {
-        return Err(CuratorError::Invalid(
-            "a Task requires an explicit confirmed instruction or commitment".into(),
-        ));
-    }
-    task.status =
-        allowed(std::mem::take(&mut task.status), "status", TASK_STATUSES).map_err(invalid)?;
-    task.priority = allowed(
-        std::mem::take(&mut task.priority),
-        "priority",
-        TASK_PRIORITIES,
-    )
-    .map_err(invalid)?;
-    task.blocked_reason =
-        optional_text(task.blocked_reason.take(), "blocked_reason", 2000).map_err(invalid)?;
-    if (task.status == "blocked") != task.blocked_reason.is_some() {
-        return Err(CuratorError::Invalid(
-            "blocked_reason is required exactly when status is blocked".into(),
-        ));
-    }
-    task.github_issue_url =
-        optional_text(task.github_issue_url.take(), "github_issue_url", 2000).map_err(invalid)?;
-    validate_github_issue_url(task.github_issue_url.as_deref())?;
-    task.brief_markdown =
-        optional_text(task.brief_markdown.take(), "brief_markdown", 100_000).map_err(invalid)?;
-    Ok(())
-}
-
-fn validate_github_issue_url(value: Option<&str>) -> Result<(), CuratorError> {
-    if let Some(url) = value {
-        let valid = url
-            .strip_prefix("https://github.com/")
-            .map(|path| path.split('/').collect::<Vec<_>>())
-            .is_some_and(|parts| {
-                parts.len() == 4
-                    && !parts[0].is_empty()
-                    && !parts[1].is_empty()
-                    && parts[2] == "issues"
-                    && parts[3].parse::<u64>().is_ok_and(|number| number > 0)
-            });
-        if !valid {
-            return Err(CuratorError::Invalid(
-                "github_issue_url must be a canonical HTTPS GitHub Issue URL".into(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn validate_task_patch(kind: &str, task: Option<&TaskPatch>) -> Result<(), CuratorError> {
-    if kind == "task" {
-        let task = task.ok_or_else(|| {
-            CuratorError::Invalid("updating a Task requires confirmed task fields".into())
-        })?;
-        debug_assert!(task.confirmed, "plan validation enforces Task confirmation");
-    } else if task.is_some() {
-        return Err(CuratorError::Invalid(
-            "only Task Objects accept task fields".into(),
-        ));
-    }
-    Ok(())
 }
 
 async fn lock_run(
@@ -1320,14 +927,6 @@ fn validate_human_grounded_objects(
     messages: &HashMap<Uuid, MessageEvidence>,
 ) -> Result<(), CuratorError> {
     for item in &plan.create_objects {
-        if item.kind == "source" {
-            return Err(CuratorError::Invalid(
-                "Source creation is ingestion-only; the curator cannot create Sources".into(),
-            ));
-        }
-        if !matches!(item.kind.as_str(), "memory" | "task") {
-            continue;
-        }
         let evidence = item
             .supporting_message_ids
             .iter()
@@ -1338,47 +937,58 @@ fn validate_human_grounded_objects(
                 .iter()
                 .any(|message| message.sender_kind != "human")
         {
-            return Err(CuratorError::Invalid(format!(
-                "curator-created {} Objects must be supported only by human-authored messages",
-                item.kind
-            )));
+            return Err(CuratorError::Invalid(
+                "curator-created Memories must be supported only by human-authored messages".into(),
+            ));
         }
-        if item.kind == "task"
-            && evidence
-                .iter()
-                .any(|message| is_source_ingestion_request(&message.content))
+        if evidence
+            .iter()
+            .all(|message| is_workflow_request(&message.content))
+            && !is_request_framed_memory(&item.description)
         {
             return Err(CuratorError::Invalid(
-                "Source-ingestion requests are workflow commands, not durable Tasks".into(),
+                "request-only evidence may record what was requested but cannot assert workflow success"
+                    .into(),
             ));
         }
     }
     Ok(())
 }
 
-fn is_source_ingestion_request(content: &str) -> bool {
+fn is_workflow_request(content: &str) -> bool {
     let content = content.to_ascii_lowercase();
-    let explicit_ingestion = ["ingest", "import", "capture"]
+    let trimmed = content.trim_start();
+    trimmed.ends_with('?')
+        || [
+            "please ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "research ",
+            "add ",
+            "create ",
+            "update ",
+            "ingest ",
+            "import ",
+            "capture ",
+            "find ",
+            "ensure ",
+        ]
         .iter()
-        .any(|term| content.contains(term));
-    let names_source_material = [
-        "source",
-        "conversation",
-        "url",
-        "link",
-        "file",
-        "video",
-        "podcast",
-        "http://",
-        "https://",
+        .any(|prefix| trimmed.starts_with(prefix))
+}
+
+fn is_request_framed_memory(description: &str) -> bool {
+    let description = description.to_ascii_lowercase();
+    [
+        " asked ",
+        " requested ",
+        " request to ",
+        " instructed ",
+        " directed ",
     ]
     .iter()
-    .any(|term| content.contains(term));
-    let add_source = content.contains("add")
-        && ["source", "url", "file", "http://", "https://"]
-            .iter()
-            .any(|term| content.contains(term));
-    (explicit_ingestion && names_source_material) || add_source
+    .any(|marker| format!(" {description} ").contains(marker))
 }
 
 fn drop_disallowed_worker_creates(
@@ -1390,29 +1000,16 @@ fn drop_disallowed_worker_creates(
         .filter(|message| message.sender_kind == "human")
         .map(|message| message.id)
         .collect::<HashSet<_>>();
-    let ingestion_request_ids = messages
-        .iter()
-        .filter(|message| {
-            message.sender_kind == "human" && is_source_ingestion_request(&message.content)
-        })
-        .map(|message| message.id)
-        .collect::<HashSet<_>>();
     let dropped = plan
         .create_objects
         .iter()
         .filter(|item| {
-            item.kind == "source"
-                || (matches!(item.kind.as_str(), "memory" | "task")
-                    && (item.supporting_message_ids.is_empty()
-                        || item
-                            .supporting_message_ids
-                            .iter()
-                            .any(|id| !human_message_ids.contains(id))))
-                || (item.kind == "task"
-                    && item
-                        .supporting_message_ids
-                        .iter()
-                        .any(|id| ingestion_request_ids.contains(id)))
+            item.kind != "memory"
+                || item.supporting_message_ids.is_empty()
+                || item
+                    .supporting_message_ids
+                    .iter()
+                    .any(|id| !human_message_ids.contains(id))
         })
         .map(|item| item.client_id.clone())
         .collect::<HashSet<_>>();
@@ -1432,6 +1029,45 @@ fn drop_disallowed_worker_creates(
 
 fn object_ref_uses_client(reference: &ObjectRef, client_ids: &HashSet<String>) -> bool {
     matches!(reference, ObjectRef::Created { client_id } if client_ids.contains(client_id))
+}
+
+fn drop_unresolved_or_ambiguous_worker_connections(
+    plan: &mut ReconciliationPlan,
+    candidates: &crate::search::SearchPacket,
+    chat_id: Uuid,
+) -> usize {
+    let mut identity_counts = HashMap::new();
+    for candidate in &candidates.objects {
+        *identity_counts
+            .entry((
+                candidate.kind.as_str(),
+                candidate.title.trim().to_lowercase(),
+            ))
+            .or_insert(0_usize) += 1;
+    }
+    let eligible = candidates
+        .objects
+        .iter()
+        .filter(|candidate| {
+            identity_counts[&(
+                candidate.kind.as_str(),
+                candidate.title.trim().to_lowercase(),
+            )] == 1
+        })
+        .map(|candidate| candidate.id)
+        .collect::<HashSet<_>>();
+    let before = plan.create_connections.len();
+    plan.create_connections.retain(|connection| {
+        [&connection.source, &connection.target]
+            .into_iter()
+            .all(|reference| match reference {
+                ObjectRef::Created { .. } => true,
+                ObjectRef::Existing { object_id } => {
+                    *object_id == chat_id || eligible.contains(object_id)
+                }
+            })
+    });
+    before - plan.create_connections.len()
 }
 
 fn validate_message_refs(
@@ -1468,35 +1104,112 @@ fn validate_message_refs(
     Ok(())
 }
 
-fn validate_derived_connections(
+async fn validate_commit_policy(
+    tx: &mut Transaction<'_, Postgres>,
     plan: &ReconciliationPlan,
-    created: &HashMap<String, Uuid>,
-    changed: &HashMap<Uuid, HashSet<Uuid>>,
-    chat_id: Uuid,
+    run: &CuratorRun,
 ) -> Result<(), CuratorError> {
-    let mut linked = HashSet::new();
+    if !plan.update_objects.is_empty() || !plan.update_connections.is_empty() {
+        return Err(CuratorError::Invalid(
+            "append-only Curator plans cannot contain update or delete operations".into(),
+        ));
+    }
+    if plan.create_objects.iter().any(|item| item.kind != "memory") {
+        return Err(CuratorError::Invalid(
+            "the Curator commit layer may create only Memory Objects".into(),
+        ));
+    }
+
+    let created = plan
+        .create_objects
+        .iter()
+        .map(|item| (item.client_id.as_str(), item))
+        .collect::<HashMap<_, _>>();
+
     for connection in &plan.create_connections {
-        if connection.kind != "derived_from" {
-            continue;
+        if !CURATOR_CONNECTION_KINDS.contains(&connection.kind.as_str()) {
+            return Err(CuratorError::Invalid(
+                "the Curator commit layer rejected an unsupported connection kind".into(),
+            ));
         }
-        let source = resolve_ref(&connection.source, created)?;
-        let target = resolve_ref(&connection.target, created)?;
-        let connection_messages = connection
-            .supporting_message_ids
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        if target == chat_id && changed.get(&source) == Some(&connection_messages) {
-            linked.insert(source);
-        }
-        if source == chat_id && changed.get(&target) == Some(&connection_messages) {
-            linked.insert(target);
+        let source_kind = commit_endpoint_kind(tx, &connection.source, &created, run).await?;
+        let target_kind = commit_endpoint_kind(tx, &connection.target, &created, run).await?;
+        if source_kind != "memory" && target_kind != "memory" {
+            return Err(CuratorError::Invalid(
+                "every Curator-created connection must have at least one Memory endpoint".into(),
+            ));
         }
     }
-    if changed.keys().any(|id| !linked.contains(id)) {
-        return Err(CuratorError::Invalid("every new or updated Object must have a derived_from connection to the source Chat with the same exact supporting message IDs".into()));
+
+    for memory in &plan.create_objects {
+        let has_provenance = plan.create_connections.iter().any(|connection| {
+            connection.kind == "derived_from"
+                && matches!(
+                    &connection.source,
+                    ObjectRef::Created { client_id } if client_id == &memory.client_id
+                )
+                && matches!(
+                    &connection.target,
+                    ObjectRef::Existing { object_id } if *object_id == run.chat_object_id
+                )
+                && same_message_ids(
+                    &connection.supporting_message_ids,
+                    &memory.supporting_message_ids,
+                )
+        });
+        if !has_provenance {
+            return Err(CuratorError::Invalid(
+                "every new Memory must have a derived_from connection to the originating Chat with the same exact supporting message IDs".into(),
+            ));
+        }
     }
     Ok(())
+}
+
+async fn commit_endpoint_kind(
+    tx: &mut Transaction<'_, Postgres>,
+    reference: &ObjectRef,
+    created: &HashMap<&str, &CreateObject>,
+    run: &CuratorRun,
+) -> Result<String, CuratorError> {
+    match reference {
+        ObjectRef::Created { client_id } => created
+            .get(client_id.as_str())
+            .map(|item| item.kind.clone())
+            .ok_or_else(|| {
+                CuratorError::Invalid(format!("unknown created Object client_id: {client_id}"))
+            }),
+        ObjectRef::Existing { object_id } => {
+            if *object_id != run.chat_object_id {
+                let consulted: bool = sqlx::query_scalar(
+                    "SELECT $2 = ANY(consulted_object_ids) FROM runs WHERE id=$1",
+                )
+                .bind(run.id)
+                .bind(object_id)
+                .fetch_one(&mut **tx)
+                .await?;
+                if !consulted {
+                    return Err(CuratorError::Invalid(
+                        "existing connection endpoints must be unambiguous retrieved candidates"
+                            .into(),
+                    ));
+                }
+            }
+            sqlx::query_scalar(
+                "SELECT kind FROM objects WHERE id=$1 AND archived_at IS NULL FOR SHARE",
+            )
+            .bind(object_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(CuratorError::NotFound)
+        }
+    }
+}
+
+fn same_message_ids(left: &[Uuid], right: &[Uuid]) -> bool {
+    left.len() == right.len()
+        && left.iter().copied().collect::<HashSet<_>>()
+            == right.iter().copied().collect::<HashSet<_>>()
 }
 
 fn resolve_ref(
@@ -1531,96 +1244,12 @@ async fn insert_object(
         r#"INSERT INTO objects (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)
            VALUES ($1,$2,$3,$4,'system','context-curator','system','context-curator',$5)"#,
     ).bind(id).bind(&item.kind).bind(&item.title).bind(&item.description).bind(provenance).execute(&mut **tx).await?;
-    match item.kind.as_str() {
-        "task" => {
-            let task = item.task.as_ref().expect("validated");
-            if let Some(owner_id) = task.owner_object_id {
-                ensure_user(tx, owner_id).await?;
-            }
-            sqlx::query(
-                r#"INSERT INTO tasks
-                (object_id,status,priority,owner_object_id,agent_suitable,blocked_reason,
-                 due_at,completed_at,github_issue_url,brief_markdown)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
-            )
-            .bind(id)
-            .bind(&task.status)
-            .bind(&task.priority)
-            .bind(task.owner_object_id)
-            .bind(task.agent_suitable)
-            .bind(&task.blocked_reason)
-            .bind(task.due_at)
-            .bind((task.status == "done").then(OffsetDateTime::now_utc))
-            .bind(&task.github_issue_url)
-            .bind(&task.brief_markdown)
-            .execute(&mut **tx)
-            .await?;
-        }
-        "entity" => {
-            sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
-                .bind(id)
-                .bind(item.entity_kind.as_deref().expect("validated"))
-                .execute(&mut **tx)
-                .await?;
-        }
-        "memory" => {
-            sqlx::query("INSERT INTO memories (object_id,happened_at) VALUES ($1,$2)")
-                .bind(id)
-                .bind(item.memory.as_ref().expect("validated").happened_at)
-                .execute(&mut **tx)
-                .await?;
-        }
-        "source" => {
-            let source = item.source.as_ref().expect("validated");
-            sqlx::query(
-                r#"INSERT INTO sources
-                (object_id,source_kind,canonical_uri,byline,publisher,published_at,
-                 published_at_precision,last_accessed_at,original_language,
-                 original_media_type,original_artifact_reference)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
-            )
-            .bind(id)
-            .bind(&source.source_kind)
-            .bind(&source.canonical_uri)
-            .bind(&source.byline)
-            .bind(&source.publisher)
-            .bind(source.published_at)
-            .bind(&source.published_at_precision)
-            .bind(source.last_accessed_at)
-            .bind(&source.original_language)
-            .bind(&source.original_media_type)
-            .bind(&source.original_artifact_reference)
-            .execute(&mut **tx)
-            .await?;
-            if let Some(content) = &source.content {
-                let content_id = Uuid::new_v4();
-                let hash = format!("{:x}", Sha256::digest(content.content.as_bytes()));
-                sqlx::query(
-                    r#"INSERT INTO artifacts
-                    (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
-                     capture_outcome,capture_reason,metadata,captured_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'incomplete',
-                            'conversation evidence does not establish a complete source capture',
-                            $11,$12)"#,
-                )
-                .bind(content_id)
-                .bind(id)
-                .bind(&content.kind)
-                .bind(&content.title)
-                .bind(&content.content)
-                .bind(&content.uri)
-                .bind(&content.media_type)
-                .bind(&content.language)
-                .bind(hash)
-                .bind(content.content.len() as i64)
-                .bind(&content.metadata)
-                .bind(content.captured_at)
-                .execute(&mut **tx)
-                .await?;
-            }
-        }
-        _ => unreachable!("validated curator Object kind"),
-    }
+    debug_assert_eq!(item.kind, "memory");
+    sqlx::query("INSERT INTO memories (object_id,happened_at) VALUES ($1,$2)")
+        .bind(id)
+        .bind(item.memory.as_ref().expect("validated").happened_at)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -1644,91 +1273,6 @@ fn current_object_json(o: &CurrentObject) -> Value {
     json!({"id":o.id,"kind":o.kind,"title":o.title,"description":o.description,"protected":o.protected,"lifecycle":o.lifecycle,"revision":o.revision,"provenance":o.provenance,"status":o.status,"priority":o.priority,"owner_object_id":o.owner_object_id,"agent_suitable":o.agent_suitable,"blocked_reason":o.blocked_reason,"due_at":o.due_at,"completed_at":o.completed_at,"github_issue_url":o.github_issue_url,"brief_markdown":o.brief_markdown})
 }
 
-async fn update_object(
-    tx: &mut Transaction<'_, Postgres>,
-    current: &CurrentObject,
-    item: &UpdateObject,
-    provenance: &Value,
-) -> Result<(), CuratorError> {
-    let result = sqlx::query(
-        r#"UPDATE objects SET title=COALESCE($3,title),description=COALESCE($4,description),provenance=$5,
-                  revision=revision+1,updated_by_type='system',updated_by_id='context-curator',updated_at=now()
-           WHERE id=$1 AND revision=$2 AND archived_at IS NULL AND protected=false"#,
-    ).bind(item.object_id).bind(item.expected_revision).bind(&item.title).bind(&item.description).bind(provenance).execute(&mut **tx).await?;
-    if result.rows_affected() != 1 {
-        return Err(CuratorError::Conflict);
-    }
-    if current.kind == "task" {
-        let task = item.task.as_ref().expect("validated");
-        let owner = if task.clear_owner {
-            None
-        } else {
-            task.owner_object_id.or(current.owner_object_id)
-        };
-        if let Some(owner_id) = owner {
-            ensure_user(tx, owner_id).await?;
-        }
-        let due = if task.clear_due_at {
-            None
-        } else {
-            task.due_at.or(current.due_at)
-        };
-        let status = task
-            .status
-            .as_deref()
-            .or(current.status.as_deref())
-            .expect("Task status");
-        let blocked_reason = if status == "blocked" {
-            if task.clear_blocked_reason {
-                return Err(CuratorError::Invalid(
-                    "a blocked Task cannot clear blocked_reason".into(),
-                ));
-            }
-            task.blocked_reason
-                .as_deref()
-                .or(current.blocked_reason.as_deref())
-                .ok_or_else(|| {
-                    CuratorError::Invalid("a blocked Task requires blocked_reason".into())
-                })?
-                .to_owned()
-                .into()
-        } else {
-            None
-        };
-        let completed_at = if status == "done" {
-            current
-                .completed_at
-                .or_else(|| Some(OffsetDateTime::now_utc()))
-        } else {
-            None
-        };
-        let github_issue_url = if task.clear_github_issue_url {
-            None
-        } else {
-            task.github_issue_url
-                .as_deref()
-                .or(current.github_issue_url.as_deref())
-                .map(str::to_owned)
-        };
-        let brief_markdown = if task.clear_brief_markdown {
-            None
-        } else {
-            task.brief_markdown
-                .as_deref()
-                .or(current.brief_markdown.as_deref())
-                .map(str::to_owned)
-        };
-        sqlx::query(
-            r#"UPDATE tasks SET status=COALESCE($2,status),priority=COALESCE($3,priority),owner_object_id=$4,
-                  agent_suitable=COALESCE($5,agent_suitable),blocked_reason=$6,due_at=$7,
-                  completed_at=$8,github_issue_url=$9,brief_markdown=$10 WHERE object_id=$1"#,
-        ).bind(item.object_id).bind(&task.status).bind(&task.priority).bind(owner)
-            .bind(task.agent_suitable).bind(&blocked_reason).bind(due).bind(completed_at)
-            .bind(&github_issue_url).bind(&brief_markdown).execute(&mut **tx).await?;
-    }
-    Ok(())
-}
-
 async fn ensure_active_object(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
@@ -1743,22 +1287,6 @@ async fn ensure_active_object(
         Ok(())
     } else {
         Err(CuratorError::NotFound)
-    }
-}
-
-async fn ensure_user(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<(), CuratorError> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM objects o JOIN users u ON u.object_id=o.id WHERE o.id=$1 AND o.archived_at IS NULL)",
-    )
-    .bind(id)
-    .fetch_one(&mut **tx)
-    .await?;
-    if exists {
-        Ok(())
-    } else {
-        Err(CuratorError::Invalid(
-            "Task owner_object_id must name an active canonical User".into(),
-        ))
     }
 }
 
@@ -2070,12 +1598,20 @@ pub async fn run_worker(
             let mut plan =
                 request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
             let dropped = drop_disallowed_worker_creates(&mut plan, &messages);
-            if !dropped.is_empty() {
+            let dropped_connections = drop_unresolved_or_ambiguous_worker_connections(
+                &mut plan,
+                &candidates,
+                run.chat_object_id,
+            );
+            if !dropped.is_empty() || dropped_connections > 0 {
                 crate::runs::append_curator_trace(
                     &pool,
                     run.id,
                     "deterministic_filter",
-                    json!({"dropped_create_client_ids": dropped}),
+                    json!({
+                        "dropped_create_client_ids": dropped,
+                        "dropped_unresolved_or_ambiguous_connections": dropped_connections,
+                    }),
                 )
                 .await
                 .map_err(|trace_error| {
@@ -2105,6 +1641,30 @@ pub async fn run_worker(
                     Some(&error.to_string()),
                 )
                 .await?;
+                let dropped = drop_disallowed_worker_creates(&mut plan, &messages);
+                let dropped_connections = drop_unresolved_or_ambiguous_worker_connections(
+                    &mut plan,
+                    &candidates,
+                    run.chat_object_id,
+                );
+                if !dropped.is_empty() || dropped_connections > 0 {
+                    crate::runs::append_curator_trace(
+                        &pool,
+                        run.id,
+                        "deterministic_filter",
+                        json!({
+                            "repair": true,
+                            "dropped_create_client_ids": dropped,
+                            "dropped_unresolved_or_ambiguous_connections": dropped_connections,
+                        }),
+                    )
+                    .await
+                    .map_err(|trace_error| {
+                        CuratorError::Invalid(format!(
+                            "curator deterministic-filter trace failed: {trace_error}"
+                        ))
+                    })?;
+                }
             }
             reconcile_owned(
                 &pool,
@@ -2244,22 +1804,21 @@ async fn request_plan(
     validation_feedback: Option<&str>,
 ) -> Result<ReconciliationPlan, CuratorError> {
     let attempt_id = Uuid::new_v4().to_string();
-    let system = r#"You are the Centaur Context Context Curator. Return only one JSON object with exactly these four arrays:
-{"create_objects":[],"update_objects":[],"create_connections":[],"update_connections":[]}.
+    let system = r#"You are the Centaur Context Curator, an append-only interaction-memory extractor. Return only one JSON object with exactly these two arrays:
+{"create_objects":[],"create_connections":[]}.
 
 Every create_objects entry MUST contain all of these fields:
-{"client_id":"unique-local-name","kind":"memory|task|entity|source","title":"...","description":"...","supporting_message_ids":["UUID"],"entity_kind":null,"task":null,"memory":null,"source":null}.
-client_id is a short unique name used only to reference that new Object from create_connections. For an Entity, set entity_kind to person|organization|product|project|publication|place|concept|other. For a Memory, replace memory with {"primary_event":true|false,"happened_at":"RFC3339"}. For a Task, replace task with {"confirmed":true,"status":"backlog|todo|doing|review|done|blocked","priority":"low|medium|high","owner_object_id":null,"agent_suitable":false,"blocked_reason":null,"due_at":null,"github_issue_url":null,"brief_markdown":null}; blocked_reason is required exactly for blocked Tasks.
-For a Source supported explicitly by the messages, replace source with {"source_kind":"article|paper|podcast_episode|video|book|report|document|dataset|web_page|social_post|other","canonical_uri":null,"byline":null,"publisher":null,"published_at":null,"published_at_precision":null,"last_accessed_at":null,"original_language":null,"original_media_type":null,"original_artifact_reference":null,"content":null}. Optional content is a generic Artifact: {"kind":"transcript","title":null,"content":"...","uri":null,"media_type":"text/plain","language":null,"captured_at":null,"metadata":{}}. Use only content explicitly present in the evidence; never fetch or invent Artifact content.
-
-Every update_objects entry MUST contain all of these fields:
-{"object_id":"UUID","expected_revision":1,"title":null,"description":null,"supporting_message_ids":["UUID"],"task":null}.
+{"client_id":"unique-local-name","kind":"memory","title":"...","description":"...","supporting_message_ids":["UUID"],"memory":{"primary_event":true,"happened_at":"RFC3339"}}.
+client_id is a short unique name used only to reference that new Memory from create_connections. Set primary_event=true for at most one central event.
 Every create_connections entry MUST contain all of these fields:
 {"source":{"client_id":"created-object-client-id"},"kind":"derived_from","target":{"object_id":"existing-object-UUID"},"description":"...","supporting_message_ids":["UUID"]}.
-An existing Object reference is {"object_id":"UUID"}; a newly created Object reference is {"client_id":"unique-local-name"}. Every update_connections entry MUST contain all of these fields:
-{"connection_id":"UUID","expected_revision":1,"kind":null,"description":null,"supporting_message_ids":["UUID"]}.
+An existing Object reference is {"object_id":"UUID"}; a newly created Memory reference is {"client_id":"unique-local-name"}.
 
-Create zero or more Memories: only create a Memory for a concrete event or insight explicitly asserted by a human message and worth retaining, and use primary_event=true for at most one central event. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Sources and Memories are distinct: a Source represents evidence, while a Memory records an event or insight. If a message explicitly asks a bot, agent, or workflow to ingest, import, or capture a URL, file, or source, do not create or update that Source and do not create a Task that restates the request; the dedicated ingestion workflow owns and executes that command. Tasks require task.confirmed=true and may be created or updated only for an explicit durable instruction or commitment that remains actionable after the current bot or workflow finishes. Never create or update a Chat, User, or Theme. Every operation cites supporting_message_ids from this run. Every created or updated Object must be connected to the source Chat in create_connections with kind=derived_from and a simple, exact description. Allowed connection kinds: involves, about, related_to, depends_on, derived_from, themed. A themed Connection must point from a non-Theme Object to an existing approved Theme candidate and explain why the Object belongs in that research vertical; it never creates vocabulary. Use existing candidate object IDs and revisions when the same thing already exists. An Object description must explicitly identify the subject, what it is or was about, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, or mention the model or generation process. Do not use connection counts for reconciliation."#;
+Create zero or more Memories only for a concrete event or insight explicitly asserted by a human message and worth retaining. Every new Memory must have a derived_from Connection from that Memory to run.chat_object_id, using the exact same supporting_message_ids. Other links may connect a new or existing Memory to one unambiguous existing candidate using only involves, about, themed, related_to, or derived_from. Never invent a missing target or choose between ambiguous candidates; leave it unlinked. Every Connection must have at least one Memory endpoint.
+
+Never create an Entity, Source, Note, Task, Chat, User, Theme, or any other non-Memory Object. Never update or delete any Object, including a Memory. Never update or delete a Connection. A human request proves only that the request was made: without a trusted workflow-result message, describe what the human asked for and never claim the workflow succeeded, completed, created, updated, or connected anything.
+
+Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description must explicitly identify the subject, what the interaction established, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -2477,71 +2036,18 @@ fn reconciliation_plan_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["create_objects", "update_objects", "create_connections", "update_connections"],
+        "required": ["create_objects", "create_connections"],
         "properties": {
             "create_objects": {"type": "array", "items": {"$ref": "#/$defs/create_object"}},
-            "update_objects": {"type": "array", "items": {"$ref": "#/$defs/update_object"}},
-            "create_connections": {"type": "array", "items": {"$ref": "#/$defs/create_connection"}},
-            "update_connections": {"type": "array", "items": {"$ref": "#/$defs/update_connection"}}
+            "create_connections": {"type": "array", "items": {"$ref": "#/$defs/create_connection"}}
         },
         "$defs": {
-            "nullable_string": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "uuid": {"type": "string"},
-            "nullable_uuid": {"anyOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]},
             "message_ids": {"type": "array", "items": {"$ref": "#/$defs/uuid"}},
-            "task_fields": {
-                "type": "object", "additionalProperties": false,
-                "required": ["confirmed", "status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "github_issue_url", "brief_markdown"],
-                "properties": {
-                    "confirmed": {"type": "boolean"}, "status": {"type": "string"},
-                    "priority": {"type": "string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
-                    "agent_suitable": {"type": "boolean"}, "blocked_reason": {"$ref": "#/$defs/nullable_string"},
-                    "due_at": {"$ref": "#/$defs/nullable_string"}, "github_issue_url": {"$ref": "#/$defs/nullable_string"},
-                    "brief_markdown": {"$ref": "#/$defs/nullable_string"}
-                }
-            },
-            "task_patch": {
-                "type": "object", "additionalProperties": false,
-                "required": ["confirmed", "status", "priority", "owner_object_id", "clear_owner", "agent_suitable", "blocked_reason", "clear_blocked_reason", "due_at", "clear_due_at", "github_issue_url", "clear_github_issue_url", "brief_markdown", "clear_brief_markdown"],
-                "properties": {
-                    "confirmed": {"type": "boolean"}, "status": {"$ref": "#/$defs/nullable_string"},
-                    "priority": {"$ref": "#/$defs/nullable_string"}, "owner_object_id": {"$ref": "#/$defs/nullable_uuid"},
-                    "clear_owner": {"type": "boolean"}, "agent_suitable": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
-                    "blocked_reason": {"$ref": "#/$defs/nullable_string"}, "clear_blocked_reason": {"type": "boolean"},
-                    "due_at": {"$ref": "#/$defs/nullable_string"}, "clear_due_at": {"type": "boolean"},
-                    "github_issue_url": {"$ref": "#/$defs/nullable_string"}, "clear_github_issue_url": {"type": "boolean"},
-                    "brief_markdown": {"$ref": "#/$defs/nullable_string"}, "clear_brief_markdown": {"type": "boolean"}
-                }
-            },
             "memory_fields": {
                 "type": "object", "additionalProperties": false,
                 "required": ["primary_event", "happened_at"],
                 "properties": {"primary_event": {"type": "boolean"}, "happened_at": {"type": "string"}}
-            },
-            "artifact": {
-                "type": "object", "additionalProperties": false,
-                "required": ["kind", "title", "content", "uri", "media_type", "language", "captured_at", "metadata"],
-                "properties": {
-                    "kind": {"type": "string"}, "title": {"$ref": "#/$defs/nullable_string"},
-                    "content": {"type": "string"}, "uri": {"$ref": "#/$defs/nullable_string"},
-                    "media_type": {"$ref": "#/$defs/nullable_string"},
-                    "language": {"$ref": "#/$defs/nullable_string"},
-                    "captured_at": {"$ref": "#/$defs/nullable_string"},
-                    "metadata": {"type": "object", "additionalProperties": false, "properties": {}}
-                }
-            },
-            "source_fields": {
-                "type": "object", "additionalProperties": false,
-                "required": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "published_at_precision", "last_accessed_at", "original_language", "original_media_type", "original_artifact_reference", "content"],
-                "properties": {
-                    "source_kind": {"type": "string"}, "canonical_uri": {"$ref": "#/$defs/nullable_string"},
-                    "byline": {"$ref": "#/$defs/nullable_string"}, "publisher": {"$ref": "#/$defs/nullable_string"},
-                    "published_at": {"$ref": "#/$defs/nullable_string"}, "published_at_precision": {"$ref": "#/$defs/nullable_string"},
-                    "last_accessed_at": {"$ref": "#/$defs/nullable_string"},
-                    "original_language": {"$ref": "#/$defs/nullable_string"}, "original_media_type": {"$ref": "#/$defs/nullable_string"},
-                    "original_artifact_reference": {"$ref": "#/$defs/nullable_string"},
-                    "content": {"anyOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]}
-                }
             },
             "object_ref": {
                 "anyOf": [
@@ -2551,41 +2057,20 @@ fn reconciliation_plan_schema() -> Value {
             },
             "create_object": {
                 "type": "object", "additionalProperties": false,
-                "required": ["client_id", "kind", "title", "description", "supporting_message_ids", "entity_kind", "task", "memory", "source"],
+                "required": ["client_id", "kind", "title", "description", "supporting_message_ids", "memory"],
                 "properties": {
-                    "client_id": {"type": "string"}, "kind": {"type": "string"}, "title": {"type": "string"},
+                    "client_id": {"type": "string"}, "kind": {"type": "string", "enum": ["memory"]}, "title": {"type": "string"},
                     "description": {"type": "string"}, "supporting_message_ids": {"$ref": "#/$defs/message_ids"},
-                    "entity_kind": {"$ref": "#/$defs/nullable_string"},
-                    "task": {"anyOf": [{"$ref": "#/$defs/task_fields"}, {"type": "null"}]},
-                    "memory": {"anyOf": [{"$ref": "#/$defs/memory_fields"}, {"type": "null"}]},
-                    "source": {"anyOf": [{"$ref": "#/$defs/source_fields"}, {"type": "null"}]}
-                }
-            },
-            "update_object": {
-                "type": "object", "additionalProperties": false,
-                "required": ["object_id", "expected_revision", "title", "description", "supporting_message_ids", "task"],
-                "properties": {
-                    "object_id": {"$ref": "#/$defs/uuid"}, "expected_revision": {"type": "integer"},
-                    "title": {"$ref": "#/$defs/nullable_string"}, "description": {"$ref": "#/$defs/nullable_string"},
-                    "supporting_message_ids": {"$ref": "#/$defs/message_ids"},
-                    "task": {"anyOf": [{"$ref": "#/$defs/task_patch"}, {"type": "null"}]}
+                    "memory": {"$ref": "#/$defs/memory_fields"}
                 }
             },
             "create_connection": {
                 "type": "object", "additionalProperties": false,
                 "required": ["source", "kind", "target", "description", "supporting_message_ids"],
                 "properties": {
-                    "source": {"$ref": "#/$defs/object_ref"}, "kind": {"type": "string"},
+                    "source": {"$ref": "#/$defs/object_ref"},
+                    "kind": {"type": "string", "enum": ["involves", "about", "themed", "related_to", "derived_from"]},
                     "target": {"$ref": "#/$defs/object_ref"}, "description": {"type": "string"},
-                    "supporting_message_ids": {"$ref": "#/$defs/message_ids"}
-                }
-            },
-            "update_connection": {
-                "type": "object", "additionalProperties": false,
-                "required": ["connection_id", "expected_revision", "kind", "description", "supporting_message_ids"],
-                "properties": {
-                    "connection_id": {"$ref": "#/$defs/uuid"}, "expected_revision": {"type": "integer"},
-                    "kind": {"$ref": "#/$defs/nullable_string"}, "description": {"$ref": "#/$defs/nullable_string"},
                     "supporting_message_ids": {"$ref": "#/$defs/message_ids"}
                 }
             }
@@ -2766,13 +2251,16 @@ mod tests {
             supporting_message_ids,
             entity_kind: None,
             task: None,
-            memory: None,
+            memory: (kind == "memory").then(|| MemoryFields {
+                primary_event: true,
+                happened_at: OffsetDateTime::now_utc(),
+            }),
             source: None,
         }
     }
 
     #[test]
-    fn worker_filter_drops_sources_and_their_connections() {
+    fn worker_filter_drops_non_memories_and_their_connections() {
         let human_id = Uuid::new_v4();
         let mut plan = ReconciliationPlan {
             create_objects: vec![created_object("duplicate-source", "source", vec![human_id])],
@@ -2817,7 +2305,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_filter_drops_tasks_that_restate_source_ingestion_commands() {
+    fn worker_filter_drops_tasks() {
         let human_id = Uuid::new_v4();
         let mut plan = ReconciliationPlan {
             create_objects: vec![created_object("ingestion-task", "task", vec![human_id])],
@@ -2826,24 +2314,18 @@ mod tests {
             update_connections: vec![],
         };
 
-        let dropped = drop_disallowed_worker_creates(
-            &mut plan,
-            &[worker_message_with_content(
-                human_id,
-                "human",
-                "can you add this conversation as source https://youtu.be/example",
-            )],
-        );
+        let dropped =
+            drop_disallowed_worker_creates(&mut plan, &[worker_message(human_id, "human")]);
 
         assert_eq!(dropped, vec!["ingestion-task"]);
         assert!(plan.create_objects.is_empty());
     }
 
     #[test]
-    fn worker_filter_keeps_a_distinct_durable_task() {
+    fn worker_filter_keeps_human_grounded_memory() {
         let human_id = Uuid::new_v4();
         let mut plan = ReconciliationPlan {
-            create_objects: vec![created_object("durable-task", "task", vec![human_id])],
+            create_objects: vec![created_object("durable-memory", "memory", vec![human_id])],
             update_objects: vec![],
             create_connections: vec![],
             update_connections: vec![],
@@ -2854,7 +2336,7 @@ mod tests {
             &[worker_message_with_content(
                 human_id,
                 "human",
-                "Please review the research brief by Friday",
+                "The team chose Friday for the research review",
             )],
         );
 
@@ -2863,85 +2345,180 @@ mod tests {
     }
 
     #[test]
-    fn worker_filter_does_not_treat_every_add_link_request_as_ingestion() {
-        let human_id = Uuid::new_v4();
-        let mut plan = ReconciliationPlan {
-            create_objects: vec![created_object("link-task", "task", vec![human_id])],
-            update_objects: vec![],
-            create_connections: vec![],
-            update_connections: vec![],
-        };
-
-        let dropped = drop_disallowed_worker_creates(
-            &mut plan,
-            &[worker_message_with_content(
-                human_id,
-                "human",
-                "Please add the launch link to the briefing task",
-            )],
-        );
-
-        assert!(dropped.is_empty());
-        assert_eq!(plan.create_objects.len(), 1);
-    }
-
-    #[test]
-    fn reconcile_guard_rejects_any_curator_source() {
+    fn worker_filter_leaves_missing_and_ambiguous_targets_unlinked() {
         let message_id = Uuid::new_v4();
-        let plan = ReconciliationPlan {
-            create_objects: vec![created_object("source", "source", vec![message_id])],
+        let chat_id = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let missing = Uuid::new_v4();
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("memory", "memory", vec![message_id])],
+            update_objects: vec![],
+            create_connections: [chat_id, first, missing]
+                .into_iter()
+                .map(|target| CreateConnection {
+                    source: ObjectRef::Created {
+                        client_id: "memory".into(),
+                    },
+                    kind: if target == chat_id {
+                        "derived_from".into()
+                    } else {
+                        "about".into()
+                    },
+                    target: ObjectRef::Existing { object_id: target },
+                    description: "A candidate link from the extracted Memory.".into(),
+                    supporting_message_ids: vec![message_id],
+                })
+                .collect(),
+            update_connections: vec![],
+        };
+        let retrieved = |id| crate::search::RetrievedObject {
+            id,
+            kind: "entity".into(),
+            title: "Same person".into(),
+            description: "An ambiguous candidate with the same canonical title.".into(),
+            revision: 1,
+            subtype: None,
+            relevance: crate::search::Relevance {
+                score: 1.0,
+                rationale: "test".into(),
+            },
+            evidence: None,
+            connections: vec![],
+        };
+        let candidates = crate::search::SearchPacket {
+            query: "same person".into(),
+            retrieval: "test".into(),
+            objects: vec![retrieved(first), retrieved(second)],
+            budget: None,
+        };
+
+        assert_eq!(
+            drop_unresolved_or_ambiguous_worker_connections(&mut plan, &candidates, chat_id),
+            2
+        );
+        assert_eq!(plan.create_connections.len(), 1);
+        assert_eq!(plan.create_connections[0].kind, "derived_from");
+    }
+
+    #[test]
+    fn deterministic_validation_rejects_every_non_memory_kind() {
+        for kind in [
+            "entity", "source", "note", "task", "chat", "user", "unknown",
+        ] {
+            let mut plan = ReconciliationPlan {
+                create_objects: vec![created_object("forbidden", kind, vec![Uuid::new_v4()])],
+                update_objects: vec![],
+                create_connections: vec![],
+                update_connections: vec![],
+            };
+            assert!(validate_plan(&mut plan).is_err(), "kind {kind}");
+        }
+    }
+
+    #[test]
+    fn deterministic_validation_rejects_object_and_connection_updates() {
+        let mut object_update = ReconciliationPlan {
+            create_objects: vec![],
+            update_objects: vec![UpdateObject {
+                object_id: Uuid::new_v4(),
+                expected_revision: 1,
+                title: Some("Changed".into()),
+                description: None,
+                supporting_message_ids: vec![Uuid::new_v4()],
+                task: None,
+            }],
+            create_connections: vec![],
+            update_connections: vec![],
+        };
+        assert!(validate_plan(&mut object_update).is_err());
+
+        let mut connection_update = ReconciliationPlan {
+            create_objects: vec![],
+            update_objects: vec![],
+            create_connections: vec![],
+            update_connections: vec![UpdateConnection {
+                connection_id: Uuid::new_v4(),
+                expected_revision: 1,
+                kind: None,
+                description: Some("Changed".into()),
+                supporting_message_ids: vec![Uuid::new_v4()],
+            }],
+        };
+        assert!(validate_plan(&mut connection_update).is_err());
+    }
+
+    #[test]
+    fn deterministic_validation_rejects_unsupported_relation() {
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![],
+            update_objects: vec![],
+            create_connections: vec![CreateConnection {
+                source: ObjectRef::Existing {
+                    object_id: Uuid::new_v4(),
+                },
+                kind: "depends_on".into(),
+                target: ObjectRef::Existing {
+                    object_id: Uuid::new_v4(),
+                },
+                description: "Unsupported relation between records.".into(),
+                supporting_message_ids: vec![Uuid::new_v4()],
+            }],
+            update_connections: vec![],
+        };
+        assert!(validate_plan(&mut plan).is_err());
+    }
+
+    #[test]
+    fn deterministic_validation_rejects_missing_chat_provenance() {
+        let mut plan = ReconciliationPlan {
+            create_objects: vec![created_object("memory", "memory", vec![Uuid::new_v4()])],
             update_objects: vec![],
             create_connections: vec![],
             update_connections: vec![],
         };
+        assert!(
+            validate_plan(&mut plan)
+                .unwrap_err()
+                .to_string()
+                .contains("originating Chat")
+        );
+    }
+
+    #[test]
+    fn legacy_delete_fields_are_rejected_instead_of_ignored() {
+        let error = serde_json::from_value::<ReconciliationPlan>(json!({
+            "create_objects": [],
+            "create_connections": [],
+            "delete_objects": [{"object_id": Uuid::new_v4()}]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn request_only_evidence_requires_request_framing() {
+        let message_id = Uuid::new_v4();
         let messages = HashMap::from([(
             message_id,
             MessageEvidence {
                 id: message_id,
                 sender_kind: "human".into(),
-                content: "add this URL as a source https://example.com".into(),
+                content: "Research and add Alexandr Wang".into(),
             },
         )]);
-
-        assert!(
-            validate_human_grounded_objects(&plan, &messages)
-                .unwrap_err()
-                .to_string()
-                .contains("ingestion-only")
-        );
-    }
-
-    #[test]
-    fn plan_allows_work_without_a_memory() {
         let mut plan = ReconciliationPlan {
-            create_objects: vec![CreateObject {
-                client_id: "task".into(),
-                kind: "task".into(),
-                title: "A confirmed task".into(),
-                description:
-                    "A concrete confirmed task that does not require a fabricated event Memory."
-                        .into(),
-                supporting_message_ids: vec![Uuid::new_v4()],
-                entity_kind: None,
-                task: Some(TaskFields {
-                    confirmed: true,
-                    status: "todo".into(),
-                    priority: "medium".into(),
-                    owner_object_id: None,
-                    agent_suitable: false,
-                    blocked_reason: None,
-                    due_at: None,
-                    github_issue_url: None,
-                    brief_markdown: None,
-                }),
-                memory: None,
-                source: None,
-            }],
+            create_objects: vec![created_object("memory", "memory", vec![message_id])],
             update_objects: vec![],
             create_connections: vec![],
             update_connections: vec![],
         };
-        assert!(validate_plan(&mut plan).is_ok());
+        plan.create_objects[0].description =
+            "Alexandr Wang was researched and added to the knowledge graph.".into();
+        assert!(validate_human_grounded_objects(&plan, &messages).is_err());
+        plan.create_objects[0].description =
+            "Bradley requested research on Alexandr Wang and asked for him to be added.".into();
+        assert!(validate_human_grounded_objects(&plan, &messages).is_ok());
     }
 
     #[test]
@@ -2954,36 +2531,20 @@ mod tests {
     }
 
     #[test]
-    fn unconfirmed_task_is_rejected() {
-        let mut task = TaskFields {
-            confirmed: false,
-            status: "todo".into(),
-            priority: "medium".into(),
-            owner_object_id: None,
-            agent_suitable: false,
-            blocked_reason: None,
-            due_at: None,
-            github_issue_url: None,
-            brief_markdown: None,
-        };
-        assert!(validate_task_fields(&mut task).is_err());
-    }
-
-    #[test]
-    fn subscription_schema_is_strict_at_every_object_boundary() {
+    fn subscription_schema_exposes_only_append_only_memory_operations() {
         let schema = reconciliation_plan_schema();
         assert_eq!(schema["additionalProperties"], json!(false));
-        for definition in [
-            "task_fields",
-            "task_patch",
-            "memory_fields",
-            "artifact",
-            "source_fields",
-            "create_object",
-            "update_object",
-            "create_connection",
-            "update_connection",
-        ] {
+        assert!(schema["properties"].get("update_objects").is_none());
+        assert!(schema["properties"].get("update_connections").is_none());
+        assert_eq!(
+            schema["$defs"]["create_object"]["properties"]["kind"]["enum"],
+            json!(["memory"])
+        );
+        assert_eq!(
+            schema["$defs"]["create_connection"]["properties"]["kind"]["enum"],
+            json!(CURATOR_CONNECTION_KINDS)
+        );
+        for definition in ["memory_fields", "create_object", "create_connection"] {
             assert_eq!(
                 schema["$defs"][definition]["additionalProperties"],
                 json!(false),
