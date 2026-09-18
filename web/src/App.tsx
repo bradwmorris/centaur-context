@@ -970,6 +970,11 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
   const title = primary ? `${runType(run, objects)} · ${primary.title}` : interactionTitle ? `${runType(run, objects)} · ${interactionTitle}` : runType(run, objects);
   const outcome = runOutcome(run, objects);
   const metrics = runMetrics(run);
+  const latestUsage = latestModelCall(run);
+  const childUsage = children.map((child) => ({ run: child, usage: usageMetrics(child) }));
+  const endToEndUsage = combineUsage([metrics.usage, ...childUsage.map((item) => item.usage)]);
+  const parentEvents = events.filter((event) => event.run_id === run.id);
+  const childEvents = children.map((child) => ({ run: child, events: events.filter((event) => event.run_id === child.id) })).filter((item) => item.events.length > 0);
   return <div className="record-page"><div className="record-primary eval-detail">
     <div className="detail-heading run-heading"><h1 className="detail-title">{title}</h1></div>
     <p className="detail-description">{outcome}</p>
@@ -981,21 +986,16 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
       <Property label="Created">{new Date(run.created_at).toLocaleString()}</Property><Property label="Parent">{run.parent_run_id ? <a href={detailPath("runs", run.parent_run_id)}>{shortId(run.parent_run_id)}</a> : "None"}</Property>
       {run.chat_object_id && <Property label="Originating Chat"><a href={detailPath("objects", run.chat_object_id)}>Open Slack conversation</a><ObjectId id={run.chat_object_id} compact /></Property>}<Property label="Technical actor">{run.actor_type}:{run.actor_id}</Property><Property label="Consulted Objects">{run.consulted_object_ids.length}</Property><Property label="Mutations">{events.length}</Property>
     </div></section>
-    <section className="run-summary" aria-label="Run summary"><h2>Metrics</h2><div className="run-metrics">
+    <section className="run-summary" aria-label="Run summary"><h2>Execution</h2><div className="run-metrics">
       <RunMetric label="Duration" value={metrics.duration} />
       <RunMetric label="Model" value={metrics.model} />
-      <RunMetric label="Total tokens" value={metrics.tokens.total} />
-      <RunMetric label="Input" value={metrics.tokens.input} />
-      <RunMetric label="Fresh input (derived)" value={metrics.tokens.freshInput} />
-      <RunMetric label="Cache creation" value={metrics.tokens.cacheCreation} />
-      <RunMetric label="Cache read" value={metrics.tokens.cacheRead} />
-      <RunMetric label="Output" value={metrics.tokens.output} />
-      <RunMetric label="Non-reasoning output (derived)" value={metrics.tokens.nonReasoningOutput} />
-      <RunMetric label="Reasoning" value={metrics.tokens.reasoning} />
       <RunMetric label="Tool calls" value={String(metrics.toolCalls)} />
       <RunMetric label="Readiness polls" value={String(metrics.polls)} />
       <RunMetric label="Failures" value={String(metrics.failures)} warning={metrics.failures > 0} />
     </div></section>
+    <UsageSummary title="Latest model call" usage={latestUsage ? usageMetricsFromEntries([latestUsage]) : emptyUsage()} totalLabel="Latest model call total" />
+    <UsageSummary title="Parent execution" usage={metrics.usage} includeCalls />
+    <UsageSummary title="End-to-end usage" usage={endToEndUsage} includeCalls />
     <p className="token-explanation">Provider total = input + output. Cache figures are part of input; reasoning is part of output. Fresh input is derived, while captured component sizes below are estimates.</p>
     {run.error && <p className="run-error">{run.error}</p>}{error && <p className="form-error">{error}</p>}
     <section className="eval-annotation" aria-label="Run review"><div className="verdict-segments" role="group" aria-label="Review verdict"><button type="button" className={run.verdict === "pass" ? "active pass" : "pass"} disabled={busy} aria-pressed={run.verdict === "pass"} onClick={() => void chooseVerdict("pass")}>Pass</button><button type="button" className={run.verdict === "fail" ? "active fail" : "fail"} disabled={busy} aria-pressed={run.verdict === "fail"} onClick={() => void chooseVerdict("fail")}>Fail</button>{!(["pass", "fail"] as string[]).includes(run.verdict) && <span className={`eval-verdict ${run.verdict}`}>Legacy: {run.verdict}</span>}</div><InlineEditor label="Review notes" value={run.review_notes ?? ""} multiline maxLength={4000} placeholder="Add review notes" className="review-notes-editor" onSave={async (value) => { const updated = await saveReview(run.verdict, value || null); return updated.review_notes ?? ""; }} onReload={load} /></section>
@@ -1006,10 +1006,15 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
     <ToolEvidence trace={run.trace} />
     <Section title="Execution trace"><div className="run-trace-list">{run.trace.map((entry, index) => <RunTraceEntry entry={entry} index={index} key={textValue(entry.id, String(index))} />)}{run.trace.length === 0 && <p className="run-empty-trace">No detailed trace was recorded for this run.</p>}</div></Section>
     <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
-    {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{children.map((child) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
+    {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{childUsage.map(({ run: child, usage }) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)} · {usage.callCount} model call{usage.callCount === 1 ? "" : "s"} · {formatUsageValue(usage, "total")} tokens · {child.actor_type}:{child.actor_id}</small><small>Input {formatUsageValue(usage, "input")} · Cache read {formatUsageValue(usage, "cacheRead")} · Fresh input {freshInputValue(usage)} · Output {formatUsageValue(usage, "output")} · Provider total {formatUsageValue(usage, "total")}{usage.partial ? " · partial" : ""}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
+    <Section title="End-to-end outcome"><div className="change-list"><article className="change"><strong>Parent {shortId(run.id)}</strong><span>{outcome}</span><span>{parentEvents.length} direct mutation{parentEvents.length === 1 ? "" : "s"} · {run.actor_type}:{run.actor_id}</span></article>{children.map((child) => { const mutations = events.filter((event) => event.run_id === child.id); return <article className="change" key={child.id}><strong>Child {shortId(child.id)} · {runType(child, objects)}</strong><span>{runOutcome(child, objects)}</span><span>{mutations.length} mutation{mutations.length === 1 ? "" : "s"} · {child.actor_type}:{child.actor_id}</span></article>; })}</div></Section>
     <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} compact /><ObjectId id={object.object_id} compact /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectContext visual={visuals.get(object.object_id)} /></article>)}{objects.length === 0 && <p className="muted">No related Objects.</p>}</div></Section>
-    <Section title="Durable mutations"><div className="change-list">{events.map((item) => <article className="change" key={item.id}><span className="event-dot" /><strong>{item.action} {item.target_type}</strong><span>revision {item.from_revision ?? "new"} → {item.to_revision}</span>{item.target_type === "object" ? <ObjectId id={item.target_id} compact /> : <ConnectionId id={item.target_id} compact />}{item.reversible && <span className="change-state">reversible</span>}</article>)}</div></Section>
+    <Section title="Durable mutations"><div className="change-list"><h4>Parent mutations</h4>{parentEvents.map((item) => <MutationEvidence event={item} runLabel={`Parent ${shortId(run.id)}`} key={item.id} />)}{parentEvents.length === 0 && <p className="muted">No direct parent mutations.</p>}{childEvents.map(({ run: child, events: mutations }) => <div key={child.id}><h4>Child {shortId(child.id)} · {child.actor_type}:{child.actor_id}</h4>{mutations.map((item) => <MutationEvidence event={item} runLabel={`Child ${shortId(child.id)}`} key={item.id} />)}</div>)}</div></Section>
   </div></div>;
+}
+
+function MutationEvidence({ event, runLabel }: { event: ObjectEvent; runLabel: string }) {
+  return <article className="change"><span className="event-dot" /><strong>{event.action} {event.target_type}</strong><span>Outcome: revision {event.from_revision ?? "new"} → {event.to_revision}</span><span>{runLabel} · {event.actor_type}:{event.actor_id} · {new Date(event.created_at).toLocaleString()}</span><span>Evidence: target {event.target_type}</span>{event.target_type === "object" ? <ObjectId id={event.target_id} compact /> : <ConnectionId id={event.target_id} compact />}{event.idempotency_key && <span>Idempotency reference: {event.idempotency_key}</span>}{event.reversible && <span className="change-state">reversible</span>}</article>;
 }
 
 function ConversationEvidence({ run }: { run: Run }) {
@@ -1033,17 +1038,34 @@ function AgentInputEvidence({ trace }: { trace: Record<string, unknown>[] }) {
   const turnFacts = recordValue(turn?.facts);
   const instructionFacts = recordValue(instructions?.facts);
   const application = recordValue(instructionFacts?.application_instructions);
+  const composition = recordValue(application?.composition);
   const toolCatalogue = recordValue(instructionFacts?.tool_catalogue);
   const applicationTools = recordValue(toolCatalogue?.application);
-  const components = arrayRecords(turnFacts?.components).filter((component) => textValue(component.status, "captured") === "captured");
+  const instructionComponents = arrayRecords(composition?.components)
+    .filter((component) => textValue(component.status, "captured") === "captured");
+  const turnComponents = arrayRecords(turnFacts?.components)
+    .filter((component) => textValue(component.status, "captured") === "captured");
+  const components = [...instructionComponents, ...turnComponents];
   const capturedApplication = application && textValue(application.status, "captured") === "captured" ? application : undefined;
   const capturedTools = applicationTools && textValue(applicationTools.status, "captured") === "captured" ? applicationTools : undefined;
   const hasCapturedInput = Boolean(capturedApplication || capturedTools || components.length > 0);
+  const scopedCall = numberValue(instructionFacts?.call_index);
+  const scopedAttempt = trace.find((entry) => entry.entry_type === "model_attempt" && numberValue(entry.call_index) === scopedCall);
+  const providerInput = numberValue(scopedAttempt?.input_tokens);
+  const applicationEstimateSources = capturedApplication ? [capturedApplication] : instructionComponents;
+  const estimates = [...applicationEstimateSources, capturedTools, ...turnComponents]
+    .map((component) => numberValue(component?.estimated_tokens))
+    .filter((value): value is number => value !== null);
+  const estimatedCaptured = estimates.reduce((sum, value) => sum + value, 0);
+  const unattributed = scopedCall !== null && providerInput !== null && estimates.length > 0
+    ? Math.max(0, providerInput - estimatedCaptured)
+    : null;
   return <Section title="What the agent received">
     {!hasCapturedInput && <p className="evidence-unavailable">Application-controlled input was not captured for this Run.</p>}
     {capturedApplication && <EvidenceText title="Application instructions" value={capturedApplication} estimated />}
     {capturedTools && <EvidenceText title="Application tool catalogue" value={capturedTools} estimated />}
     {components.length > 0 && <div className="evidence-list">{components.map((component, index) => <EvidenceText key={`${textValue(component.kind)}-${index}`} title={textValue(component.kind, "Input component").replaceAll("_", " ")} value={component} estimated />)}</div>}
+    {unattributed !== null && <p className="token-explanation"><strong>Unattributed provider input: {formatCount(unattributed)} tokens.</strong> This remainder may include provider-controlled instructions, schemas, conversation history, tool definitions, or other request material that was not captured. Component values are estimates, not billing measurements.</p>}
   </Section>;
 }
 
@@ -1051,7 +1073,8 @@ function EvidenceText({ title, value, estimated = false }: { title: string; valu
   const chars = numberValue(value.chars);
   const capturedTokens = numberValue(value.estimated_tokens);
   const tokens = capturedTokens ?? (estimated && chars !== null ? Math.ceil(chars / 4) : null);
-  return <details className="evidence-row evidence-text"><summary><strong>{title}</strong></summary><div className="evidence-meta"><span>{chars === null ? "Size unavailable" : `${formatCount(chars)} chars`}{tokens === null ? "" : ` · ~${formatCount(tokens)} tokens${estimated ? " estimated" : ""}`}</span>{textValue(value.source) && <span>{textValue(value.source)}</span>}{textValue(value.sha256) && <code>sha256 {textValue(value.sha256)}</code>}</div><pre>{textValue(value.text, "No text captured.")}</pre></details>;
+  const identity = [textValue(value.name), textValue(value.role, textValue(value.kind)), textValue(value.source_identifier), textValue(value.revision), textValue(value.path, textValue(value.source))].filter(Boolean).join(" · ");
+  return <details className="evidence-row evidence-text"><summary><strong>{title}</strong></summary><div className="evidence-meta"><span>{chars === null ? "Size unavailable" : `${formatCount(chars)} chars`}{tokens === null ? "" : ` · ~${formatCount(tokens)} tokens${estimated ? " estimated" : ""}`}</span>{identity && <span>{identity}</span>}{textValue(value.sha256) && <code>sha256 {textValue(value.sha256)}</code>}</div><pre>{textValue(value.text, "No text captured.")}</pre></details>;
 }
 
 function RetrievedContextEvidence({ trace }: { trace: Record<string, unknown>[] }) {
@@ -1107,9 +1130,86 @@ function RunTraceEntry({ entry, index }: { entry: Record<string, unknown>; index
   </details>;
 }
 
+type UsageKey = "total" | "input" | "cacheCreation" | "cacheRead" | "output" | "reasoning";
+type UsageMetrics = {
+  totals: Record<UsageKey, number>;
+  present: Record<UsageKey, boolean>;
+  callCount: number;
+  partial: boolean;
+};
+
+function UsageSummary({ title, usage, totalLabel = "Provider total", includeCalls = false }: { title: string; usage: UsageMetrics; totalLabel?: string; includeCalls?: boolean }) {
+  const freshInput = usage.present.input
+    ? Math.max(0, usage.totals.input - usage.totals.cacheRead)
+    : null;
+  return <section className="run-summary" aria-label={title}><h2>{title}{usage.partial ? " · partial" : ""}</h2><div className="run-metrics">
+    {includeCalls && <RunMetric label="Model calls" value={String(usage.callCount)} />}
+    <RunMetric label={totalLabel} value={formatUsageValue(usage, "total")} />
+    <RunMetric label="Input" value={formatUsageValue(usage, "input")} />
+    <RunMetric label="Cache read" value={formatUsageValue(usage, "cacheRead")} />
+    <RunMetric label="Fresh input (derived)" value={freshInput === null ? "—" : formatCount(freshInput)} />
+    <RunMetric label="Output" value={formatUsageValue(usage, "output")} />
+  </div>{usage.partial && <p className="token-explanation">One or more model calls reported partial or unavailable telemetry; these totals include only recorded values.</p>}</section>;
+}
+
+function emptyUsage(): UsageMetrics {
+  return {
+    totals: { total: 0, input: 0, cacheCreation: 0, cacheRead: 0, output: 0, reasoning: 0 },
+    present: { total: false, input: false, cacheCreation: false, cacheRead: false, output: false, reasoning: false },
+    callCount: 0,
+    partial: true
+  };
+}
+
+function modelAttempts(run: Run) {
+  return run.trace.filter((entry) => entry.entry_type === "model_attempt" && (
+    entry.input_tokens !== undefined || entry.output_tokens !== undefined || entry.total_tokens !== undefined || entry.usage_status !== undefined
+  ));
+}
+
+function latestModelCall(run: Run) {
+  return modelAttempts(run).at(-1);
+}
+
+function usageMetrics(run: Run): UsageMetrics {
+  return usageMetricsFromEntries(modelAttempts(run));
+}
+
+function usageMetricsFromEntries(entries: Record<string, unknown>[]): UsageMetrics {
+  const usage = emptyUsage();
+  usage.partial = entries.length === 0;
+  usage.callCount = entries.length;
+  for (const entry of entries) {
+    if (!["reported", "not_applicable", ""].includes(textValue(entry.usage_status))) usage.partial = true;
+    for (const [field, key] of [["total_tokens", "total"], ["input_tokens", "input"], ["cache_creation_tokens", "cacheCreation"], ["cache_read_tokens", "cacheRead"], ["output_tokens", "output"], ["reasoning_tokens", "reasoning"]] as const) {
+      const value = numberValue(entry[field]);
+      if (value !== null) { usage.totals[key] += value; usage.present[key] = true; }
+    }
+  }
+  return usage;
+}
+
+function combineUsage(items: UsageMetrics[]): UsageMetrics {
+  const combined = emptyUsage();
+  combined.partial = items.some((item) => item.partial);
+  combined.callCount = items.reduce((sum, item) => sum + item.callCount, 0);
+  for (const item of items) for (const key of Object.keys(combined.totals) as UsageKey[]) {
+    combined.totals[key] += item.totals[key];
+    combined.present[key] ||= item.present[key];
+  }
+  return combined;
+}
+
+function formatUsageValue(usage: UsageMetrics, key: UsageKey) {
+  return usage.present[key] ? formatCount(usage.totals[key]) : "—";
+}
+
+function freshInputValue(usage: UsageMetrics) {
+  return usage.present.input ? formatCount(Math.max(0, usage.totals.input - usage.totals.cacheRead)) : "—";
+}
+
 function runMetrics(run: Run) {
-  const tokenTotals = { total: 0, input: 0, cacheCreation: 0, cacheRead: 0, output: 0, reasoning: 0 };
-  const hasTokens = { total: false, input: false, cacheCreation: false, cacheRead: false, output: false, reasoning: false };
+  const usage = usageMetrics(run);
   let toolCalls = 0;
   let polls = 0;
   let failures = 0;
@@ -1121,21 +1221,15 @@ function runMetrics(run: Run) {
       else toolCalls += 1;
     }
     if (entry.status === "failed") failures += 1;
-    for (const [field, key] of [["total_tokens", "total"], ["input_tokens", "input"], ["cache_creation_tokens", "cacheCreation"], ["cache_read_tokens", "cacheRead"], ["output_tokens", "output"], ["reasoning_tokens", "reasoning"]] as const) {
-      const value = numberValue(entry[field]);
-      if (value !== null) { tokenTotals[key] += value; hasTokens[key] = true; }
-    }
     if (model === "—") model = textValue(entry.model_id, "—");
   }
   const started = run.started_at ? new Date(run.started_at).getTime() : null;
   const completed = run.completed_at ? new Date(run.completed_at).getTime() : null;
   const duration = started !== null && completed !== null ? formatDuration(Math.max(0, completed - started)) : run.status === "running" ? "Running" : "—";
-  const freshInput = hasTokens.input ? formatCount(Math.max(0, tokenTotals.input - tokenTotals.cacheCreation - tokenTotals.cacheRead)) : "—";
-  const nonReasoningOutput = hasTokens.output ? formatCount(Math.max(0, tokenTotals.output - tokenTotals.reasoning)) : "—";
   return {
     duration,
     model,
-    tokens: { ...Object.fromEntries(Object.entries(tokenTotals).map(([key, value]) => [key, hasTokens[key as keyof typeof hasTokens] ? formatCount(value) : "—"])), freshInput, nonReasoningOutput } as Record<keyof typeof tokenTotals | "freshInput" | "nonReasoningOutput", string>,
+    usage,
     toolCalls,
     polls,
     failures,

@@ -1773,6 +1773,7 @@ async fn worker_context(
             .map_err(|error| {
                 CuratorError::Invalid(format!("candidate retrieval failed: {error}"))
             })?;
+    apply_request_aware_candidate_policy(pool, &query, &mut candidates).await?;
     let candidate_ids = candidates
         .objects
         .iter()
@@ -1792,6 +1793,76 @@ async fn worker_context(
         object.connections = connections.remove(&object.id).unwrap_or_default();
     }
     Ok((messages, candidates))
+}
+
+const WORKFLOW_MUTATION_RELEVANCE_FLOOR: f64 = 0.02;
+
+async fn apply_request_aware_candidate_policy(
+    pool: &PgPool,
+    query: &str,
+    candidates: &mut crate::search::SearchPacket,
+) -> Result<(), CuratorError> {
+    let direct_ids = referenced_object_ids(query);
+    if let Some(kinds) = requested_mutation_kinds(query) {
+        candidates.objects.retain(|object| {
+            direct_ids.contains(&object.id)
+                || (object.relevance.score >= WORKFLOW_MUTATION_RELEVANCE_FLOOR
+                    && (kinds.contains(object.kind.as_str())
+                        || matches!(object.kind.as_str(), "user" | "chat")))
+        });
+    }
+    for id in direct_ids {
+        if candidates.objects.iter().any(|object| object.id == id) {
+            continue;
+        }
+        match crate::search::read_object(pool, id).await {
+            Ok(object) => candidates.objects.insert(0, object),
+            Err(crate::db::DbError::NotFound) => {}
+            Err(error) => {
+                return Err(CuratorError::Invalid(format!(
+                    "direct Context Object retrieval failed: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn referenced_object_ids(query: &str) -> std::collections::BTreeSet<Uuid> {
+    query
+        .split(|character: char| !(character.is_ascii_hexdigit() || character == '-'))
+        .filter_map(|value| Uuid::parse_str(value).ok())
+        .collect()
+}
+
+fn requested_mutation_kinds(query: &str) -> Option<std::collections::BTreeSet<&'static str>> {
+    let lower = query.to_ascii_lowercase();
+    if ![
+        "create", "update", "change", "delete", "link", "connect", "record", "add",
+    ]
+    .iter()
+    .any(|verb| {
+        lower
+            .split_whitespace()
+            .any(|word| word.trim_matches(|c: char| !c.is_alphanumeric()) == *verb)
+    }) {
+        return None;
+    }
+    let mut kinds = std::collections::BTreeSet::new();
+    for (term, kind) in [
+        ("entity", "entity"),
+        ("person", "entity"),
+        ("company", "entity"),
+        ("source", "source"),
+        ("note", "note"),
+        ("task", "task"),
+        ("memory", "memory"),
+    ] {
+        if lower.contains(term) {
+            kinds.insert(kind);
+        }
+    }
+    (!kinds.is_empty()).then_some(kinds)
 }
 
 async fn request_plan(
@@ -2127,6 +2198,7 @@ async fn record_curator_usage(
         source_thread_id: Some(run.chat_object_id.to_string()),
         source_execution_id: attribution.source_execution_id.to_owned(),
         source_turn_id: Some(run.id.to_string()),
+        call_index: Some(1),
         usage_status: if usage.is_some() {
             "reported"
         } else {
@@ -2585,5 +2657,26 @@ mod tests {
         assert_eq!(attribution.execution_type, "codex_harness");
         assert_eq!(attribution.auth_mode, "chatgpt_subscription");
         assert_eq!(attribution.billing_mode, "subscription_allowance");
+    }
+
+    #[test]
+    fn mutation_kind_policy_is_request_aware() {
+        assert_eq!(
+            requested_mutation_kinds("Create an Entity for Example Person"),
+            Some(std::collections::BTreeSet::from(["entity"]))
+        );
+        assert_eq!(
+            requested_mutation_kinds("Research companies in this market"),
+            None
+        );
+    }
+
+    #[test]
+    fn canonical_object_ids_are_extracted_from_requests() {
+        let id = Uuid::new_v4();
+        assert_eq!(
+            referenced_object_ids(&format!("Update object {id}, please")),
+            std::collections::BTreeSet::from([id])
+        );
     }
 }
