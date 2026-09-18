@@ -44,6 +44,7 @@ The request column lists body fields unless it says `query` or `path`.
 | Agent | POST | `/api/v2/theme-assignments` | required `object_id`, `theme_id`, `description`; optional `provenance`, `protected` |
 | Agent | POST | `/api/v2/theme-assignments/{id}/archive` | required `expected_revision` |
 | Note/Task writer | POST | `/api/v2/notes` | required `title`, `description`, `content`, `intent`; optional format, provenance, Source/Note links, and Excerpt evidence |
+| Note/Task writer | POST | `/api/v2/objects/{id}/artifacts` | append immutable supporting material; required `kind`, content or URI, capture outcome, and `Idempotency-Key` |
 | Note/Task writer | POST | `/api/v2/tasks` | required `title`, `description`; optional status, priority, owner, due date and source links |
 | Note/Task writer | PATCH | `/api/v2/tasks/{id}` | required `expected_revision`; include only fields to change |
 | Slack ingestion | POST | `/api/v2/ingest/slack/interactions` | Slack surface and thread IDs, messages, interaction state and Run metadata |

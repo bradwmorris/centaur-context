@@ -697,6 +697,45 @@ async fn note_and_task_write_listener_is_a_separate_attributed_idempotent_grant(
         .unwrap();
     assert_eq!(missing_retry_key.status(), StatusCode::BAD_REQUEST);
 
+    let supporting_artifact_missing_retry_key = note_write_router(state(), "w".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/objects/00000000-0000-4000-8000-000000000001/artifacts")
+                .header("authorization", format!("Bearer {}", "w".repeat(32)))
+                .header("x-centaur-principal-id", "workflow-research-capture")
+                .header("x-centaur-thread-key", "workflow:run:research:capture")
+                .header("content-type", "application/json")
+                .body(Body::from(r##"{"kind":"research_notes","content":"Synthetic working notes.","capture_outcome":"complete"}"##))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supporting_artifact_missing_retry_key.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    let artifact_read_surface = agent_router(state(), "a".repeat(32))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/objects/00000000-0000-4000-8000-000000000001/artifacts")
+                .header("authorization", format!("Bearer {}", "a".repeat(32)))
+                .header("x-centaur-principal-id", "researcher")
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .header("idempotency-key", "artifact-1")
+                .header("content-type", "application/json")
+                .body(Body::from(r##"{"kind":"research_notes","content":"Synthetic working notes.","capture_outcome":"complete"}"##))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        artifact_read_surface.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+
     let task_body = r##"{"title":"Research follow-up","description":"A bounded follow-up Task created by an authorized research agent.","priority":"medium","brief_markdown":"Review the captured evidence."}"##;
     let task_missing_retry_key = note_write_router(state(), "w".repeat(32))
         .oneshot(

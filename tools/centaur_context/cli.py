@@ -113,6 +113,31 @@ def read_note(note_id: str) -> None:
     _print(_client().read_note(note_id))
 
 
+def append_artifact(
+    object_id: str,
+    kind: str,
+    content: str,
+    expected_revision: int | None = None,
+    title: str | None = None,
+    media_type: str | None = "text/plain",
+    language: str | None = None,
+    captured_at: str | None = None,
+    metadata_json: str = "{}",
+    supersedes_artifact_id: str | None = None,
+    idempotency_key: str = "",
+) -> None:
+    try:
+        metadata = json.loads(metadata_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("metadata_json must be valid JSON") from exc
+    _print(_client().append_artifact(
+        object_id, kind=kind, content=content, expected_revision=expected_revision,
+        title=title, media_type=media_type, language=language, captured_at=captured_at,
+        metadata=metadata, supersedes_artifact_id=supersedes_artifact_id,
+        idempotency_key=idempotency_key,
+    ))
+
+
 def create_note(
     title: str,
     description: str,
@@ -376,6 +401,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     command = commands.add_parser("read-note")
     command.add_argument("note_id")
+
+    command = commands.add_parser("append-artifact")
+    command.add_argument("object_id")
+    command.add_argument("--kind", required=True)
+    command.add_argument("--content", required=True)
+    command.add_argument("--expected-revision", type=int)
+    command.add_argument("--title")
+    command.add_argument("--media-type", default="text/plain")
+    command.add_argument("--language")
+    command.add_argument("--captured-at")
+    command.add_argument("--metadata-json", default="{}")
+    command.add_argument("--supersedes-artifact-id")
+    command.add_argument("--idempotency-key", required=True)
 
     command = commands.add_parser(
         "create-note",

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SURFACES = {
     # source file, router start, router end, nested prefix, expected routes
     "Agent": ("src/api.rs", "pub fn agent_router", "pub fn note_write_router", "/api/v2", 17),
-    "Note/Task writer": ("src/api.rs", "pub fn note_write_router", "fn service_router", "/api/v2", 3),
+    "Note/Task writer": ("src/api.rs", "pub fn note_write_router", "fn service_router", "/api/v2", 4),
     "Slack ingestion": ("src/ingest.rs", "pub fn router", ".with_state", "", 2),
     "Source intake": ("src/source_intake.rs", "pub fn router", ".with_state", "", 7),
 }
