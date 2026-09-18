@@ -390,6 +390,144 @@ async fn artifacts_attach_to_any_object_and_are_immutable() {
 }
 
 #[tokio::test]
+async fn typed_research_notes_preserve_canonical_source_content_and_note_derivation() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let source_id = Uuid::new_v4();
+    let canonical_artifact_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'source','Synthetic interview','A synthetic interview used to verify atomic research capture.','system','test','system','test','{}')")
+        .bind(source_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES($1,'podcast_episode')")
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO artifacts(id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,metadata) VALUES($1,$2,'transcript','Exact source wording.','text/plain',$3,21,'complete','{}')")
+        .bind(canonical_artifact_id).bind(source_id).bind("0".repeat(64)).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(source_id)
+        .bind(canonical_artifact_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let actor = centaur_context::domain::ActorContext::system("typed-note-test");
+    let working_notes = db::append_artifact(
+        &pool,
+        &actor,
+        source_id,
+        db::NewArtifact {
+            expected_revision: Some(1),
+            kind: "research_notes".into(),
+            title: Some("Working notes".into()),
+            content: Some("A rough connection worth developing.".into()),
+            uri: None,
+            media_type: Some("text/plain".into()),
+            language: Some("en".into()),
+            captured_at: None,
+            capture_outcome: "complete".into(),
+            capture_reason: None,
+            expected_size_bytes: None,
+            metadata: json!({"source_type":"synthetic_test"}),
+            supersedes_artifact_id: None,
+        },
+        "typed-note-supporting-artifact",
+    )
+    .await
+    .unwrap();
+    assert_eq!(working_notes.kind, "research_notes");
+    let current: Option<Uuid> =
+        sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
+            .bind(source_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(current, Some(canonical_artifact_id));
+
+    let excerpt = db::create_note(
+        &pool,
+        &actor,
+        db::NewNote {
+            title: "Exact interview excerpt".into(),
+            description: "Exact wording from the synthetic interview at the cited timestamp."
+                .into(),
+            provenance: json!({"source_type":"test"}),
+            content: "Exact source wording.".into(),
+            content_format: "plain_text".into(),
+            intent: "excerpt".into(),
+            source_artifact_id: Some(canonical_artifact_id),
+            source_locator: Some(json!({"kind":"timestamp","start_ms":1000,"end_ms":3000})),
+            originating_chat_object_id: None,
+            derived_from_source_object_ids: vec![source_id],
+            derived_from_note_object_ids: vec![],
+        },
+        "typed-note-excerpt",
+    )
+    .await
+    .unwrap();
+    assert_eq!(excerpt.intent.as_deref(), Some("excerpt"));
+    let non_verbatim = db::create_note(
+        &pool,
+        &actor,
+        db::NewNote {
+            title: "Invalid paraphrased excerpt".into(),
+            description: "A synthetic negative case that must not be stored as quoted evidence."
+                .into(),
+            provenance: json!({"source_type":"test"}),
+            content: "A paraphrase that is absent from the transcript.".into(),
+            content_format: "plain_text".into(),
+            intent: "excerpt".into(),
+            source_artifact_id: Some(canonical_artifact_id),
+            source_locator: Some(json!({"kind":"timestamp","start_ms":1000,"end_ms":3000})),
+            originating_chat_object_id: None,
+            derived_from_source_object_ids: vec![source_id],
+            derived_from_note_object_ids: vec![],
+        },
+        "typed-note-non-verbatim",
+    )
+    .await;
+    assert!(
+        matches!(non_verbatim, Err(db::DbError::Invalid(message)) if message.contains("verbatim"))
+    );
+
+    let insight = db::create_note(
+        &pool,
+        &actor,
+        db::NewNote {
+            title: "Interpretation of the interview excerpt".into(),
+            description: "An original interpretation developed from the cited source evidence."
+                .into(),
+            provenance: json!({"source_type":"test"}),
+            content: "This is the researcher's interpretation.".into(),
+            content_format: "plain_text".into(),
+            intent: "insight".into(),
+            source_artifact_id: None,
+            source_locator: None,
+            originating_chat_object_id: None,
+            derived_from_source_object_ids: vec![source_id],
+            derived_from_note_object_ids: vec![excerpt.object_id],
+        },
+        "typed-note-insight",
+    )
+    .await
+    .unwrap();
+    assert_eq!(insight.intent.as_deref(), Some("insight"));
+    let targets: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT target_object_id FROM connections WHERE source_object_id=$1 AND kind='derived_from' ORDER BY target_object_id",
+    )
+    .bind(insight.object_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(targets.len(), 2);
+    assert!(targets.contains(&source_id));
+    assert!(targets.contains(&excerpt.object_id));
+}
+
+#[tokio::test]
 async fn one_run_owns_trace_result_and_mutation_events() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;

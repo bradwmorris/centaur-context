@@ -18,7 +18,8 @@ The current Object types are:
 - **Entity:** a subject such as a project, organization, product, or concept.
 - **Memory:** an event or insight worth retaining.
 - **Source:** a work used as evidence, such as an article or paper.
-- **Note:** written information from a person or agent.
+- **Note:** one atomic excerpt, insight, or question. Legacy Notes may remain
+  unclassified until a human reviews them.
 - **Theme:** an approved category for organizing knowledge.
 
 These are the types the current application supports, not a promise that an installation can invent new types without changing the schema and code.
@@ -35,7 +36,14 @@ The Object types and allowed relationships form the **ontology**: the shared voc
 
 ## Evidence and history
 
-Objects are the main knowledge records, but they do not hold everything. Chat messages keep the underlying conversation. Artifacts can preserve captured text, files, or references attached to an Object. A Source identifies a work; its Artifacts can hold material captured from that work.
+Objects are the main knowledge records, but they do not hold everything. Chat messages keep the underlying conversation. Artifacts can preserve captured text, files, or references attached to an Object. A Source identifies a work; its current Artifact is the canonical captured content selected by Source intake, while other Artifacts are supporting material and never silently replace it.
+
+Atomic Notes have one of three intents: `excerpt`, `insight`, or `question`.
+An Excerpt preserves exact wording and identifies one Source, one of that
+Source's Artifacts, and a validated timestamp, page, section, or text-offset
+locator. Insights and Questions can be `derived_from` Sources and other Notes.
+This keeps source evidence separate from interpretation without introducing
+parallel Object types.
 
 Runs record operations such as curation. Immutable Object Events record changes to Objects and Connections, so you can see what changed and why. These supporting records are **not** additional Object types. They help keep the knowledge traceable and reviewable.
 

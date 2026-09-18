@@ -43,7 +43,7 @@ The request column lists body fields unless it says `query` or `path`.
 | Agent | GET | `/api/v2/themes/{id}/objects` | query: optional `kind`, `limit` |
 | Agent | POST | `/api/v2/theme-assignments` | required `object_id`, `theme_id`, `description`; optional `provenance`, `protected` |
 | Agent | POST | `/api/v2/theme-assignments/{id}/archive` | required `expected_revision` |
-| Note/Task writer | POST | `/api/v2/notes` | required `title`, `description`, `content`; optional `content_format`, provenance and source links |
+| Note/Task writer | POST | `/api/v2/notes` | required `title`, `description`, `content`, `intent`; optional format, provenance, Source/Note links, and Excerpt evidence |
 | Note/Task writer | POST | `/api/v2/tasks` | required `title`, `description`; optional status, priority, owner, due date and source links |
 | Note/Task writer | PATCH | `/api/v2/tasks/{id}` | required `expected_revision`; include only fields to change |
 | Slack ingestion | POST | `/api/v2/ingest/slack/interactions` | Slack surface and thread IDs, messages, interaction state and Run metadata |
@@ -119,11 +119,18 @@ curl 'http://centaur-context-note-write:8084/api/v2/notes' \
   --header 'X-Centaur-Thread-Key: <provider:workspace:channel:thread>' \
   --header 'Idempotency-Key: <stable-operation-id>' \
   --header 'Content-Type: application/json' \
-  --data '{"title":"Decision","description":"Records the approved deployment decision and why it was selected.","content":"Use the private service endpoint.","content_format":"markdown"}'
+  --data '{"title":"Decision","description":"Records the approved deployment decision and why it was selected.","content":"Use the private service endpoint.","intent":"insight","content_format":"markdown"}'
 ```
 
 Creation returns HTTP `201` with the canonical Note under `data`, including its
-`object_id`, `revision`, content, provenance, and timestamps.
+`object_id`, `revision`, intent, evidence fields, content, provenance, and
+timestamps. Excerpts additionally require exactly one
+`derived_from_source_object_ids` entry, its `source_artifact_id`, and a
+`source_locator` object whose kind is `timestamp`, `page`, `section`, or
+`text_offset`; the submitted Excerpt content must occur verbatim in that
+Artifact's captured text. Insights and Questions may include
+`derived_from_note_object_ids` so their Note relationships are committed in
+the same idempotent operation.
 
 ## Internal surfaces
 
