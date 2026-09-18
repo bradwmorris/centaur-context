@@ -97,7 +97,7 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
             "sender":{"provider_user_id":format!("B{fixture}"),"display_name":"Example Bot","user_kind":"agent"},
             "content":"I created the note.","source_created_at":"2026-08-28T00:00:02Z"
         }],
-        "interaction_finished":false,
+        "interaction_finished":true,
         "agent_usage":[{
             "component":"centaur_agent","provider":"openai","model_id":"gpt-test","execution_type":"codex_harness",
             "auth_mode":"chatgpt_subscription","upstream_service":"chatgpt.com","billing_mode":"subscription_allowance",
@@ -153,5 +153,64 @@ async fn one_slack_message_opens_and_finishes_one_idempotent_run() {
             .filter(|entry| entry["id"] == format!("{interaction}:tool:1"))
             .count(),
         1
+    );
+
+    let curator_children: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM runs WHERE parent_run_id=$1")
+            .bind(Uuid::parse_str(run_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        curator_children, 1,
+        "durable content preserves Curator eligibility without replay duplication"
+    );
+
+    let owned_interaction = "1780000003.000100";
+    let owned = json!({
+        "workspace_id":workspace,"channel_id":channel,"thread_id":thread,"surface_kind":"channel",
+        "messages":[{
+            "provider_message_id":owned_interaction,
+            "sender":{"provider_user_id":format!("U{fixture}"),"display_name":"Example Human","user_kind":"human"},
+            "content":"Create the requested Entity.","source_created_at":"2026-08-28T00:00:04Z"
+        },{
+            "provider_message_id":"1780000004.000100",
+            "sender":{"provider_user_id":format!("B{fixture}"),"display_name":"Example Bot","user_kind":"agent"},
+            "content":"Thinking completed","source_created_at":"2026-08-28T00:00:05Z"
+        }],
+        "interaction_finished":true,
+        "workflow_ownership":{"owner":"synthetic-entity-workflow","mutation_intent":"exclusive"},
+        "run":{"interaction_id":owned_interaction,"status":"completed","started_at":"2026-08-28T00:00:04Z","completed_at":"2026-08-28T00:00:06Z","trace":[]}
+    });
+    let owned_response = app.clone().oneshot(request(&token, &owned)).await.unwrap();
+    assert_eq!(owned_response.status(), StatusCode::ACCEPTED);
+    let owned_body: Value = serde_json::from_slice(
+        &owned_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    let owned_run_id = Uuid::parse_str(owned_body["data"]["run_id"].as_str().unwrap()).unwrap();
+    let owned_trace: Value = sqlx::query_scalar("SELECT trace FROM runs WHERE id=$1")
+        .bind(owned_run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(owned_trace.as_array().unwrap().iter().any(|entry| {
+        entry["entry_type"] == "curator_skipped"
+            && entry["facts"]["reason"] == "workflow_owned_mutation"
+    }));
+    let owned_children: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM runs WHERE parent_run_id=$1")
+            .bind(owned_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        owned_children, 0,
+        "workflow-owned mutation must not race the generic Curator"
     );
 }

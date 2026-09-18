@@ -215,7 +215,7 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<RunDetail, DbError> {
         .await?
         .ok_or(DbError::NotFound)?;
     let children = sqlx::query_as::<_, RunSummary>(&format!(
-        "{RUN_SELECT} WHERE parent_run_id=$1 ORDER BY created_at,id"
+        "{RUN_SELECT} WHERE id IN (WITH RECURSIVE run_tree AS (SELECT id FROM runs WHERE parent_run_id=$1 UNION SELECT child.id FROM runs child JOIN run_tree parent ON child.parent_run_id=parent.id) SELECT id FROM run_tree) ORDER BY created_at,id"
     ))
     .bind(id)
     .fetch_all(pool)
@@ -882,6 +882,8 @@ pub struct NormalizedUsage {
     pub source_thread_id: Option<String>,
     pub source_execution_id: String,
     pub source_turn_id: Option<String>,
+    #[serde(default)]
+    pub call_index: Option<i32>,
     pub usage_status: String,
     pub usage_missing_reason: Option<String>,
     pub input_tokens: Option<i64>,
@@ -952,6 +954,9 @@ impl NormalizedUsage {
         {
             return Err("reported usage requires at least one token count".into());
         }
+        if self.call_index.is_some_and(|value| value < 1) {
+            return Err("call_index must be a positive integer".into());
+        }
         let numeric = [
             self.input_tokens,
             self.output_tokens,
@@ -974,6 +979,11 @@ impl NormalizedUsage {
             && i.checked_add(o).is_none_or(|m| t < m)
         {
             return Err("total_tokens must include input_tokens and output_tokens".into());
+        }
+        if let (Some(input), Some(cache_read)) = (self.input_tokens, self.cache_read_tokens)
+            && cache_read > input
+        {
+            return Err("cache_read_tokens must not exceed input_tokens".into());
         }
         if self.billing_mode == "metered_api" {
             match(&self.rate_card_version,&self.pricing_snapshot){(Some(_),Some(snapshot))if self.estimated_micro_usd==Some(metered_micro_usd(self,snapshot)?)=>{},(None,None)if self.estimated_micro_usd.is_none()=>{},_=>return Err("metered pricing provenance must be entirely present and correct or explicitly unavailable".into())}
@@ -1061,7 +1071,7 @@ pub async fn record_usage_in_tx(
     object.insert("id".into(), json!(id));
     object.insert("entry_type".into(), json!("model_attempt"));
     object.insert("created_at".into(), json!(OffsetDateTime::now_utc()));
-    let inserted=sqlx::query_scalar::<_,Uuid>(r#"UPDATE runs SET trace=trace||jsonb_build_array($2::jsonb),updated_at=now() WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(trace)e WHERE e->>'entry_type'='model_attempt' AND e->>'component'=$3 AND e->>'source_execution_id'=$4 AND COALESCE(e->>'source_turn_id','')=COALESCE($5,'')) RETURNING id"#).bind(input.run_id).bind(value).bind(&input.component).bind(&input.source_execution_id).bind(&input.source_turn_id).fetch_optional(&mut **tx).await?;
+    let inserted=sqlx::query_scalar::<_,Uuid>(r#"UPDATE runs SET trace=trace||jsonb_build_array($2::jsonb),updated_at=now() WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(trace)e WHERE e->>'entry_type'='model_attempt' AND e->>'component'=$3 AND e->>'source_execution_id'=$4 AND COALESCE(e->>'source_turn_id','')=COALESCE($5,'') AND COALESCE((e->>'call_index')::integer,1)=COALESCE($6,1)) RETURNING id"#).bind(input.run_id).bind(value).bind(&input.component).bind(&input.source_execution_id).bind(&input.source_turn_id).bind(input.call_index).fetch_optional(&mut **tx).await?;
     if inserted.is_none() {
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1)")
             .bind(input.run_id)
@@ -1093,6 +1103,7 @@ mod tests {
             source_thread_id: None,
             source_execution_id: "execution-1".into(),
             source_turn_id: None,
+            call_index: Some(1),
             usage_status: "reported".into(),
             usage_missing_reason: None,
             input_tokens: Some(1000),

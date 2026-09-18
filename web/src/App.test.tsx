@@ -109,10 +109,10 @@ describe("minimal canonical UI", () => {
       result: { summary: "Answered", response_message: { content: "The launch changed.", provider_message_id: "123.2", sender: { display_name: "Atlas" }, source_created_at: now } },
       trace: [
         { id: "input", entry_type: "input_snapshot", status: "completed", facts: { components: [{ kind: "user_message", chars: 13, estimated_tokens: 4, sha256: "input-hash", text: "What changed?" }] } },
-        { id: "instructions", entry_type: "instruction_snapshot", status: "completed", facts: { application_instructions: { status: "captured", source: "workspace/AGENTS.md", chars: 22, estimated_tokens: 6, sha256: "prompt-hash", text: "# Agent instructions" }, provider_instructions: { status: "unavailable", reason: "Provider-controlled hidden instructions are not exposed to Centaur." } } },
+        { id: "instructions", entry_type: "instruction_snapshot", status: "completed", facts: { call_index: 1, application_instructions: { status: "captured", source: "workspace/AGENTS.md", chars: 22, estimated_tokens: 6, sha256: "prompt-hash", text: "# Agent instructions", composition: { components: [{ name: "Centaur base", role: "base", source_identifier: "centaur:image", revision: "fixture-revision", path: "services/sandbox/SYSTEM_PROMPT.md", chars: 12, estimated_tokens: 3, sha256: "component-hash", text: "Base prompt" }] } }, provider_instructions: { status: "unavailable", reason: "Provider-controlled hidden instructions are not exposed to Centaur." } } },
         { id: "context", entry_type: "context_retrieval", status: "completed", created_at: now, facts: { packet: { query: "What changed?", retrieval: "hybrid", injected_text: "# Centaur Context\nLaunch memory", transport_truncated: false, omitted_object_count: 3, budget: { omitted_connections: 8 }, objects: [{ id: "memory-1", kind: "memory", title: "Launch memory", description: "Launch moved.", revision: 4, relevance: { score: 0.92, rationale: "Semantic match" } }] } } },
         { id: "tool", entry_type: "tool_call", name: "centaur-context read-object", status: "completed", facts: { command: "centaur-context read-object memory-1", output: "ok" } },
-        { id: "usage", entry_type: "model_attempt", status: "completed", model_id: "gpt-test", input_tokens: 100, cache_read_tokens: 60, output_tokens: 20, reasoning_tokens: 5, total_tokens: 120 },
+        { id: "usage", entry_type: "model_attempt", status: "completed", model_id: "gpt-test", call_index: 1, input_tokens: 100, cache_read_tokens: 60, output_tokens: 20, reasoning_tokens: 5, total_tokens: 120 },
       ],
     };
     vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-explain") ? envelope({ run: explainable, children: [], objects: [], events: [] }) : defaultFetch(input, init));
@@ -124,14 +124,55 @@ describe("minimal canonical UI", () => {
     expect(screen.getByText("Application instructions")).toBeVisible();
     fireEvent.click(screen.getByText("Application instructions"));
     expect(screen.getByText("~6 tokens estimated", { exact: false })).toBeVisible();
+    expect(screen.getByText("Unattributed provider input: 90 tokens.", { exact: false })).toBeVisible();
     expect(screen.queryByText("Provider-hidden instructions")).not.toBeInTheDocument();
     expect(screen.queryByText("Provider-controlled hidden instructions are not exposed to Centaur.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Retrieval details"));
     expect(screen.getByText("Omitted: 3 objects · 8 connections")).toBeVisible();
     fireEvent.click(screen.getByText("1. Launch memory"));
     expect(screen.getByText("Semantic match")).toBeVisible();
-    expect(screen.getByText("Fresh input (derived)")).toBeVisible();
-    expect(screen.getByText("40")).toBeVisible();
+    expect(screen.getByText("Latest model call")).toBeVisible();
+    expect(screen.getByText("Parent execution")).toBeVisible();
+    expect(screen.getByText("End-to-end usage")).toBeVisible();
+    expect(screen.getAllByText("Fresh input (derived)").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("40").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("totals every parent and child model call and attributes durable mutations", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    const parent = {
+      ...run,
+      id: "run-tree",
+      kind: "slack_interaction",
+      primary_object_id: null,
+      trace: [
+        { entry_type: "model_attempt", status: "completed", call_index: 1, input_tokens: 100, cache_read_tokens: 40, output_tokens: 20, total_tokens: 120 },
+        { entry_type: "model_attempt", status: "completed", call_index: 2, input_tokens: 80, cache_read_tokens: 20, output_tokens: 10, total_tokens: 90 },
+      ],
+    };
+    const childOne = { ...run, id: "child-one", parent_run_id: parent.id, kind: "curation", actor_id: "curator", trace: [{ entry_type: "model_attempt", status: "completed", call_index: 1, input_tokens: 50, output_tokens: 5, total_tokens: 55 }] };
+    const childTwo = { ...run, id: "child-two", parent_run_id: childOne.id, kind: "human_mutation", actor_type: "human", actor_id: "alex", trace: [{ entry_type: "model_attempt", status: "completed", call_index: 1, usage_status: "unavailable" }] };
+    const events = [
+      { id: "event-parent", run_id: parent.id, action: "updated", target_type: "object", target_id: source.id, from_revision: 1, to_revision: 2, actor_type: "centaur_agent", actor_id: "workflow-source-ingestion", created_at: now, reversible: true },
+      { id: "event-child", run_id: childTwo.id, action: "created", target_type: "connection", target_id: "connection-1", from_revision: null, to_revision: 1, actor_type: "human", actor_id: "alex", created_at: now, reversible: false },
+    ];
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith("/api/v2/runs/run-tree") ? envelope({ run: parent, children: [childOne, childTwo], objects: [], events }) : defaultFetch(input, init));
+    window.history.replaceState({}, "", "/evals/run-tree");
+    render(<App />);
+
+    const parentUsage = await screen.findByRole("region", { name: "Parent execution" });
+    expect(within(parentUsage).getByText("2")).toBeVisible();
+    expect(within(parentUsage).getByText("210")).toBeVisible();
+    const endToEnd = screen.getByRole("region", { name: "End-to-end usage" });
+    expect(within(endToEnd).getByText("4")).toBeVisible();
+    expect(within(endToEnd).getByText("265")).toBeVisible();
+    expect(endToEnd).toHaveTextContent("partial");
+    expect(screen.getByText(/1 model call · 55 tokens · centaur_agent:curator/)).toBeVisible();
+    expect(screen.getByText(/1 model call · — tokens · human:alex/)).toBeVisible();
+    expect(screen.getByText("Input 50 · Cache read — · Fresh input 50 · Output 5 · Provider total 55")).toBeVisible();
+    expect(screen.getByText(/Parent run-tree · centaur_agent:workflow-source-ingestion/)).toBeVisible();
+    expect(screen.getAllByText(/Child child-two · human:alex/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("No direct parent mutations.")).not.toBeInTheDocument();
   });
 
   it("does not reconstruct evidence for an older run", async () => {

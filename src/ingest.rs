@@ -177,7 +177,16 @@ pub struct SlackInteractionInput {
     pub interaction_finished: bool,
     #[serde(default)]
     pub agent_usage: Vec<Value>,
+    #[serde(default)]
+    pub workflow_ownership: Option<WorkflowOwnershipInput>,
     pub run: SlackRunInput,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowOwnershipInput {
+    pub owner: String,
+    pub mutation_intent: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -234,6 +243,7 @@ pub struct ValidatedSlackInteraction {
     messages: Vec<ValidatedSlackMessage>,
     interaction_finished: bool,
     agent_usage: Vec<Value>,
+    workflow_ownership: Option<WorkflowOwnershipInput>,
     run: ValidatedSlackRun,
 }
 
@@ -379,6 +389,24 @@ impl SlackInteractionInput {
                 .cmp(&b.source_created_at)
                 .then_with(|| a.provider_message_id.cmp(&b.provider_message_id))
         });
+        let workflow_ownership = self
+            .workflow_ownership
+            .map(|mut ownership| {
+                ownership.owner = required_text(ownership.owner, "workflow_ownership.owner", 200)?;
+                ownership.mutation_intent = required_text(
+                    ownership.mutation_intent,
+                    "workflow_ownership.mutation_intent",
+                    50,
+                )?;
+                if ownership.mutation_intent != "exclusive" {
+                    return Err(ValidationError::Unsupported {
+                        field: "workflow_ownership.mutation_intent",
+                        value: ownership.mutation_intent,
+                    });
+                }
+                Ok(ownership)
+            })
+            .transpose()?;
         Ok(ValidatedSlackInteraction {
             workspace_id: required_text(self.workspace_id, "workspace_id", 300)?,
             channel_id: required_text(self.channel_id, "channel_id", 300)?,
@@ -389,6 +417,7 @@ impl SlackInteractionInput {
             messages,
             interaction_finished: self.interaction_finished,
             agent_usage: self.agent_usage,
+            workflow_ownership,
             run,
         })
     }
@@ -521,6 +550,15 @@ pub async fn ingest(
     .await?;
     let chat_object_id = get_or_create_chat(&mut tx, &actor, run_id, &input).await?;
     crate::runs::attach_slack_chat(&mut tx, run_id, chat_object_id).await?;
+    if let Some(ownership) = &input.workflow_ownership {
+        crate::runs::append_trace(
+            &mut tx,
+            run_id,
+            "workflow_ownership",
+            json!({"owner":ownership.owner,"mutation_intent":ownership.mutation_intent}),
+        )
+        .await?;
+    }
     let mut participants = BTreeSet::new();
     let mut inserted_message_count = 0usize;
 
@@ -579,7 +617,18 @@ pub async fn ingest(
     .await?;
 
     let curator_run_id = if input.interaction_finished {
-        queue_next_window(&mut tx, &actor, run_id, chat_object_id, "explicit_finish").await?
+        queue_next_window(
+            &mut tx,
+            &actor,
+            run_id,
+            chat_object_id,
+            "explicit_finish",
+            input
+                .workflow_ownership
+                .as_ref()
+                .map(|_| "workflow_owned_mutation"),
+        )
+        .await?
     } else {
         None
     };
@@ -1035,10 +1084,12 @@ async fn queue_next_window(
     run_id: Uuid,
     chat_object_id: Uuid,
     trigger: &str,
+    suppression_reason: Option<&str>,
 ) -> Result<Option<Uuid>, DbError> {
-    let messages: Vec<(Uuid,)> = sqlx::query_as(
-        r#"SELECT m.id
+    let messages: Vec<(Uuid, String, String)> = sqlx::query_as(
+        r#"SELECT m.id,u.user_kind,m.content
            FROM chat_messages m
+           JOIN users u ON u.object_id=m.sender_user_object_id
            WHERE m.chat_object_id=$1
              AND m.ingestion_sequence > COALESCE(
                  (SELECT previous.ingestion_sequence FROM chat_messages previous
@@ -1049,10 +1100,50 @@ async fn queue_next_window(
     .bind(chat_object_id)
     .fetch_all(&mut **tx)
     .await?;
-    let Some((first_message_id,)) = messages.first().copied() else {
+    let Some((first_message_id, _, _)) = messages.first() else {
         return Ok(None);
     };
-    let (last_message_id,) = messages.last().copied().expect("non-empty message window");
+    let first_message_id = *first_message_id;
+    let last_message_id = messages.last().expect("non-empty message window").0;
+    let agent_messages = messages
+        .iter()
+        .filter(|(_, sender_kind, _)| sender_kind == "agent")
+        .map(|(_, _, content)| content.as_str())
+        .collect::<Vec<_>>();
+    if let Some(reason) = suppression_reason {
+        sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
+            .bind(chat_object_id)
+            .bind(last_message_id)
+            .execute(&mut **tx)
+            .await?;
+        crate::runs::append_trace(
+            tx,
+            run_id,
+            "curator_skipped",
+            json!({"reason":reason,"trigger":trigger,"message_count":messages.len()}),
+        )
+        .await?;
+        return Ok(None);
+    }
+    if !agent_messages.is_empty()
+        && agent_messages
+            .iter()
+            .all(|content| is_non_durable_status(content))
+    {
+        sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,processing_updated_at=now() WHERE object_id=$1")
+            .bind(chat_object_id)
+            .bind(last_message_id)
+            .execute(&mut **tx)
+            .await?;
+        crate::runs::append_trace(
+            tx,
+            run_id,
+            "curator_skipped",
+            json!({"reason":"status_only_agent_output","trigger":trigger,"message_count":messages.len()}),
+        )
+        .await?;
+        return Ok(None);
+    }
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO runs
@@ -1080,6 +1171,38 @@ async fn queue_next_window(
     crate::runs::append_trace(tx, run_id, "curator_queued", json!({"curator_run_id":id})).await?;
     crate::runs::attach_curator_run(tx, run_id, id).await?;
     Ok(Some(id))
+}
+
+fn is_non_durable_status(content: &str) -> bool {
+    let normalized = content
+        .trim()
+        .trim_matches(|character: char| character.is_ascii_punctuation())
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "thinking completed"
+            | "thinking complete"
+            | "processing completed"
+            | "processing complete"
+            | "working"
+            | "thinking"
+    )
+}
+
+#[cfg(test)]
+mod eligibility_tests {
+    use super::is_non_durable_status;
+
+    #[test]
+    fn status_only_curator_eligibility_is_conservative() {
+        assert!(is_non_durable_status("Thinking completed"));
+        assert!(is_non_durable_status(" Thinking completed. "));
+        assert!(!is_non_durable_status(
+            "Thinking completed: created a durable note"
+        ));
+        assert!(!is_non_durable_status("The requested analysis is ready."));
+    }
 }
 
 pub async fn queue_inactive_interactions(
@@ -1136,7 +1259,7 @@ pub async fn queue_inactive_interactions(
             crate::runs::attach_slack_chat(&mut tx, id, chat_object_id).await?;
             id
         };
-        if queue_next_window(&mut tx, &actor, run_id, chat_object_id, "inactivity")
+        if queue_next_window(&mut tx, &actor, run_id, chat_object_id, "inactivity", None)
             .await?
             .is_some()
         {
