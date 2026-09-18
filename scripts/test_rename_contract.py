@@ -132,7 +132,7 @@ def test_backup_metadata_rejects_future_schema(tmp_path: Path) -> None:
                 "product": "centaur-context",
                 "product_version": "0.2.0",
                 "database": "centaur_context",
-                "schema_version": 24,
+                "schema_version": 25,
                 "format": "pg_dump-custom",
             }
         ),
@@ -156,7 +156,7 @@ def test_backup_metadata_accepts_current_private_database(tmp_path: Path) -> Non
                 "product": "centaur-context",
                 "product_version": "0.3.0",
                 "database": "centaur_context_enyu",
-                "schema_version": 23,
+                "schema_version": 24,
                 "format": "pg_dump-custom",
             }
         ),

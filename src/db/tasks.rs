@@ -53,7 +53,14 @@ pub async fn create_task(
         pool,
         actor,
         input.originating_chat_object_id,
-        &input.derived_from_source_object_ids,
+        NoteLinkInput {
+            source_object_ids: &input.derived_from_source_object_ids,
+            note_object_ids: &[],
+            intent: "insight",
+            content: "",
+            source_artifact_id: None,
+            source_locator: None,
+        },
     )
     .await?;
     if (input.status == "blocked") != input.blocked_reason.is_some() {
@@ -197,7 +204,14 @@ async fn reconcile_existing_task_links(
         pool,
         actor,
         input.originating_chat_object_id,
-        &input.derived_from_source_object_ids,
+        NoteLinkInput {
+            source_object_ids: &input.derived_from_source_object_ids,
+            note_object_ids: &[],
+            intent: "insight",
+            content: "",
+            source_artifact_id: None,
+            source_locator: None,
+        },
     )
     .await?;
     let mut requested = Vec::new();

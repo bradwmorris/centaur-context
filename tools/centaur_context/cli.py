@@ -102,9 +102,10 @@ def search_notes(
     query: str,
     limit: int = 20,
     cursor: str | None = None,
+    intent: str | None = None,
 ) -> None:
     """Search Notes and return bounded excerpts."""
-    _print(_client().search_notes(query, limit=limit, cursor=cursor))
+    _print(_client().search_notes(query, limit=limit, cursor=cursor, intent=intent))
 
 
 def read_note(note_id: str) -> None:
@@ -116,10 +117,14 @@ def create_note(
     title: str,
     description: str,
     content: str,
+    intent: str,
     content_format: str = "markdown",
+    source_artifact_id: str | None = None,
+    source_locator_json: str | None = None,
     provenance_json: str = "{}",
     originating_chat_object_id: str | None = None,
     derived_from_source_object_id: list[str] | None = None,
+    derived_from_note_object_id: list[str] | None = None,
     idempotency_key: str = "",
 ) -> None:
     """Create a Note. Provenance accepts source_type, source_ref, note, publication_allowed."""
@@ -127,15 +132,23 @@ def create_note(
         provenance = json.loads(provenance_json)
     except json.JSONDecodeError as exc:
         raise ValueError("provenance_json must be valid JSON") from exc
+    try:
+        source_locator = json.loads(source_locator_json) if source_locator_json else None
+    except json.JSONDecodeError as exc:
+        raise ValueError("source_locator_json must be valid JSON") from exc
     _print(
         _client().create_note(
             title,
             description,
             content,
+            intent=intent,
             content_format=content_format,
+            source_artifact_id=source_artifact_id,
+            source_locator=source_locator,
             provenance=provenance,
             originating_chat_object_id=originating_chat_object_id,
             derived_from_source_object_ids=derived_from_source_object_id,
+            derived_from_note_object_ids=derived_from_note_object_id,
             idempotency_key=idempotency_key,
         )
     )
@@ -339,6 +352,8 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("query")
         command.add_argument("--limit", type=_bounded_int(1, 100), default=20)
         command.add_argument("--cursor")
+        if name == "search-notes":
+            command.add_argument("--intent", choices=("excerpt", "insight", "question"))
 
     command = commands.add_parser("list-sources")
     command.add_argument("--created-after")
@@ -372,7 +387,10 @@ def _build_parser() -> argparse.ArgumentParser:
     command.add_argument("title")
     command.add_argument("--description", required=True)
     command.add_argument("--content", required=True)
+    command.add_argument("--intent", choices=("excerpt", "insight", "question"), required=True)
     command.add_argument("--content-format", default="markdown")
+    command.add_argument("--source-artifact-id")
+    command.add_argument("--source-locator-json")
     command.add_argument(
         "--provenance-json",
         default="{}",
@@ -383,6 +401,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     command.add_argument("--originating-chat-object-id")
     command.add_argument("--derived-from-source-object-id", action="append")
+    command.add_argument("--derived-from-note-object-id", action="append")
     command.add_argument("--idempotency-key", required=True)
 
     command = commands.add_parser("create-task")

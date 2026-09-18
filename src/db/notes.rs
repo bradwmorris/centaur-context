@@ -2,13 +2,22 @@
 
 use super::*;
 
+pub(super) struct NoteLinkInput<'a> {
+    pub source_object_ids: &'a [Uuid],
+    pub note_object_ids: &'a [Uuid],
+    pub intent: &'a str,
+    pub content: &'a str,
+    pub source_artifact_id: Option<Uuid>,
+    pub source_locator: Option<&'a Value>,
+}
+
 pub async fn list_notes(
     pool: &PgPool,
     filter: NoteListFilter,
 ) -> Result<Vec<NoteSearchResult>, DbError> {
     let mut query = QueryBuilder::<Postgres>::new(
         r#"SELECT o.id AS object_id,o.title,o.description,
-        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,n.content_format,substring(n.content FROM 1 FOR 400) AS excerpt,o.created_at,o.updated_at
+        CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,n.content_format,n.intent,substring(n.content FROM 1 FOR 400) AS excerpt,o.created_at,o.updated_at
         FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(cursor) = filter.cursor {
@@ -17,6 +26,9 @@ pub async fn list_notes(
     if let Some(search) = filter.query {
         query.push(" AND to_tsvector('simple',concat_ws(' ',o.title,o.description,n.content)) @@ websearch_to_tsquery('simple',")
             .push_bind(search).push(")");
+    }
+    if let Some(intent) = filter.intent {
+        query.push(" AND n.intent=").push_bind(intent);
     }
     push_object_list_order(&mut query, &filter.sort);
     query.push(" LIMIT ").push_bind(filter.limit);
@@ -38,7 +50,14 @@ pub async fn create_note(
         pool,
         actor,
         input.originating_chat_object_id,
-        &input.derived_from_source_object_ids,
+        NoteLinkInput {
+            source_object_ids: &input.derived_from_source_object_ids,
+            note_object_ids: &input.derived_from_note_object_ids,
+            intent: &input.intent,
+            content: &input.content,
+            source_artifact_id: input.source_artifact_id,
+            source_locator: input.source_locator.as_ref(),
+        },
     )
     .await?;
     let id = Uuid::new_v4();
@@ -48,14 +67,17 @@ pub async fn create_note(
         VALUES ($1,'note',$2,$3,$4,$5,$4,$5,$6)"#)
         .bind(id).bind(&input.title).bind(&input.description).bind(actor.actor_type).bind(&actor.actor_id)
         .bind(&input.provenance).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO notes (object_id,content,content_format) VALUES ($1,$2,$3)")
+    sqlx::query("INSERT INTO notes (object_id,content,content_format,intent,source_artifact_id,source_locator) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(id)
         .bind(&input.content)
         .bind(&input.content_format)
+        .bind(&input.intent)
+        .bind(input.source_artifact_id)
+        .bind(&input.source_locator)
         .execute(&mut *tx)
         .await?;
     let run_id = insert_event(&mut tx,actor,"object",id,id,"created",Some(idempotency_key),None,1,
-        json!({"kind":"note","title":input.title,"content_format":input.content_format,"content_characters":input.content.chars().count()})).await?;
+        json!({"kind":"note","title":input.title,"intent":input.intent,"content_format":input.content_format,"content_characters":input.content.chars().count(),"source_artifact_id":input.source_artifact_id,"source_locator":input.source_locator})).await?;
 
     let mut connection_ids = Vec::new();
     let mut sequence = 2_i64;
@@ -115,6 +137,34 @@ pub async fn create_note(
         connection_ids.push(connection_id);
         sequence += 1;
     }
+    for note_object_id in &input.derived_from_note_object_ids {
+        let connection_id = insert_note_connection(
+            &mut tx,
+            actor,
+            id,
+            "derived_from",
+            *note_object_id,
+            "This atomic Note develops or questions the linked Note.",
+            &input.provenance,
+        )
+        .await?;
+        insert_event_for_run(
+            &mut tx,
+            run_id,
+            sequence,
+            actor,
+            "connection",
+            connection_id,
+            id,
+            "connected",
+            None,
+            None,
+            1,
+        )
+        .await?;
+        connection_ids.push(connection_id);
+        sequence += 1;
+    }
     sqlx::query(
         r#"UPDATE runs
            SET chat_object_id=$2,primary_object_id=$3,
@@ -142,7 +192,14 @@ async fn reconcile_existing_note_links(
         pool,
         actor,
         input.originating_chat_object_id,
-        &input.derived_from_source_object_ids,
+        NoteLinkInput {
+            source_object_ids: &input.derived_from_source_object_ids,
+            note_object_ids: &input.derived_from_note_object_ids,
+            intent: &input.intent,
+            content: &input.content,
+            source_artifact_id: input.source_artifact_id,
+            source_locator: input.source_locator.as_ref(),
+        },
     )
     .await?;
     let mut requested = Vec::new();
@@ -160,6 +217,14 @@ async fn reconcile_existing_note_links(
             "derived_from",
             *source_id,
             "This Note records an observation derived from the linked Source.",
+        ));
+    }
+    for note_id in &input.derived_from_note_object_ids {
+        requested.push((
+            note_object_id,
+            "derived_from",
+            *note_id,
+            "This atomic Note develops or questions the linked Note.",
         ));
     }
     let mut missing = Vec::new();
@@ -254,7 +319,7 @@ pub(super) async fn validate_note_links(
     pool: &PgPool,
     actor: &ActorContext,
     originating_chat_object_id: Option<Uuid>,
-    source_object_ids: &[Uuid],
+    links: NoteLinkInput<'_>,
 ) -> Result<Option<Uuid>, DbError> {
     let resolved_chat_object_id = match originating_chat_object_id {
         Some(id) => Some(id),
@@ -276,25 +341,101 @@ pub(super) async fn validate_note_links(
             ));
         }
     }
-    let unique_source_ids = source_object_ids.iter().copied().collect::<HashSet<_>>();
-    if unique_source_ids.len() != source_object_ids.len() {
+    let unique_source_ids = links
+        .source_object_ids
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    if unique_source_ids.len() != links.source_object_ids.len() {
         return Err(DbError::Invalid(
             "derived_from_source_object_ids must not contain duplicates".into(),
         ));
     }
-    if !source_object_ids.is_empty() {
+    if !links.source_object_ids.is_empty() {
         let valid_count: i64 = sqlx::query_scalar(
             r#"SELECT count(*) FROM objects o JOIN sources s ON s.object_id=o.id
                WHERE o.id=ANY($1) AND o.archived_at IS NULL"#,
         )
-        .bind(source_object_ids)
+        .bind(links.source_object_ids)
         .fetch_one(pool)
         .await?;
-        if valid_count != source_object_ids.len() as i64 {
+        if valid_count != links.source_object_ids.len() as i64 {
             return Err(DbError::Invalid(
                 "derived_from_source_object_ids must identify active Sources".into(),
             ));
         }
+    }
+    let unique_note_ids = links
+        .note_object_ids
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    if unique_note_ids.len() != links.note_object_ids.len() {
+        return Err(DbError::Invalid(
+            "derived_from_note_object_ids must not contain duplicates".into(),
+        ));
+    }
+    if !links.note_object_ids.is_empty() {
+        let valid_count: i64 = sqlx::query_scalar(
+            r#"SELECT count(*) FROM objects o JOIN notes n ON n.object_id=o.id
+               WHERE o.id=ANY($1) AND o.archived_at IS NULL"#,
+        )
+        .bind(links.note_object_ids)
+        .fetch_one(pool)
+        .await?;
+        if valid_count != links.note_object_ids.len() as i64 {
+            return Err(DbError::Invalid(
+                "derived_from_note_object_ids must identify active Notes".into(),
+            ));
+        }
+    }
+    if links.intent == "excerpt" {
+        if links.source_object_ids.len() != 1 {
+            return Err(DbError::Invalid(
+                "excerpt Notes require exactly one derived Source".into(),
+            ));
+        }
+        if !links.note_object_ids.is_empty() {
+            return Err(DbError::Invalid(
+                "excerpt Notes cannot derive from other Notes".into(),
+            ));
+        }
+        let artifact_id = links
+            .source_artifact_id
+            .ok_or_else(|| DbError::Invalid("excerpt Notes require source_artifact_id".into()))?;
+        if links.source_locator.is_none() {
+            return Err(DbError::Invalid(
+                "excerpt Notes require source_locator".into(),
+            ));
+        }
+        let artifact_content: Option<Option<String>> =
+            sqlx::query_scalar("SELECT content FROM artifacts WHERE id=$1 AND object_id=$2")
+                .bind(artifact_id)
+                .bind(links.source_object_ids[0])
+                .fetch_optional(pool)
+                .await?;
+        match artifact_content {
+            None => {
+                return Err(DbError::Invalid(
+                    "source_artifact_id must belong to the excerpt Source".into(),
+                ));
+            }
+            Some(None) => {
+                return Err(DbError::Invalid(
+                    "excerpt source Artifact must contain captured text".into(),
+                ));
+            }
+            Some(Some(artifact_content)) if !artifact_content.contains(links.content) => {
+                return Err(DbError::Invalid(
+                    "excerpt content must occur verbatim in the source Artifact".into(),
+                ));
+            }
+            Some(Some(_)) => {}
+        }
+    } else if links.source_artifact_id.is_some() || links.source_locator.is_some() {
+        return Err(DbError::Invalid(
+            "source evidence fields are only valid for excerpt Notes".into(),
+        ));
     }
     Ok(resolved_chat_object_id)
 }

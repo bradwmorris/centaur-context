@@ -230,6 +230,9 @@ pub struct Note {
     pub protected: bool,
     pub content: String,
     pub content_format: String,
+    pub intent: Option<String>,
+    pub source_artifact_id: Option<Uuid>,
+    pub source_locator: Option<Value>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -244,6 +247,7 @@ pub struct NoteSearchResult {
     pub lifecycle: String,
     pub revision: i64,
     pub content_format: String,
+    pub intent: Option<String>,
     pub excerpt: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -634,6 +638,7 @@ pub struct SourceListFilter {
 #[derive(Clone, Debug)]
 pub struct NoteListFilter {
     pub query: Option<String>,
+    pub intent: Option<String>,
     pub cursor: Option<Uuid>,
     pub limit: i64,
     pub sort: ListSort,
@@ -673,8 +678,12 @@ pub struct NewNote {
     pub provenance: Value,
     pub content: String,
     pub content_format: String,
+    pub intent: String,
+    pub source_artifact_id: Option<Uuid>,
+    pub source_locator: Option<Value>,
     pub originating_chat_object_id: Option<Uuid>,
     pub derived_from_source_object_ids: Vec<Uuid>,
+    pub derived_from_note_object_ids: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]

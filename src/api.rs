@@ -1166,6 +1166,7 @@ async fn create_artifact(
 #[derive(Debug, Deserialize)]
 struct NoteListQuery {
     q: Option<String>,
+    intent: Option<String>,
     cursor: Option<Uuid>,
     limit: Option<i64>,
     sort: Option<String>,
@@ -1177,6 +1178,10 @@ async fn note_page(state: &AppState, query: NoteListQuery) -> Result<Value, ApiE
         &state.pool,
         db::NoteListFilter {
             query: optional_text(query.q, "q", 1000)?,
+            intent: query
+                .intent
+                .map(|value| allowed(value, "intent", &["excerpt", "insight", "question"]))
+                .transpose()?,
             cursor: query.cursor,
             limit: limit + 1,
             sort: list_sort(query.sort)?,
@@ -1219,12 +1224,106 @@ struct CreateNoteRequest {
     title: String,
     description: String,
     content: String,
+    intent: String,
+    source_artifact_id: Option<Uuid>,
+    source_locator: Option<Value>,
     #[serde(default = "default_note_format")]
     content_format: String,
     provenance: Option<Value>,
     originating_chat_object_id: Option<Uuid>,
     #[serde(default)]
     derived_from_source_object_ids: Vec<Uuid>,
+    #[serde(default)]
+    derived_from_note_object_ids: Vec<Uuid>,
+}
+
+fn validated_source_locator(value: Option<Value>) -> Result<Option<Value>, ApiError> {
+    let Some(value) = value else { return Ok(None) };
+    let object = value
+        .as_object()
+        .ok_or_else(|| ApiError::BadRequest("source_locator must be a JSON object".to_owned()))?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let allowed_keys: &[&str] = match kind {
+        "timestamp" => &["kind", "start_ms", "end_ms", "label"],
+        "page" => &["kind", "page", "end_page", "label"],
+        "section" => &["kind", "label"],
+        "text_offset" => &["kind", "start", "end", "label"],
+        _ => &[],
+    };
+    if object
+        .keys()
+        .any(|key| !allowed_keys.contains(&key.as_str()))
+    {
+        return Err(ApiError::BadRequest(
+            "source_locator contains unsupported fields".to_owned(),
+        ));
+    }
+    if let Some(label) = object.get("label") {
+        let label = label
+            .as_str()
+            .ok_or_else(|| ApiError::BadRequest("source_locator.label must be text".to_owned()))?;
+        required_text(label.to_owned(), "source_locator.label", 500)?;
+    }
+    let integer = |field: &str| object.get(field).and_then(Value::as_i64);
+    match kind {
+        "timestamp" => {
+            let start = integer("start_ms").ok_or_else(|| {
+                ApiError::BadRequest("timestamp locator requires non-negative start_ms".to_owned())
+            })?;
+            let end = integer("end_ms").ok_or_else(|| {
+                ApiError::BadRequest(
+                    "timestamp locator requires end_ms greater than start_ms".to_owned(),
+                )
+            })?;
+            if start < 0 || end <= start {
+                return Err(ApiError::BadRequest(
+                    "timestamp locator requires 0 <= start_ms < end_ms".to_owned(),
+                ));
+            }
+        }
+        "page" => {
+            let page = integer("page").ok_or_else(|| {
+                ApiError::BadRequest("page locator requires a positive page".to_owned())
+            })?;
+            let end_page = integer("end_page").unwrap_or(page);
+            if page < 1 || end_page < page {
+                return Err(ApiError::BadRequest(
+                    "page locator requires 1 <= page <= end_page".to_owned(),
+                ));
+            }
+        }
+        "section" => {
+            if !object.contains_key("label") {
+                return Err(ApiError::BadRequest(
+                    "section locator requires label".to_owned(),
+                ));
+            }
+        }
+        "text_offset" => {
+            let start = integer("start").ok_or_else(|| {
+                ApiError::BadRequest("text_offset locator requires non-negative start".to_owned())
+            })?;
+            let end = integer("end").ok_or_else(|| {
+                ApiError::BadRequest(
+                    "text_offset locator requires end greater than start".to_owned(),
+                )
+            })?;
+            if start < 0 || end <= start {
+                return Err(ApiError::BadRequest(
+                    "text_offset locator requires 0 <= start < end".to_owned(),
+                ));
+            }
+        }
+        _ => {
+            return Err(ApiError::BadRequest(
+                "source_locator.kind must be timestamp, page, section, or text_offset".to_owned(),
+            ));
+        }
+    }
+    Ok(Some(value))
 }
 
 fn default_note_format() -> String {
@@ -1248,8 +1347,12 @@ async fn create_note(
             provenance: provenance(input.provenance)?,
             content: required_text(input.content, "content", 100_000)?,
             content_format: allowed(input.content_format, "content_format", NOTE_CONTENT_FORMATS)?,
+            intent: allowed(input.intent, "intent", &["excerpt", "insight", "question"])?,
+            source_artifact_id: input.source_artifact_id,
+            source_locator: validated_source_locator(input.source_locator)?,
             originating_chat_object_id: input.originating_chat_object_id,
             derived_from_source_object_ids: input.derived_from_source_object_ids,
+            derived_from_note_object_ids: input.derived_from_note_object_ids,
         },
         &key,
     )
@@ -2302,9 +2405,10 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
 mod tests {
     use super::{
         bounded_limit, bounded_object_limit, inferred_publication_precision, list_sort,
-        source_created_window, source_list_sort,
+        source_created_window, source_list_sort, validated_source_locator,
     };
     use crate::db::ListSort;
+    use serde_json::json;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     #[test]
@@ -2353,5 +2457,25 @@ mod tests {
             .is_err()
         );
         assert!(source_created_window(Some("not-a-time".into()), None).is_err());
+    }
+
+    #[test]
+    fn source_locators_are_typed_bounded_and_fail_closed() {
+        for locator in [
+            json!({"kind":"timestamp","start_ms":1000,"end_ms":2000,"label":"00:01"}),
+            json!({"kind":"page","page":3,"end_page":4}),
+            json!({"kind":"section","label":"Methods"}),
+            json!({"kind":"text_offset","start":10,"end":20}),
+        ] {
+            assert!(validated_source_locator(Some(locator)).is_ok());
+        }
+        for locator in [
+            json!({"kind":"timestamp","start_ms":2000,"end_ms":1000}),
+            json!({"kind":"page","page":0}),
+            json!({"kind":"section"}),
+            json!({"kind":"text_offset","start":10,"end":20,"hidden":"data"}),
+        ] {
+            assert!(validated_source_locator(Some(locator)).is_err());
+        }
     }
 }

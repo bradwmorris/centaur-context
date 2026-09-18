@@ -155,7 +155,7 @@ pub async fn get_source(pool: &PgPool, id: Uuid) -> Result<Source, DbError> {
 pub async fn get_note(pool: &PgPool, id: Uuid) -> Result<Note, DbError> {
     sqlx::query_as(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,
-        o.provenance,o.protected,n.content,n.content_format,o.created_at,o.updated_at
+        o.provenance,o.protected,n.content,n.content_format,n.intent,n.source_artifact_id,n.source_locator,o.created_at,o.updated_at
         FROM notes n JOIN objects o ON o.id=n.object_id WHERE o.id=$1"#,
     )
     .bind(id)

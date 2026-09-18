@@ -490,11 +490,21 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try {
+      const intent = String(data.get("intent"));
+      const sourceId = String(data.get("source_object_id") ?? "").trim();
+      const sourceArtifactId = String(data.get("source_artifact_id") ?? "").trim();
+      const locatorText = String(data.get("source_locator") ?? "").trim();
+      const noteIds = String(data.get("derived_note_object_ids") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
       onCreated(await api.createNote({
         title: String(data.get("title")),
         description: String(data.get("description")),
         content: String(data.get("content")),
         content_format: String(data.get("content_format")),
+        intent,
+        source_artifact_id: sourceArtifactId || null,
+        source_locator: locatorText ? JSON.parse(locatorText) : null,
+        derived_from_source_object_ids: sourceId ? [sourceId] : [],
+        derived_from_note_object_ids: noteIds,
         provenance: { source_type: "human", note: "Created in Centaur Context" },
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
@@ -502,6 +512,9 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
     <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" />
+    <div className="source-fields"><Field label="Intent"><select name="intent" defaultValue="insight"><option value="excerpt">Excerpt</option><option value="insight">Insight</option><option value="question">Question</option></select></Field><Field label="Source object ID"><input name="source_object_id" /></Field><Field label="Source artifact ID"><input name="source_artifact_id" /></Field></div>
+    <Field label="Source locator JSON"><input name="source_locator" placeholder={'{"kind":"timestamp","start_ms":0,"end_ms":30000}'} /></Field>
+    <Field label="Derived Note IDs (comma separated)"><input name="derived_note_object_ids" /></Field>
     <Field label="Content"><textarea className="create-body" name="content" rows={14} required placeholder="Write plain text or Markdown…" aria-label="Note content" /></Field>
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><Field label="Format"><select name="content_format" aria-label="Note content format" defaultValue="markdown"><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Field><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create note"}</button></div></div>
@@ -551,6 +564,7 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const revision = useRef(0);
   const loadGeneration = useRef(0);
@@ -558,13 +572,15 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     try {
-      const [nextSource, nextObject, nextConnections, nextEvents, nextArtifacts] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.artifacts(id)]);
+      const [nextSource, nextObject, nextConnections, nextEvents, nextArtifacts, nextNotes] = await Promise.all([api.source(id), api.object(id), api.connections(id), api.events(id), api.artifacts(id), api.notes()]);
       if (generation !== loadGeneration.current) return;
-      revision.current = nextSource.revision; setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setError(null);
+      revision.current = nextSource.revision; setSource(nextSource); setObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setNotes(nextNotes.items); setError(null);
     } catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
   }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
   if (!source || !object) return <DetailLoading error={error} />;
+  const derivedNoteIds = new Set(connections.filter((connection) => connection.kind === "derived_from" && connection.target_object_id === id).map((connection) => connection.source_object_id));
+  const derivedNotes = notes.filter((note) => derivedNoteIds.has(note.object_id));
   const saveField = async (field: "title" | "description", value: string) => {
     return serialize(async () => {
       const updated = await api.updateSource(id, { expected_revision: revision.current, [field]: value });
@@ -592,6 +608,12 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
     </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={source.current_artifact_id} onCreated={load} />
+    <Section title="Atomic notes">
+      {derivedNotes.length === 0 ? <p className="empty">No atomic notes derive from this Source.</p> : (["excerpt", "insight", "question"] as const).map((intent) => {
+        const grouped = derivedNotes.filter((note) => note.intent === intent);
+        return grouped.length > 0 ? <div key={intent}><h3>{intent.replace(/^./, (value) => value.toUpperCase())}s</h3><ul>{grouped.map((note) => <li key={note.object_id}><ObjectId id={note.object_id} label={false} navigate /> · {note.title}</li>)}</ul></div> : null;
+      })}
+    </Section>
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={source.provenance} />
@@ -632,7 +654,7 @@ function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { obje
       <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save artifact"}</button></div>
     </form>}
     {artifacts.length > 0 ? <div className="content-preview">
-      <div className="content-toolbar"><label>Artifact <select aria-label="Artifact" value={selectedId ?? ""} onChange={(event) => { setSelectedId(event.target.value); setPreview([]); }}>{artifacts.map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.title ?? artifact.kind}{artifact.id === currentArtifactId ? " · current" : ""}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
+      <div className="content-toolbar"><label>Artifact <select aria-label="Artifact" value={selectedId ?? ""} onChange={(event) => { setSelectedId(event.target.value); setPreview([]); }}>{artifacts.map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.title ?? artifact.kind}{artifact.id === currentArtifactId ? " · canonical" : " · supporting"}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
       {selectedId !== null && <ArtifactSummary artifact={artifacts.find((item) => item.id === selectedId)} />}
       {preview.length > 0 && <pre className="source-text-preview" aria-label="Artifact content preview">{preview.map((item) => item.text).join("")}</pre>}
       {nextOffset !== null && <button className="secondary" type="button" disabled={busy} onClick={() => void read(nextOffset)}>{busy ? "Loading…" : "Load next 8,000 characters"}</button>}
@@ -688,7 +710,10 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
         <Property label="Object ID"><ObjectId id={note.object_id} label={false} navigate /></Property>
         <Property label="Type"><ObjectTypeBadge kind="note" /></Property>
         <Property label="Users">{(visuals.get(note.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(note.object_id)?.users ?? []} /> : "None"}</Property>
+        <Property label="Intent">{note.intent ?? "Legacy / unclassified"}</Property>
         <Property label="Format"><select aria-label="Note content format" value={note.content_format} onChange={(event) => void saveFormat(event.target.value as Note["content_format"])}><option value="markdown">Markdown</option><option value="plain_text">Plain text</option></select></Property>
+        <Property label="Source artifact">{note.source_artifact_id ? <ObjectId id={note.source_artifact_id} label={false} /> : "Not set"}</Property>
+        <Property label="Source locator"><span className="property-value-wrap">{note.source_locator ? JSON.stringify(note.source_locator) : "Not set"}</span></Property>
         <Property label="Updated">{relative(note.updated_at)}</Property>
       </div></section>
       <Section title="Content"><InlineEditor label="Note content" value={note.content} multiline required maxLength={100000} placeholder="Write plain text or Markdown…" className="note-content-editor" onSave={(value) => saveField("content", value)} onReload={load} /></Section>

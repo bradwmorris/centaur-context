@@ -195,6 +195,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         title="Research note",
         description="A source-grounded note created through the narrow write listener.",
         content="Evidence",
+        intent="insight",
         originating_chat_object_id="chat-1",
         derived_from_source_object_ids=["source-1"],
         idempotency_key="note-1",
@@ -322,6 +323,7 @@ def test_create_note_accepts_documented_provenance_on_first_request():
         title="Recursive self-improvement",
         description="A source-grounded note.",
         content="Evidence",
+        intent="insight",
         provenance={"source_type": "slack", "source_ref": "1700000000.000001"},
         derived_from_source_object_ids=["source-1"],
         idempotency_key="1700000000.000001",
@@ -331,6 +333,19 @@ def test_create_note_accepts_documented_provenance_on_first_request():
     assert len(requests) == 1
     payload = json.loads(requests[0].content)
     assert payload["originating_chat_object_id"] is None
+    assert payload["intent"] == "insight"
+    assert payload["derived_from_note_object_ids"] == []
+
+
+def test_create_note_rejects_unknown_intent_before_request():
+    with pytest.raises(ValueError, match="intent must be excerpt, insight, or question"):
+        privileged_client(lambda _: response({})).create_note(
+            title="Ambiguous note",
+            description="A note whose intent is not part of the contract.",
+            content="Evidence",
+            intent="claim",
+            idempotency_key="note-invalid-intent",
+        )
 
 
 def test_create_task_omits_empty_originating_chat_object_id():
@@ -357,6 +372,7 @@ def test_create_note_rejects_undocumented_passage_provenance_before_request():
             title="Recursive self-improvement",
             description="A source-grounded note.",
             content="Evidence",
+            intent="insight",
             provenance={"passage_start": 1, "passage_end": 2},
             idempotency_key="note-invalid-provenance",
         )
@@ -369,6 +385,7 @@ def test_create_note_rejects_undocumented_passage_provenance_before_request():
             title="Research note",
             description="A source-grounded note created through a narrow listener.",
             content="Evidence",
+            intent="insight",
             idempotency_key="note-1",
         ),
         lambda value: value.create_task(

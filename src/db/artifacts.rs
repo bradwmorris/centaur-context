@@ -174,13 +174,8 @@ pub async fn append_artifact(
     .bind(input.captured_at)
     .fetch_one(&mut *tx)
     .await?;
-    if input.capture_outcome == "complete" {
-        sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
-            .bind(object_id)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
+    // Generic artifacts are supporting material. Canonical Source artifact
+    // promotion belongs exclusively to the dedicated Source intake path.
     let revision: i64 = sqlx::query_scalar(
         "UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1 RETURNING revision",
     ).bind(object_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;

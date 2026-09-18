@@ -634,6 +634,7 @@ class CentaurContextClient:
         query: str,
         limit: int = 20,
         cursor: str | None = None,
+        intent: str | None = None,
     ) -> dict[str, Any]:
         """Search canonical Notes, returning bounded content excerpts."""
         query = _clean(query)
@@ -642,6 +643,11 @@ class CentaurContextClient:
         if len(query) > 1_000:
             raise ValueError("query must be at most 1000 characters")
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
+        intent = _clean(intent).lower()
+        if intent and intent not in {"excerpt", "insight", "question"}:
+            raise ValueError("intent must be excerpt, insight, or question")
+        if intent:
+            params["intent"] = intent
         if _clean(cursor):
             params["cursor"] = _clean(cursor)
         return self._request("GET", "/api/v2/search/notes", params=params)
@@ -659,10 +665,14 @@ class CentaurContextClient:
         description: str,
         content: str,
         *,
+        intent: str,
         content_format: str = "markdown",
+        source_artifact_id: str | None = None,
+        source_locator: dict[str, Any] | None = None,
         provenance: dict[str, Any] | None = None,
         originating_chat_object_id: str | None = None,
         derived_from_source_object_ids: list[str] | None = None,
+        derived_from_note_object_ids: list[str] | None = None,
         idempotency_key: str,
     ) -> dict[str, Any]:
         """Create a Note with the separate, narrowly scoped write credential."""
@@ -670,6 +680,7 @@ class CentaurContextClient:
         description = _clean(description)
         content = _clean(content)
         content_format = _clean(content_format).lower()
+        intent = _clean(intent).lower()
         idempotency_key = _clean(idempotency_key)
         if not title:
             raise ValueError("title is required")
@@ -685,6 +696,10 @@ class CentaurContextClient:
             raise ValueError("content must be at most 100000 characters")
         if content_format not in {"markdown", "plain_text"}:
             raise ValueError("content_format must be markdown or plain_text")
+        if intent not in {"excerpt", "insight", "question"}:
+            raise ValueError("intent must be excerpt, insight, or question")
+        if source_locator is not None and not isinstance(source_locator, dict):
+            raise ValueError("source_locator must be a JSON object")
         provenance = _validated_provenance(provenance)
         if not idempotency_key:
             raise ValueError("idempotency_key is required")
@@ -698,11 +713,15 @@ class CentaurContextClient:
                 "description": description,
                 "content": content,
                 "content_format": content_format,
+                "intent": intent,
+                "source_artifact_id": _clean(source_artifact_id) or None,
+                "source_locator": source_locator,
                 "provenance": provenance,
                 "originating_chat_object_id": (
                     _clean(originating_chat_object_id) or None
                 ),
                 "derived_from_source_object_ids": derived_from_source_object_ids or [],
+                "derived_from_note_object_ids": derived_from_note_object_ids or [],
             },
             idempotency_key=idempotency_key,
             token=self._note_write_token(),
