@@ -62,6 +62,23 @@ versioned rate-card snapshot and are stored in integer micro-USD. ChatGPT
 subscription or credit usage must display that basis without claiming a `$0`
 per-trace bill. Missing usage, price, or credit data remains visibly incomplete.
 
+## Purpose-bound networking mutations
+
+Port 8089 is an optional private workflow listener for Entity networking. It is
+disabled unless its separate token and one exact allowed principal are
+configured. Do not expose it through public ingress or give its token to an
+interactive agent. The deployment that enables it must allow only the trusted
+credential proxy or workflow adapter to reach the port and must constrain
+credential injection to `GET /api/v2/objects`, `GET /api/v2/objects/*`, and
+`POST` on `/api/v2/objects`, `/api/v2/connections`, and `/api/v2/tasks`.
+
+The listener does not prove that a human approved a proposed Connection or
+Task. The durable workflow owns that approval evidence and preserves it in the
+allowlisted provenance object. Context independently enforces the exact
+principal, token, thread identity, field allowlists, canonical kinds, and
+idempotency key. Remove the three `NETWORKING_MUTATION_*` settings and the port
+grant to revoke the listener without affecting read access or other writers.
+
 ## Object backfill and forward Artifact indexing
 
 Only an Artifact with `capture_outcome=complete` and verbatim text may be a

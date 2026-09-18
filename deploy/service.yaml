@@ -80,3 +80,19 @@ spec:
     - name: external-action
       port: 8088
       targetPort: external-action
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: centaur-context-networking-mutation
+  labels:
+    app.kubernetes.io/name: centaur-context
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: centaur-context
+  ports:
+    - name: net-mutation
+      port: 8089
+      targetPort: net-mutation

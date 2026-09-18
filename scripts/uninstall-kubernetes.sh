@@ -21,6 +21,7 @@ kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" --namespace "$CENTAUR_CONTEXT_
   service/centaur-context-source-intake \
   service/centaur-context-research-mutation \
   service/centaur-context-external-action \
+  service/centaur-context-networking-mutation \
   networkpolicy/centaur-context \
   --ignore-not-found
 if [[ $# -eq 3 ]]; then

@@ -7,6 +7,7 @@ pub mod embeddings;
 pub mod external_actions;
 pub mod ingest;
 pub mod intake;
+pub mod networking_mutation;
 pub mod research_mutation;
 pub mod runs;
 pub mod schema;

@@ -12,6 +12,7 @@ All paths are versioned under `/api/v2`.
 | Note/Task writer | `http://centaur-context-note-write:8084` | `NOTE_WRITE_API_TOKEN` | Same agent headers; `Idempotency-Key` on every write |
 | Slack ingestion | `http://centaur-context:8082` | `CHAT_INGEST_API_TOKEN` | None |
 | Source intake | `http://centaur-context-source-intake:8086` | `SOURCE_INTAKE_API_TOKEN` | The configured `X-Centaur-Principal-Id`, `X-Centaur-Thread-Key`; optional `X-Centaur-Execution-Id` |
+| Networking mutation | `http://centaur-context-networking-mutation:8089` | `NETWORKING_MUTATION_API_TOKEN` | The exact configured `X-Centaur-Principal-Id`, a canonical `X-Centaur-Thread-Key`; optional `X-Centaur-Execution-Id`; `Idempotency-Key` on creates |
 
 Send credentials as `Authorization: Bearer <token>`. Tokens belong in Centaur's
 trusted transport, never in an agent sandbox. JSON successes use
@@ -131,3 +132,40 @@ actions are private administrative or purpose-bound interfaces. They are not a
 general agent API and are intentionally outside this POC reference.
 `GET /api/v2/schema` reports the database schema; it is not an OpenAPI or HTTP
 endpoint specification.
+
+### Networking mutation workflow contract
+
+The optional networking-mutation listener is also purpose-bound rather than a
+general agent API. It starts only when both
+`NETWORKING_MUTATION_API_TOKEN` and
+`NETWORKING_MUTATION_ALLOWED_PRINCIPAL` are set. Its address defaults to
+`0.0.0.0:8089` and can be changed with `NETWORKING_MUTATION_ADDR`. The token
+must differ from every other Context credential. Every request, including
+health checks, requires that bearer token, the exact configured principal, and
+a canonical four-part `provider:workspace:channel:thread` thread key.
+
+The listener exposes only these routes:
+
+| Surface | Method | Path | Exact purpose |
+| --- | --- | --- | --- |
+| Networking mutation | GET | `/api/v2/objects?q=<title>&kind=entity&limit=10&sort=recent` | Return up to ten active Entity candidates; `kind=entity` and `sort=recent` are mandatory. |
+| Networking mutation | GET | `/api/v2/objects/{id}` | Return one active canonical Entity, including `entity_kind`; non-Entities are not visible. |
+| Networking mutation | POST | `/api/v2/objects` | Create or replay one Entity from exactly `kind`, `title`, `description`, `entity_kind`, and `provenance`; `kind` must be `entity`. |
+| Networking mutation | POST | `/api/v2/connections` | Create or reuse one unprotected Connection from exactly the two Object IDs, `kind`, `description`, `provenance`, and `protected: false`. |
+| Networking mutation | POST | `/api/v2/tasks` | Create or replay one unassigned `todo` Task from exactly `title`, `description`, `status`, `priority`, `agent_suitable: false`, `provenance`, and an empty `derived_from_source_object_ids` array. |
+
+Unknown JSON and query fields fail. Other methods and paths do not exist on
+this listener. Entity kinds are limited to `person`, `organization`, `product`,
+`project`, `publication`, `place`, `concept`, and `other`; Connection kinds and
+Task priorities use the canonical allowlists. Create calls require a stable
+`Idempotency-Key` of at most 200 characters and return the canonical Entity,
+Connection, or Task record with recorded provenance. Provenance must include a
+non-empty `source_type`. A durable caller must reuse both the key and body on
+retry.
+
+Duplicate resolution deliberately remains fail-closed in the calling workflow:
+search returns every candidate and never chooses one. The workflow may reuse
+one unambiguous exact match, must pause when multiple exact matches remain, and
+may call Entity creation only when no match remains. An approved Task and its
+Entity link use separate stable Task and Connection keys so a partial failure
+can safely resume without duplicating either record.

@@ -302,10 +302,10 @@ pub async fn create_object(
     }
     let id = Uuid::new_v4();
     let mut tx = pool.begin().await?;
-    let object: Object = sqlx::query_as(
+    sqlx::query(
         r#"INSERT INTO objects
            (id, kind, title, description, created_by_type, created_by_id, updated_by_type, updated_by_id, provenance)
-           VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7) RETURNING *"#,
+           VALUES ($1,$2,$3,$4,$5,$6,$5,$6,$7)"#,
     )
     .bind(id)
     .bind(&input.kind)
@@ -314,7 +314,7 @@ pub async fn create_object(
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
     .bind(&input.provenance)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
     insert_object_subtype(&mut tx, id, &input).await?;
     insert_event(
@@ -331,7 +331,7 @@ pub async fn create_object(
     )
     .await?;
     tx.commit().await?;
-    Ok(object)
+    get_object(pool, id).await
 }
 
 async fn insert_object_subtype(

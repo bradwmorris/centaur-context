@@ -7,6 +7,7 @@ use centaur_context::{
     curator::router as curator_router,
     ingest::{ApprovedSlackSurfaces, router as ingest_router},
     intake::router as intake_router,
+    networking_mutation::router as networking_mutation_router,
     research_mutation::router as research_mutation_router,
     source_intake::router as source_intake_router,
 };
@@ -23,6 +24,105 @@ fn state() -> AppState {
             .unwrap(),
         embeddings: None,
         text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+    }
+}
+
+fn networking_request(method: &str, uri: &str, token: &str, principal: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("x-centaur-principal-id", principal)
+        .header("x-centaur-thread-key", "slack:T:C:thread")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn networking_mutation_listener_requires_its_exact_workflow_identity() {
+    let token = "n".repeat(32);
+    let principal = "workflow-enyu-netz-entity";
+    let router = networking_mutation_router(state(), token.clone(), principal.into());
+    for (candidate_token, candidate_principal, expected) in [
+        ("x".repeat(32), principal, StatusCode::UNAUTHORIZED),
+        (token.clone(), "slackbot-netz-T-C", StatusCode::FORBIDDEN),
+        (
+            token.clone(),
+            "workflow-context-mutation",
+            StatusCode::FORBIDDEN,
+        ),
+        (token.clone(), principal, StatusCode::OK),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(networking_request(
+                "GET",
+                "/healthz",
+                &candidate_token,
+                candidate_principal,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+
+    let noncanonical_thread = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-centaur-principal-id", principal)
+                .header("x-centaur-thread-key", "Slack:T:C:thread")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(noncanonical_thread.status(), StatusCode::BAD_REQUEST);
+
+    let padded_principal = router
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-centaur-principal-id", format!(" {principal}"))
+                .header("x-centaur-thread-key", "slack:T:C:thread")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(padded_principal.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn networking_mutation_listener_exposes_only_its_exact_routes() {
+    let token = "n".repeat(32);
+    let principal = "workflow-enyu-netz-entity";
+    let router = networking_mutation_router(state(), token.clone(), principal.into());
+
+    for (method, path, expected) in [
+        (
+            "PATCH",
+            "/api/v2/objects/00000000-0000-4000-8000-000000000001",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        ("GET", "/api/v2/connections", StatusCode::METHOD_NOT_ALLOWED),
+        (
+            "PATCH",
+            "/api/v2/tasks/00000000-0000-4000-8000-000000000001",
+            StatusCode::NOT_FOUND,
+        ),
+        ("POST", "/api/v2/notes", StatusCode::NOT_FOUND),
+        ("GET", "/api/v2/sources", StatusCode::NOT_FOUND),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(networking_request(method, path, &token, principal))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{method} {path}");
     }
 }
 

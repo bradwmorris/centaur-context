@@ -15,6 +15,7 @@ pub struct Config {
     pub intake: Option<IntakeConfig>,
     pub source_intake: Option<SourceIntakeConfig>,
     pub research_mutation: Option<ResearchMutationConfig>,
+    pub networking_mutation: Option<NetworkingMutationConfig>,
     pub external_actions: Option<ExternalActionConfig>,
     pub ingest_addr: SocketAddr,
     pub chat_ingest_api_token: String,
@@ -46,6 +47,13 @@ pub struct SourceIntakeConfig {
 
 #[derive(Clone)]
 pub struct ResearchMutationConfig {
+    pub addr: SocketAddr,
+    pub api_token: String,
+    pub allowed_principal: String,
+}
+
+#[derive(Clone)]
+pub struct NetworkingMutationConfig {
     pub addr: SocketAddr,
     pub api_token: String,
     pub allowed_principal: String,
@@ -182,6 +190,7 @@ impl Config {
         let intake = intake_config()?;
         let source_intake = source_intake_config()?;
         let research_mutation = research_mutation_config()?;
+        let networking_mutation = networking_mutation_config()?;
         let external_actions = external_action_config()?;
         if intake.as_ref().is_some_and(|intake| {
             intake.api_token == agent_api_token
@@ -233,6 +242,29 @@ impl Config {
         }) {
             bail!("RESEARCH_MUTATION_API_TOKEN must differ from every other service credential");
         }
+        if networking_mutation
+            .as_ref()
+            .is_some_and(|networking_mutation| {
+                networking_mutation.api_token == agent_api_token
+                    || networking_mutation.api_token == note_write_api_token
+                    || networking_mutation.api_token == chat_ingest_api_token
+                    || networking_mutation.api_token == curator_api_token
+                    || intake
+                        .as_ref()
+                        .is_some_and(|intake| intake.api_token == networking_mutation.api_token)
+                    || source_intake.as_ref().is_some_and(|source_intake| {
+                        source_intake.api_token == networking_mutation.api_token
+                    })
+                    || research_mutation.as_ref().is_some_and(|research_mutation| {
+                        research_mutation.api_token == networking_mutation.api_token
+                    })
+                    || external_actions.as_ref().is_some_and(|external_actions| {
+                        external_actions.api_token == networking_mutation.api_token
+                    })
+            })
+        {
+            bail!("NETWORKING_MUTATION_API_TOKEN must differ from every other service credential");
+        }
 
         let static_dir = env::var("STATIC_DIR")
             .map(PathBuf::from)
@@ -255,6 +287,7 @@ impl Config {
             intake,
             source_intake,
             research_mutation,
+            networking_mutation,
             external_actions,
             ingest_addr: parse_addr("INGEST_ADDR", "0.0.0.0:8082")?,
             chat_ingest_api_token,
@@ -348,6 +381,30 @@ fn research_mutation_config() -> Result<Option<ResearchMutationConfig>> {
     )?;
     Ok(Some(ResearchMutationConfig {
         addr: parse_addr("RESEARCH_MUTATION_ADDR", "0.0.0.0:8087")?,
+        api_token,
+        allowed_principal,
+    }))
+}
+
+fn networking_mutation_config() -> Result<Option<NetworkingMutationConfig>> {
+    let token = optional("NETWORKING_MUTATION_API_TOKEN");
+    let principal = optional("NETWORKING_MUTATION_ALLOWED_PRINCIPAL");
+    if token.is_none() && principal.is_none() {
+        return Ok(None);
+    }
+    let api_token = token.context(
+        "NETWORKING_MUTATION_API_TOKEN is required when Networking-mutation configuration is provided",
+    )?;
+    if api_token.len() < 32 {
+        bail!("NETWORKING_MUTATION_API_TOKEN must be at least 32 characters");
+    }
+    let allowed_principal = configured_principal(
+        principal,
+        "NETWORKING_MUTATION_ALLOWED_PRINCIPAL",
+        "Networking-mutation",
+    )?;
+    Ok(Some(NetworkingMutationConfig {
+        addr: parse_addr("NETWORKING_MUTATION_ADDR", "0.0.0.0:8089")?,
         api_token,
         allowed_principal,
     }))
