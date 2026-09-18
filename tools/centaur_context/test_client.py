@@ -327,6 +327,7 @@ def test_create_note_accepts_documented_provenance_on_first_request():
         provenance={"source_type": "slack", "source_ref": "1700000000.000001"},
         derived_from_source_object_ids=["source-1"],
         idempotency_key="1700000000.000001",
+        thread_key="workflow:run-3:research-capture",
     )
 
     assert result["object_id"] == "note-1"
@@ -335,6 +336,7 @@ def test_create_note_accepts_documented_provenance_on_first_request():
     assert payload["originating_chat_object_id"] is None
     assert payload["intent"] == "insight"
     assert payload["derived_from_note_object_ids"] == []
+    assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-3:research-capture"
 
 
 def test_append_artifact_uses_the_scoped_writer_and_preserves_content():
@@ -352,12 +354,14 @@ def test_append_artifact_uses_the_scoped_writer_and_preserves_content():
         expected_revision=3,
         metadata={"source_type": "human_supplied"},
         idempotency_key="artifact-1",
+        thread_key="workflow:run-1:research-capture",
     )
 
     assert result["id"] == "artifact-1"
     assert requests[0].url.host == "notes.test"
     assert requests[0].url.path == "/api/v2/objects/source-1/artifacts"
     assert requests[0].headers["authorization"] == "Bearer " + "n" * 32
+    assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-1:research-capture"
     payload = json.loads(requests[0].content)
     assert payload["content"] == "  Preserve these exact working notes.  "
     assert payload["capture_outcome"] == "complete"
@@ -386,9 +390,11 @@ def test_create_task_omits_empty_originating_chat_object_id():
         title="Follow up on recursive self-improvement",
         description="A source-grounded follow-up task.",
         idempotency_key="task-no-originating-chat",
+        thread_key="workflow:run-2:research-capture",
     )
 
     assert result["object_id"] == "task-1"
+    assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-2:research-capture"
     payload = json.loads(requests[0].content)
     assert payload["originating_chat_object_id"] is None
 
