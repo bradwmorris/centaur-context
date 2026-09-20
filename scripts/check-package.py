@@ -7,6 +7,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.3.0"
+TOOL_VERSION = "1.0.0"
 
 
 def require(condition: bool, message: str) -> None:
@@ -20,13 +21,21 @@ def text(path: str) -> str:
 
 def main() -> None:
     require(f'version = "{VERSION}"' in text("Cargo.toml"), "Cargo version mismatch")
-    require(f'version = "{VERSION}"' in text("tools/centaur_context/pyproject.toml"), "tool version mismatch")
+    require(f'version = "{TOOL_VERSION}"' in text("tools/centaur_context/pyproject.toml"), "tool version mismatch")
     require(f'version = "{VERSION}"' in text("compatibility.toml"), "compatibility version mismatch")
     require("[centaur_context]" in text("compatibility.toml"), "compatibility product key mismatch")
     require(
-        f'TOOL_VERSION: &str = "{VERSION}"' in text("src/version.rs"),
+        f'TOOL_VERSION: &str = "{TOOL_VERSION}"' in text("src/version.rs"),
         "API tool version mismatch",
     )
+    require(
+        f'tool_version = "{TOOL_VERSION}"' in text("compatibility.toml"),
+        "compatibility tool version mismatch",
+    )
+    tool_manifest = text("tools/centaur_context/pyproject.toml")
+    for command in ("context_search", "context_read", "context_apply"):
+        require(f'{command} = ' in tool_manifest, f"missing {command} entry point")
+    require("centaur-context = " not in tool_manifest, "legacy agent command is still exposed")
     require(f'image: centaur-context:{VERSION}' in text("deploy/deployment.yaml"), "deployment version mismatch")
     dockerfile = text("Dockerfile")
     require(dockerfile.count("@sha256:") == 3, "all three container bases must be digest-pinned")

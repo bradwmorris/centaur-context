@@ -26,6 +26,10 @@ The request column lists body fields unless it says `query` or `path`.
 
 | Surface | Method | Path | Request or purpose |
 | --- | --- | --- | --- |
+| Agent | GET | `/api/v2/contract` | Read the cacheable complete Context contract. |
+| Agent | POST | `/api/v2/search` | required `query`; optional `object_types`, `limit`, `lexical_only` |
+| Agent | POST | `/api/v2/read` | required `object_ids`; optional `include` values: `connections`, `artifacts`, `events`, `messages`; optional bounded `artifact_windows` |
+| Agent | POST | `/api/v2/apply` | Atomic write batch; required matching `Idempotency-Key`, `contract_version`, `idempotency_key`, and `operations` |
 | Agent | GET | `/api/v2/context` | query: required `q`, `chat_object_id`; optional `kind`, `limit` (1–10) |
 | Agent | GET | `/api/v2/search/objects` | query: required `q`; optional `kind`, `limit` (1–100), `lexical_only` |
 | Agent | GET | `/api/v2/objects/{id}` | Read one Object with subtype data. |
@@ -80,6 +84,46 @@ Source workflow Runs use these required fields: start takes `run_id`,
 takes `status`. Other workflow fields are optional.
 
 ## Minimal examples
+
+The public Python package exposes exactly `context_search`, `context_read`, and
+`context_apply`. For example:
+
+```bash
+context_search 'deployment decision' --object-type task --limit 10
+context_read 00000000-0000-0000-0000-000000000001 --include connections
+context_apply --file apply-request.json
+```
+
+An apply file includes a stable batch-local name for each new Object so later
+operations can connect it without knowing its database ID:
+
+```json
+{
+  "contract_version": "1.0.0",
+  "idempotency_key": "editor-task-20260921-1",
+  "operations": [
+    {
+      "operation": "create_object",
+      "local_ref": "task",
+      "kind": "task",
+      "title": "Review deployment",
+      "description": "Review the proposed deployment and record the decision.",
+      "fields": {"status": "todo", "priority": "medium"}
+    },
+    {
+      "operation": "create_connection",
+      "source": {"local_ref": "task"},
+      "kind": "related_to",
+      "target": {"object_id": "00000000-0000-0000-0000-000000000001"},
+      "description": "The Task reviews this existing deployment record."
+    }
+  ]
+}
+```
+
+The batch creates its Run, immutable Events, Object subtype, and Connection in
+one transaction. A failed operation rolls back the entire batch. An exact retry
+returns the stored response; the same key with a different body is rejected.
 
 Retrieve context for the authenticated thread:
 
