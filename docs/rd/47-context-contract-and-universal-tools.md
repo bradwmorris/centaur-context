@@ -2,8 +2,8 @@
 
 GitHub Issue: [#47](https://github.com/bradwmorris/centaur-context/issues/47)
 
-Status: proposed for owner approval; no implementation is authorized by this RD
-until that approval is recorded.
+Status: approved by the repository owner on 2026-09-21 for implementation of
+Issue #47 within the boundaries below.
 
 ## Plain-English decision
 
