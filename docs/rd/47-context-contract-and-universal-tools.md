@@ -66,6 +66,35 @@ tool packages for `[project.scripts]`; no Context-specific tool loader or MCP
 server is added. Centaur issue #7 remains responsible for placing the generated
 short Context explanation in the trusted instruction sequence.
 
+Centaur's normal sandbox capabilities, including its shell, filesystem access,
+Git, and browser support, are separate from the application-tool catalogue and
+are unchanged by this RD.
+
+### Coordinated deployment changes
+
+Completing the cutover requires narrowly scoped changes outside this public
+repository:
+
+- `centaur-context` adds the three public tools and removes the old
+  `centaur-context` command after the smoke cutover;
+- the private `centaur-enyu` overlay adds an explicit `tool_allowlist` to each
+  persona containing the three Context tools and only the additional tools that
+  persona actually needs; and
+- the stale `company-context` skill is removed from both Centaur base and the
+  private overlay so agents are not instructed to call the removed
+  `company_context` command.
+
+These allowlists control which application-tool commands are installed and
+shown by `centaur-tools list` inside each agent sandbox. They do not change the
+shared Context read/write scope, grant credentials, or affect Centaur's normal
+sandbox capabilities.
+
+The generated `centaur-tools` discovery/runner command is Centaur runtime
+infrastructure, not an allowlisted application tool. This RD does not make
+`centaur-console`, `centaur-skills`, `websearch`, or any other existing Centaur
+application tool universal. A persona receives one of those tools only when it
+is explicitly named in that persona's allowlist.
+
 ## Context contract
 
 Add one public, versioned JSON document at:
@@ -235,15 +264,27 @@ model through this issue.
 
 ## Prompt and tool exposure
 
-On every model invocation, Centaur supplies:
+At sandbox startup, Centaur installs for the selected persona:
 
-- the short stable Context explanation as trusted application instructions;
-- the three base tool catalogue entries; and
-- any agent-specific tools supplied by the private overlay.
+- `context_search`, `context_read`, and `context_apply`;
+- the built-in `centaur-tools` discovery/runner bridge; and
+- only the additional public or private tools explicitly required by that
+  persona.
+
+The agent discovers these application tools lazily through Centaur's existing
+tool-discovery surface. The complete installed application-tool catalogue is
+not pasted into the system prompt or serialized into every model invocation.
+On every model invocation, Centaur supplies only the short stable Context
+explanation as trusted application instructions, together with the selected
+persona and relevant runtime input.
 
 The full JSON contract is not pasted into every prompt. Retrieved Context
 records remain clearly labelled untrusted reference data. Tool availability and
 prompt text never bypass server validation.
+
+Changing how the eval UI displays captured catalogue telemetry is explicitly
+outside this RD. It may be handled in a separate issue and is not required for
+this implementation or cutover.
 
 ## Compatibility and rollout
 
@@ -255,10 +296,18 @@ Use a short POC rollout rather than a long parallel system:
    operations.
 4. Add the three Python entry points while temporarily retaining the old
    `centaur-context` command as a compatibility shim.
-5. Point the POC tool catalogue at the reviewed commit and run one end-to-end
-   smoke flow for search, read, each writable Object type, Connections, replay,
-   rejection, and Reza's ingestion handoff.
-6. After the smoke flow passes and no old-command use remains, remove the old
+5. Add explicit tool allowlists to the private Editor, Researcher, Dev, and Netz
+   personas. Each allowlist includes the three Context tools and only the
+   additional public or private tools required by that persona's documented
+   responsibilities.
+6. Remove the stale `company-context` skills from Centaur base and the private
+   overlay.
+7. Point the POC tool catalogue at the reviewed commits and verify that each
+   persona's `centaur-tools list` contains its intended tools and excludes the
+   unrelated catalogue.
+8. Run one end-to-end smoke flow for search, read, each writable Object type,
+   Connections, replay, rejection, and Reza's ingestion handoff.
+9. After the smoke flow passes and no old-command use remains, remove the old
    command and its redundant listeners/routes where they have no internal
    workflow consumer.
 
@@ -334,7 +383,18 @@ support the short compatibility cutover and removal decision.
       contract and deterministic drift checks.
 - [ ] Every normal interactive agent receives exactly `context_search`,
       `context_read`, and `context_apply` as the public base tools.
-- [ ] Agent-specific tools and workflows remain in the private overlay.
+- [ ] Editor, Researcher, Dev, and Netz each have an explicit tool allowlist
+      containing the three Context tools and only the additional public or
+      private tools required by their documented responsibilities.
+- [ ] `centaur-tools list` in each persona sandbox excludes unrelated public and
+      private application tools.
+- [ ] The full application-tool catalogue is not added to the system prompt;
+      agents discover their installed allowlisted tools lazily.
+- [ ] Agent-specific tools and workflows remain in the private overlay, and
+      Centaur's normal shell, filesystem, Git, and browser capabilities remain
+      separate and unchanged.
+- [ ] The stale `company-context` skills are removed from Centaur base and the
+      private overlay.
 - [ ] The three tools share one small Python transport/model library; the old
       bloated command is removed after the bounded POC cutover.
 - [ ] `context_apply` supports Task, Entity, Source, Note, Theme, Connection,
@@ -360,4 +420,6 @@ support the short compatibility cutover and removal decision.
 Approval of this RD authorizes implementation of Issue #47 within these
 boundaries. It does not authorize public ingress, direct sandbox database
 access, MCP, organization-specific behavior in the public core, destructive
-data migration, or unrelated Centaur-core changes.
+data migration, unrelated Centaur-core changes, or eval UI changes. The only
+authorized cross-repository changes are the persona allowlists and stale-skill
+cleanup described above, plus the existing Centaur issue #7 instruction hook.
