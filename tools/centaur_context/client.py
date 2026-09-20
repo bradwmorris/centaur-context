@@ -382,6 +382,66 @@ class CentaurContextClient:
         except ValueError as exc:
             raise RuntimeError("Centaur Context returned invalid JSON") from exc
 
+    def context_search(
+        self,
+        query: str,
+        *,
+        object_types: list[str] | None = None,
+        limit: int = 20,
+        lexical_only: bool = False,
+    ) -> dict[str, Any]:
+        """Search all canonical Object types through the universal API."""
+        query = _required(query, "query")
+        kinds = [_required(value, "object_type") for value in (object_types or [])]
+        return self._request(
+            "POST",
+            "/api/v2/search",
+            json={
+                "query": query,
+                "object_types": kinds,
+                "limit": _bounded_limit(limit),
+                "lexical_only": bool(lexical_only),
+            },
+        )
+
+    def context_read(
+        self,
+        object_ids: list[str],
+        *,
+        include: list[str] | None = None,
+        artifact_windows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Read one or more canonical Objects through the universal API."""
+        ids = [_required(value, "object_id") for value in object_ids]
+        if not 1 <= len(ids) <= 20:
+            raise ValueError("object_ids must contain between 1 and 20 IDs")
+        includes = [_required(value, "include") for value in (include or [])]
+        return self._request(
+            "POST",
+            "/api/v2/read",
+            json={
+                "object_ids": ids,
+                "include": includes,
+                "artifact_windows": artifact_windows or [],
+            },
+        )
+
+    def context_apply(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Validate and commit one atomic universal Context write batch."""
+        if not isinstance(request, dict):
+            raise ValueError("request must be a JSON object")
+        key = _required(request.get("idempotency_key"), "idempotency_key")
+        return self._request(
+            "POST",
+            "/api/v2/apply",
+            json=request,
+            idempotency_key=key,
+        )
+
+    def context_contract(self) -> dict[str, Any]:
+        """Read the complete current universal Context contract."""
+        return self._request("GET", "/api/v2/contract")
+
     def get_context(
         self,
         query: str,

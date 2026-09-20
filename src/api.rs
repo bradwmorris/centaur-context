@@ -32,7 +32,7 @@ use crate::{
         required_preserved_text, required_text,
     },
     embeddings::EmbeddingClient,
-    schema, search,
+    schema, search, universal,
 };
 
 #[derive(Clone)]
@@ -128,6 +128,10 @@ pub fn agent_router(state: AppState, token: String) -> Router {
         .nest(
             "/api/v2",
             Router::new()
+                .route("/contract", get(read_contract))
+                .route("/search", post(universal_search))
+                .route("/read", post(universal_read))
+                .route("/apply", post(universal_apply))
                 .route("/context", get(get_context))
                 .route("/search/objects", get(search_objects))
                 .route("/objects/{id}", get(read_context_object))
@@ -309,6 +313,232 @@ async fn api_meta() -> Json<Value> {
             "compatibility": "Only documented /api/v2 routes are supported; unknown versions fail closed."
         }
     }))
+}
+
+async fn read_contract(headers: HeaderMap) -> Result<Response, ApiError> {
+    let etag = format!("\"{}\"", crate::contract::hash());
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        == Some(etag.as_str())
+    {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    }
+    let mut response = Json(json!({"data": crate::contract::document()})).into_response();
+    response.headers_mut().insert(
+        header::ETAG,
+        HeaderValue::from_str(&etag).expect("contract hash is an HTTP-safe ETag"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=300"),
+    );
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UniversalSearchRequest {
+    query: String,
+    #[serde(default)]
+    object_types: Vec<String>,
+    limit: Option<i64>,
+    #[serde(default)]
+    lexical_only: bool,
+}
+
+async fn universal_search(
+    State(state): State<AppState>,
+    Json(input): Json<UniversalSearchRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let query = required_text(input.query, "query", 1000)?;
+    if input.object_types.len() > OBJECT_KINDS.len() {
+        return Err(ApiError::BadRequest("too many object_types".into()));
+    }
+    let mut object_types = Vec::new();
+    for kind in input.object_types {
+        let kind = allowed(kind, "object_type", OBJECT_KINDS)?;
+        if !object_types.contains(&kind) {
+            object_types.push(kind);
+        }
+    }
+    let limit = input.limit.unwrap_or(20).clamp(1, 100);
+    let mut packet = search::search(
+        &state.pool,
+        if input.lexical_only {
+            None
+        } else {
+            state.embeddings.as_ref()
+        },
+        state.text_search_config,
+        &query,
+        None,
+        if object_types.is_empty() { limit } else { 100 },
+    )
+    .await?;
+    if !object_types.is_empty() {
+        packet
+            .objects
+            .retain(|object| object_types.contains(&object.kind));
+        packet.objects.truncate(limit as usize);
+    }
+    let mut data = json!(packet);
+    data["contract_version"] = json!(crate::contract::version());
+    data["tool_version"] = json!(crate::contract::tool_version());
+    Ok(Json(json!({"data":data})))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UniversalReadRequest {
+    object_ids: Vec<Uuid>,
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    artifact_windows: Vec<UniversalArtifactWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UniversalArtifactWindow {
+    artifact_id: Uuid,
+    #[serde(default)]
+    offset: i64,
+    limit: Option<i64>,
+}
+
+async fn universal_read(
+    State(state): State<AppState>,
+    Json(input): Json<UniversalReadRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if input.object_ids.is_empty() || input.object_ids.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "object_ids must contain between 1 and 20 IDs".into(),
+        ));
+    }
+    let supported = ["connections", "artifacts", "events", "messages"];
+    for include in &input.include {
+        if !supported.contains(&include.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "unsupported include {include}"
+            )));
+        }
+    }
+    if input.artifact_windows.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "artifact_windows may contain at most 20 entries".into(),
+        ));
+    }
+    let mut values = Vec::new();
+    for id in input.object_ids {
+        let object = db::get_object(&state.pool, id).await?;
+        let mut subtypes = db::context_subtypes(&state.pool, &[id], None).await?;
+        let mut value = json!({
+            "object": object,
+            "subtype": subtypes.remove(&id),
+        });
+        if input.include.iter().any(|item| item == "connections") {
+            value["connections"] = json!(db::list_connections(&state.pool, id).await?);
+        }
+        if input.include.iter().any(|item| item == "artifacts") {
+            value["artifacts"] = json!(db::list_artifacts(&state.pool, id).await?);
+        }
+        if input.include.iter().any(|item| item == "events") {
+            value["events"] = json!(db::list_events(&state.pool, id).await?);
+        }
+        if input.include.iter().any(|item| item == "messages") {
+            if value["object"]["kind"] != "chat" {
+                return Err(ApiError::BadRequest(
+                    "messages may be included only for a Chat Object".into(),
+                ));
+            }
+            value["messages"] = json!(db::list_chat_messages(&state.pool, id).await?);
+        }
+        values.push(value);
+    }
+    let mut artifact_windows = Vec::new();
+    for window in input.artifact_windows {
+        let limit = window.limit.unwrap_or(8000);
+        if window.offset < 0 || !(1..=20_000).contains(&limit) {
+            return Err(ApiError::BadRequest(
+                "Artifact offsets must be non-negative and limits must be between 1 and 20000"
+                    .into(),
+            ));
+        }
+        artifact_windows.push(
+            db::get_artifact_window_by_id(&state.pool, window.artifact_id, window.offset, limit)
+                .await?,
+        );
+    }
+    Ok(Json(json!({
+        "data":{
+            "objects":values,
+            "artifact_windows":artifact_windows,
+            "contract_version":crate::contract::version(),
+            "tool_version":crate::contract::tool_version()
+        }
+    })))
+}
+
+async fn universal_apply(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    headers: HeaderMap,
+    Json(input): Json<universal::ApplyRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let header_key = idempotency_key(&headers, true, &actor)?.expect("required key");
+    if header_key != input.idempotency_key {
+        return Err(ApiError::BadRequest(
+            "Idempotency-Key header must match body idempotency_key".into(),
+        ));
+    }
+    if let Some(chat_object_id) = input.chat_object_id {
+        verify_actor_chat(&state, &actor, chat_object_id).await?;
+    }
+    let response =
+        universal::apply(&state.pool, &actor, input)
+            .await
+            .map_err(|error| match error {
+                DbError::Invalid(message)
+                    if message == "idempotency key was already used with a different request" =>
+                {
+                    ApiError::IdempotencyConflict
+                }
+                other => ApiError::Db(other),
+            })?;
+    Ok(Json(json!({"data":response})))
+}
+
+async fn verify_actor_chat(
+    state: &AppState,
+    actor: &ActorContext,
+    chat_object_id: Uuid,
+) -> Result<(), ApiError> {
+    let chat = db::get_context_chat(&state.pool, chat_object_id).await?;
+    if chat.lifecycle != "active" {
+        return Err(ApiError::BadRequest(
+            "chat_object_id must reference an active Chat".into(),
+        ));
+    }
+    let expected = chat
+        .thread_key()
+        .and_then(|value| normalize_thread_key(&value))
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "chat_object_id must reference a Chat with a provider thread identity".into(),
+            )
+        })?;
+    let supplied = actor
+        .centaur_thread_key
+        .as_deref()
+        .and_then(normalize_thread_key)
+        .ok_or_else(|| ApiError::BadRequest("X-Centaur-Thread-Key is invalid".into()))?;
+    if supplied != expected {
+        return Err(ApiError::Forbidden(
+            "The requested Chat does not match the authenticated thread.".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn read_embedding_status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -2274,6 +2504,7 @@ pub enum ApiError {
     BadRequest(String),
     Unauthorized,
     Forbidden(String),
+    IdempotencyConflict,
     Validation(ValidationError),
     Db(DbError),
     Schema(schema::SchemaError),
@@ -2321,6 +2552,11 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT,
                 "revision_conflict",
                 "The record changed after it was read.".to_owned(),
+            ),
+            Self::IdempotencyConflict => (
+                StatusCode::CONFLICT,
+                "idempotency_conflict",
+                "The idempotency key was already used with a different request.".to_owned(),
             ),
             Self::Db(DbError::Invalid(message)) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request", message)

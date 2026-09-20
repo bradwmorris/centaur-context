@@ -93,6 +93,52 @@ def test_search_uses_v2():
     assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-1"
 
 
+def test_universal_tools_use_the_three_v2_routes():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return response({"ok": True})
+
+    value = client(handler)
+    assert value.context_search("shared", object_types=["task"], limit=8) == {"ok": True}
+    assert value.context_read(
+        ["d3dcb3b4-a66b-4f71-86c9-5ea65a5cfd55"],
+        include=["connections"],
+        artifact_windows=[
+            {
+                "artifact_id": "e97b0da5-b6a5-4657-b5a4-10442f290dda",
+                "offset": 0,
+                "limit": 100,
+            }
+        ],
+    ) == {"ok": True}
+    assert value.context_apply(
+        {
+            "contract_version": "1.0.0",
+            "idempotency_key": "apply-1",
+            "operations": [{"operation": "archive_object"}],
+        }
+    ) == {"ok": True}
+
+    assert [request.url.path for request in requests] == [
+        "/api/v2/search",
+        "/api/v2/read",
+        "/api/v2/apply",
+    ]
+    assert requests[2].headers["idempotency-key"] == "apply-1"
+    assert json.loads(requests[0].content)["object_types"] == ["task"]
+    assert json.loads(requests[1].content)["artifact_windows"][0]["limit"] == 100
+
+
+def test_context_apply_requires_a_json_object_and_idempotency_key():
+    value = client(lambda _: response({}))
+    with pytest.raises(ValueError, match="JSON object"):
+        value.context_apply([])
+    with pytest.raises(ValueError, match="idempotency_key"):
+        value.context_apply({})
+
+
 def test_lists_sources_in_created_window_oldest_first():
     requests = []
 

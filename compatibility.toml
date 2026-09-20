@@ -2,8 +2,8 @@
 version = "0.3.0"
 api_version = "v2"
 ontology_version = "v3"
-database_schema_version = 24
-tool_version = "0.3.0"
+database_schema_version = 25
+tool_version = "1.0.0"
 
 [runtime]
 postgres_major = 16
@@ -19,5 +19,5 @@ notes = "The full Slack loop requires interaction-sink and context-builder hooks
 [policy]
 public_ingress = false
 interactive_agent_writes = true
-interactive_agent_write_scope = "note_create_only_with_separate_credential"
+interactive_agent_write_scope = "universal_context_apply_for_ordinary_objects"
 automatic_external_model_access = false

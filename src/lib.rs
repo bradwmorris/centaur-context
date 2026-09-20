@@ -1,5 +1,6 @@
 pub mod api;
 pub mod config;
+pub mod contract;
 pub mod curator;
 pub mod db;
 pub mod domain;
@@ -13,4 +14,5 @@ pub mod runs;
 pub mod schema;
 pub mod search;
 pub mod source_intake;
+pub mod universal;
 pub mod version;

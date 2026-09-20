@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract_version": "1.0.0",
+  "ontology_version": "3",
+  "tool_version": "1.0.0",
+  "object_types": {
+    "task": {
+      "interactive_write": true,
+      "fields": ["status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "completed_at", "github_issue_url", "brief_markdown"]
+    },
+    "entity": {
+      "interactive_write": true,
+      "fields": ["entity_kind"]
+    },
+    "source": {
+      "interactive_write": true,
+      "fields": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "published_at_precision", "last_accessed_at", "original_language", "original_media_type", "original_artifact_reference"]
+    },
+    "note": {
+      "interactive_write": true,
+      "fields": ["content", "content_format", "intent", "source_artifact_id", "source_locator"]
+    },
+    "theme": {
+      "interactive_write": true,
+      "fields": ["slug"]
+    },
+    "chat": {"interactive_write": false, "fields": []},
+    "user": {"interactive_write": false, "fields": []},
+    "memory": {"interactive_write": false, "fields": []}
+  },
+  "connection_kinds": ["involves", "about", "related_to", "depends_on", "derived_from", "themed"],
+  "tools": {
+    "context_search": {
+      "operation": "search",
+      "read_only": true,
+      "input": {"required": ["query"], "optional": ["object_types", "limit", "lexical_only"]},
+      "output": {"required": ["objects"]}
+    },
+    "context_read": {
+      "operation": "read",
+      "read_only": true,
+      "input": {"required": ["object_ids"], "optional": ["include", "artifact_windows"]},
+      "output": {"required": ["objects", "artifact_windows"]}
+    },
+    "context_apply": {
+      "operation": "atomic_apply",
+      "read_only": false,
+      "idempotent": true,
+      "input": {"required": ["contract_version", "idempotency_key", "operations"], "optional": ["chat_object_id", "validate_only"]},
+      "output": {"required": ["replayed", "validated_only", "request_hash", "contract_version", "tool_version", "run_id", "event_ids", "results"]}
+    }
+  },
+  "limits": {
+    "search_query_characters": 1000,
+    "search_results": 100,
+    "read_objects": 20,
+    "apply_operations": 20,
+    "title_characters": 300,
+    "description_characters": 2000,
+    "connection_description_characters": 1000,
+    "artifact_window_characters": 20000,
+    "note_content_characters": 100000
+  },
+  "rules": {
+    "new_objects_require_connection": true,
+    "verified_chat_adds_provenance_connection": true,
+    "object_kind_is_immutable": true,
+    "updates_require_expected_revision": true,
+    "unknown_fields_fail": true,
+    "protected_records_are_not_interactively_writable": true,
+    "source_canonical_artifact_promotion_is_ingestion_only": true,
+    "exact_connection_repeat_is_replay": true,
+    "different_connection_assertion_merges_provenance": true
+  }
+}

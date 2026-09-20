@@ -38,19 +38,20 @@ After the conversation is finished or inactive,
 3. A model proposes a structured plan: create or update Objects and Connections, or make no changes.
 4. Context checks that the plan is valid and supported by the messages, then records any approved changes with evidence. Not every conversation becomes a Memory.
 
-Agents can use Context tools when they need more than the automatically provided context. They can search and read records, or create Notes and Tasks when authorized.
+Every normal interactive agent gets three Context tools when it needs more than
+the automatically provided context:
+
+- `context_search` finds Objects;
+- `context_read` reads complete Objects and selected nearby information; and
+- `context_apply` atomically creates, changes, archives, and connects ordinary
+  Tasks, Entities, Sources, Notes, and Themes.
 
 These tools are small Python clients in the Context repository. They send requests to Context’s Rust API; they do not search or change PostgreSQL themselves. Centaur’s credential proxy handles the real API tokens, so the agent sandbox does not receive them.
 
-This gives an agent commands such as:
-
-- get relevant context;
-- search Objects;
-- read an Object;
-- create a Note;
-- create or update an authorized Task.
-
-The request passes through Centaur’s credential proxy, so the agent sandbox does not receive the real Context API tokens.
+The shared rules live in
+[`contract/context-contract.json`](contract/context-contract.json). Context
+validates the same rules at its HTTP boundary; prompts and tool availability do
+not grant database access.
 
 ## The schema and ontology
 
@@ -89,6 +90,8 @@ If you want to try it, make the Centaur changes in your own fork. See the [setup
   Context data.
 - [Integration API](docs/api.md) — supported endpoints, credentials, headers,
   and minimal request examples.
+- [Context contract](docs/context-contract.md) — the shared agent-facing rules
+  and three universal tools.
 
 Centaur Context runs alongside Centaur with its own PostgreSQL database. Centaur
 owns agent execution; Context owns shared knowledge. Company-specific prompts,
