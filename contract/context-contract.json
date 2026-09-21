@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "ontology_version": "3",
-  "tool_version": "1.0.0",
+  "tool_version": "1.1.0",
   "object_types": {
     "task": {
       "interactive_write": true,
@@ -29,6 +29,25 @@
     "memory": {"interactive_write": false, "fields": []}
   },
   "connection_kinds": ["involves", "about", "related_to", "depends_on", "derived_from", "themed"],
+  "description_policy": {
+    "max_characters": 600,
+    "preferred_sentences": 2,
+    "current_snapshot_not_log": true,
+    "refresh_when_materially_stale": true,
+    "guidance": [
+      "Directly identify the Object in plain language.",
+      "State why the Object matters in this Context now when that relevance is not already explicit.",
+      "Use only facts justified by the request, retrieved Context, or recorded provenance.",
+      "Keep canonical source content, task briefs, evidence, Connection explanations, provenance, and change history in their existing records."
+    ],
+    "examples": {
+      "task": "Define and test the Object-description contract across every write path. Created from Issue #51 to keep retrieval summaries explicit and current.",
+      "entity": "Jane Lee, a researcher working on agent-memory evaluation. Relevant as the speaker in the Source supporting the retrieval design.",
+      "source": "A YouTube interview with Jane Lee about retrieval evaluation for agent memory. Added as evidence for the semantic-search design decision.",
+      "note": "The current embedding trigger already invalidates vectors after title or description changes. Recorded to prevent a redundant re-indexing subsystem.",
+      "theme": "Work concerning how canonical Objects are found and ranked. Used to group decisions, tests, and Sources about retrieval quality."
+    }
+  },
   "tools": {
     "context_search": {
       "operation": "search",
@@ -66,7 +85,7 @@
     "read_objects": 20,
     "apply_operations": 20,
     "title_characters": 300,
-    "description_characters": 2000,
+    "description_characters": 600,
     "connection_description_characters": 1000,
     "artifact_window_characters": 20000,
     "note_content_characters": 100000

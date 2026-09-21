@@ -7,7 +7,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "0.3.0"
-TOOL_VERSION = "1.0.0"
+TOOL_VERSION = "1.1.0"
 
 
 def require(condition: bool, message: str) -> None:

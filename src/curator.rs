@@ -1397,6 +1397,9 @@ async fn archive_created_object(
     change: &CuratorRunChange,
     actor: &crate::domain::ActorContext,
 ) -> Result<(), CuratorError> {
+    let current = current_object(tx, change.entity_id).await?;
+    crate::domain::validate_object_description(&current.title, &current.description)
+        .map_err(invalid)?;
     let active_edges: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1))").bind(change.entity_id).fetch_one(&mut **tx).await?;
     if active_edges {
         return Err(CuratorError::Conflict);
@@ -1435,6 +1438,11 @@ async fn restore_object(
         .before_state
         .as_ref()
         .ok_or_else(|| CuratorError::Invalid("change journal lacks before state".into()))?;
+    crate::domain::validate_object_description(
+        value_str(before, "title")?,
+        value_str(before, "description")?,
+    )
+    .map_err(invalid)?;
     let result = sqlx::query("UPDATE objects SET title=$3,description=$4,protected=$5,provenance=$6,revision=revision+1,updated_by_type=$7,updated_by_id=$8,updated_at=now() WHERE id=$1 AND revision=$2 AND archived_at IS NULL")
         .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {

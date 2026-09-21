@@ -801,8 +801,8 @@ class CentaurContextClient:
             raise ValueError("title must be at most 300 characters")
         if not description:
             raise ValueError("description is required")
-        if len(description) > 2_000:
-            raise ValueError("description must be at most 2000 characters")
+        if len(description) > 600:
+            raise ValueError("description must be at most 600 characters")
         if not content:
             raise ValueError("content is required")
         if len(content) > MAX_NOTE_CONTENT:
@@ -874,8 +874,8 @@ class CentaurContextClient:
             raise ValueError("title must be at most 300 characters")
         if not description:
             raise ValueError("description is required")
-        if len(description) > 2_000:
-            raise ValueError("description must be at most 2000 characters")
+        if len(description) > 600:
+            raise ValueError("description must be at most 600 characters")
         if priority not in {"low", "medium", "high"}:
             raise ValueError("priority must be low, medium, or high")
         if len(brief_markdown) > MAX_NOTE_CONTENT:
@@ -957,8 +957,8 @@ class CentaurContextClient:
             raise ValueError("priority must be low, medium, or high")
         if title and len(title) > 300:
             raise ValueError("title must be at most 300 characters")
-        if description and len(description) > 2_000:
-            raise ValueError("description must be at most 2000 characters")
+        if description and len(description) > 600:
+            raise ValueError("description must be at most 600 characters")
         if blocked_reason and len(blocked_reason) > 2_000:
             raise ValueError("blocked_reason must be at most 2000 characters")
         if len(brief_markdown) > MAX_NOTE_CONTENT:

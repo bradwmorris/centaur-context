@@ -34,6 +34,13 @@ pub fn tool_version() -> &'static str {
         .expect("tool_version must be a string")
 }
 
+pub fn object_description_max_characters() -> usize {
+    CONTRACT["description_policy"]["max_characters"]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .expect("description_policy.max_characters must be a positive integer")
+}
+
 pub fn interactive_writable(kind: &str) -> bool {
     CONTRACT["object_types"][kind]["interactive_write"]
         .as_bool()
@@ -58,7 +65,9 @@ mod tests {
 
     #[test]
     fn embedded_contract_has_the_three_tools_and_expected_write_boundary() {
-        assert_eq!(version(), "1.0.0");
+        assert_eq!(version(), "1.1.0");
+        assert_eq!(tool_version(), "1.1.0");
+        assert_eq!(object_description_max_characters(), 600);
         assert!(interactive_writable("task"));
         assert!(interactive_writable("source"));
         assert!(!interactive_writable("memory"));

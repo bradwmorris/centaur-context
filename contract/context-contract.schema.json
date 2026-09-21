@@ -4,7 +4,7 @@
   "title": "Centaur Context contract",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "contract_version", "ontology_version", "tool_version", "object_types", "connection_kinds", "tools", "limits", "rules"],
+  "required": ["$schema", "contract_version", "ontology_version", "tool_version", "object_types", "connection_kinds", "description_policy", "tools", "limits", "rules"],
   "properties": {
     "$schema": {"const": "https://json-schema.org/draft/2020-12/schema"},
     "contract_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
@@ -24,6 +24,30 @@
       }
     },
     "connection_kinds": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+    "description_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_characters", "preferred_sentences", "current_snapshot_not_log", "refresh_when_materially_stale", "guidance", "examples"],
+      "properties": {
+        "max_characters": {"type": "integer", "minimum": 1},
+        "preferred_sentences": {"type": "integer", "minimum": 1},
+        "current_snapshot_not_log": {"const": true},
+        "refresh_when_materially_stale": {"const": true},
+        "guidance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "examples": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task", "entity", "source", "note", "theme"],
+          "properties": {
+            "task": {"type": "string", "minLength": 1},
+            "entity": {"type": "string", "minLength": 1},
+            "source": {"type": "string", "minLength": 1},
+            "note": {"type": "string", "minLength": 1},
+            "theme": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
     "tools": {
       "type": "object",
       "additionalProperties": false,

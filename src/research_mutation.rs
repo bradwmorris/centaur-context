@@ -166,7 +166,13 @@ async fn edit_source(
             .transpose()?,
         description: input
             .description
-            .map(|value| required_text(value, "description", 2000))
+            .map(|value| {
+                required_text(
+                    value,
+                    "description",
+                    crate::contract::object_description_max_characters(),
+                )
+            })
             .transpose()?,
         source_kind: input
             .source_kind

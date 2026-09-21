@@ -89,12 +89,27 @@ pub fn optional_text(
 }
 
 pub fn object_description(title: &str, value: String) -> Result<String, ValidationError> {
-    let value = required_text(value, "description", 2000)?;
+    let value = required_text(
+        value,
+        "description",
+        crate::contract::object_description_max_characters(),
+    )?;
     validate_object_description(title, &value)?;
     Ok(value)
 }
 
 pub fn validate_object_description(title: &str, description: &str) -> Result<(), ValidationError> {
+    let description = description.trim();
+    if description.is_empty() {
+        return Err(ValidationError::Required("description"));
+    }
+    let max = crate::contract::object_description_max_characters();
+    if description.chars().count() > max {
+        return Err(ValidationError::TooLong {
+            field: "description",
+            max,
+        });
+    }
     let comparable_title = comparable_text(title);
     let comparable_description = comparable_text(description);
     if !comparable_title.is_empty() && comparable_description == comparable_title {
@@ -371,17 +386,25 @@ mod tests {
                 "weak description was accepted: {description}"
             );
         }
-        assert!(object_description("Long", "x".repeat(2001)).is_err());
+        assert!(object_description("Long", "x".repeat(601)).is_err());
         assert!(
             object_description(
                 "Long",
                 format!(
-                    "A concrete description with enough room for the agreed ontology context: {}",
-                    "x".repeat(1100)
+                    "A concrete description with useful Context: {}",
+                    "x".repeat(500)
                 )
             )
             .is_ok()
         );
+        assert_eq!(
+            object_description("Unicode", "🦀".repeat(600))
+                .unwrap()
+                .chars()
+                .count(),
+            600
+        );
+        assert!(object_description("Unicode", "🦀".repeat(601)).is_err());
     }
 
     #[test]

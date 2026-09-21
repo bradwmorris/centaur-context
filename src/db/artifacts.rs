@@ -112,8 +112,8 @@ pub async fn append_artifact(
     let sha256 = format!("{:x}", Sha256::digest(bytes));
     let size_bytes = bytes.len() as i64;
     let mut tx = pool.begin().await?;
-    let current_revision: Option<i64> = sqlx::query_scalar(
-        "SELECT revision FROM objects WHERE id=$1 AND archived_at IS NULL FOR UPDATE",
+    let current: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT revision,title,description FROM objects WHERE id=$1 AND archived_at IS NULL FOR UPDATE",
     )
     .bind(object_id)
     .fetch_optional(&mut *tx)
@@ -128,10 +128,13 @@ pub async fn append_artifact(
         tx.commit().await?;
         return Ok(existing);
     }
-    if current_revision.is_none()
-        || input
-            .expected_revision
-            .is_some_and(|revision| Some(revision) != current_revision)
+    let Some((current_revision, current_title, current_description)) = current else {
+        return Err(DbError::Conflict);
+    };
+    validate_object_description(&current_title, &current_description)?;
+    if input
+        .expected_revision
+        .is_some_and(|revision| revision != current_revision)
     {
         return Err(DbError::Conflict);
     }
@@ -187,7 +190,7 @@ pub async fn append_artifact(
         object_id,
         "artifact_attached",
         Some(idempotency_key),
-        current_revision,
+        Some(current_revision),
         revision,
         json!({"artifact_id":id,"kind":input.kind,"sha256":sha256,"size_bytes":size_bytes,
             "capture_outcome":input.capture_outcome}),

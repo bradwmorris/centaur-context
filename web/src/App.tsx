@@ -20,14 +20,14 @@ const sectionKinds = { chats: "chat", users: "user", entities: "entity", memorie
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
 type CreateSection = keyof typeof sectionSingular;
 const descriptionExamples: Record<ObjectKind, string> = {
-  task: "Prepare and publish the approved launch notes for customers.",
+  task: "Define and test the Object-description contract across every write path. Created from Issue #51 to keep retrieval summaries explicit and current.",
   chat: "A Slack conversation where the release team approved the launch checklist.",
   user: "A human product lead responsible for the customer migration program.",
-  entity: "A customer organization participating in the August migration pilot.",
+  entity: "Jane Lee, a researcher working on agent-memory evaluation. Relevant as the speaker in the Source supporting the retrieval design.",
   memory: "The product team approved the customer migration during the August review.",
-  source: "A concise summary of the evidence and why it matters.",
-  note: "A short summary that helps people recognize what this note contains.",
-  theme: "A research vertical used to group related work for retrieval and audience interests.",
+  source: "A YouTube interview with Jane Lee about retrieval evaluation for agent memory. Added as evidence for the semantic-search design decision.",
+  note: "The current embedding trigger already invalidates vectors after title or description changes. Recorded to prevent a redundant re-indexing subsystem.",
+  theme: "Work concerning how canonical Objects are found and ranked. Used to group decisions, tests, and Sources about retrieval quality.",
 };
 const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video", "book", "report", "document", "dataset", "web_page", "social_post", "other"];
 
@@ -420,7 +420,7 @@ function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: stri
   return <div className="record-page"><div className="record-primary">
     <InlineEditor label="Theme title" value={theme.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveObjectField("title", value)} onReload={load} />
     <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Object ID"><ObjectId id={theme.object_id} label={false} navigate /></Property><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
-    <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={2000} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
+    <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={600} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
     <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
     <FocusedObjectGraph objectId={theme.object_id} objectTitle={theme.title} refreshKey={refreshKey} />
     {themeObject && <Provenance value={themeObject.provenance} />}
@@ -437,7 +437,7 @@ function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (i
       onCreated(await api.createTheme({ title: String(data.get("title")), slug: String(data.get("slug")), description: String(data.get("description")), protected: true, provenance: { source_type: "human", note: "Approved and created in Centaur Context" } }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
-  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.theme} aria-label="Theme description" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
+  return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples.theme} aria-label="Theme description" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
 function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
@@ -460,7 +460,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   const name = label.charAt(0).toUpperCase() + label.slice(1);
   return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
-    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} />
+    <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} />
     {kind === "entity" && <Field label="Entity kind"><select name="entity_kind" defaultValue="person"><option value="person">Person</option><option value="organization">Organization</option><option value="product">Product</option><option value="project">Project</option><option value="publication">Publication</option><option value="place">Place</option><option value="concept">Concept</option><option value="other">Other</option></select></Field>}
     {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
     {error && <p className="form-error">{error}</p>}
@@ -478,7 +478,7 @@ function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
-    <textarea className="create-body" name="description" rows={5} required maxLength={2000} placeholder={descriptionExamples.task} aria-label="Task description" />
+    <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples.task} aria-label="Task description" />
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
@@ -511,7 +511,7 @@ function NewNote({ onCancel, onCreated }: { onCancel: () => void; onCreated: (it
   };
   return <CreateModal title="New note" onClose={onCancel}><form className="create-form note-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Note title" aria-label="Note title" />
-    <textarea className="create-description" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.note} aria-label="Note description" />
+    <textarea className="create-description" name="description" rows={3} required maxLength={600} placeholder={descriptionExamples.note} aria-label="Note description" />
     <div className="source-fields"><Field label="Intent"><select name="intent" defaultValue="insight"><option value="excerpt">Excerpt</option><option value="insight">Insight</option><option value="question">Question</option></select></Field><Field label="Source object ID"><input name="source_object_id" /></Field><Field label="Source artifact ID"><input name="source_artifact_id" /></Field></div>
     <Field label="Source locator JSON"><input name="source_locator" placeholder={'{"kind":"timestamp","start_ms":0,"end_ms":30000}'} /></Field>
     <Field label="Derived Note IDs (comma separated)"><input name="derived_note_object_ids" /></Field>
@@ -540,7 +540,7 @@ function NewSource({ onCancel, onCreated }: { onCancel: () => void; onCreated: (
   };
   return <CreateModal title="New source" onClose={onCancel}><form className="create-form source-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Source title" aria-label="Source title" />
-    <textarea className="create-body" name="description" rows={3} required maxLength={2000} placeholder={descriptionExamples.source} aria-label="Source description" />
+    <textarea className="create-body" name="description" rows={3} required maxLength={600} placeholder={descriptionExamples.source} aria-label="Source description" />
     <div className="source-fields">
       <Field label="Kind"><select name="source_kind" aria-label="Source kind">{sourceKinds.map((kind) => <option value={kind} key={kind}>{kind.replaceAll("_", " ")}</option>)}</select></Field>
       <Field label="Canonical URL"><input name="canonical_uri" type="url" maxLength={2048} placeholder="https://…" /></Field>
@@ -604,7 +604,7 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
         <Property label="Original media type">{source.original_media_type ?? "Not set"}</Property>
         <Property label="Original artifact reference"><span className="property-value-wrap">{source.original_artifact_reference ?? "Not set"}</span></Property>
       </div></section>
-      <InlineEditor label="Source description" value={source.description} multiline required maxLength={2000} placeholder={descriptionExamples.source} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
+      <InlineEditor label="Source description" value={source.description} multiline required maxLength={600} placeholder={descriptionExamples.source} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
     </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={source.current_artifact_id} onCreated={load} />
@@ -761,7 +761,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
             <Property label="Updated">{relative(item.updated_at)}</Property>
           </div>
         </section>
-        <InlineEditor label="Object description" value={item.description} multiline required maxLength={2000} placeholder={descriptionExamples[item.kind]} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
+        <InlineEditor label="Object description" value={item.description} multiline required maxLength={600} placeholder={descriptionExamples[item.kind]} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
       </div>
       {error && <p className="form-error">{error}</p>}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}

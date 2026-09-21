@@ -1,7 +1,7 @@
 [project]
 name = "centaur-context"
 description = "Use the constrained Centaur Context agent API"
-version = "1.0.0"
+version = "1.1.0"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"

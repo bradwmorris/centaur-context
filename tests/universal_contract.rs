@@ -5,7 +5,7 @@ use axum::{
 use centaur_context::{
     api::{AppState, agent_router},
     config::TextSearchConfig,
-    db,
+    db, embeddings,
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
@@ -86,7 +86,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
     );
     let key = format!("universal-test-{}", Uuid::new_v4());
     let apply = json!({
-        "contract_version":"1.0.0",
+        "contract_version":"1.1.0",
         "idempotency_key":key,
         "operations":[
             {"operation":"create_object","local_ref":"task","kind":"task","title":"Universal task","description":"A disposable Task created by the universal contract test.","fields":{"status":"todo","priority":"medium"}},
@@ -169,7 +169,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let update_key = format!("universal-test-update-{}", Uuid::new_v4());
     let update = json!({
-        "contract_version":"1.0.0",
+        "contract_version":"1.1.0",
         "idempotency_key":update_key,
         "operations":[
             {"operation":"update_object","object_id":object_id,"expected_revision":1,"changes":{"title":"Updated universal task"}},
@@ -185,7 +185,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let archive_key = format!("universal-test-archive-{}", Uuid::new_v4());
     let archive = json!({
-        "contract_version":"1.0.0",
+        "contract_version":"1.1.0",
         "idempotency_key":archive_key,
         "operations":[
             {"operation":"archive_connection","connection_id":connection_id,"expected_revision":2},
@@ -201,7 +201,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let system_key = format!("universal-test-system-{}", Uuid::new_v4());
     let system_owned = json!({
-        "contract_version":"1.0.0",
+        "contract_version":"1.1.0",
         "idempotency_key":system_key,
         "operations":[
             {"operation":"create_object","local_ref":"memory","kind":"memory","title":"Forbidden memory","description":"Agents must not directly create this system-managed record.","fields":{}},
@@ -226,7 +226,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let invalid_key = format!("universal-test-invalid-{}", Uuid::new_v4());
     let invalid = json!({
-        "contract_version":"1.0.0",
+        "contract_version":"1.1.0",
         "idempotency_key":invalid_key,
         "operations":[
             {"operation":"create_object","local_ref":"orphan","kind":"entity","title":"Orphan","description":"This Object must roll back.","fields":{"entity_kind":"concept"}},
@@ -243,4 +243,280 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(orphan_count, 0);
+}
+
+#[tokio::test]
+async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping description retrieval contract: TEST_DATABASE_URL is not set");
+        return;
+    };
+    let anchor = Uuid::new_v4();
+    let evidence = Uuid::new_v4();
+    let mut seed = pool.begin().await.unwrap();
+    for (id, title, description) in [
+        (
+            anchor,
+            "Description test anchor",
+            "A disposable project anchoring the description retrieval test.",
+        ),
+        (
+            evidence,
+            "Description test evidence",
+            "A disposable evaluation record supporting the changed Task description.",
+        ),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'entity',$2,$3,'system','description-test','system','description-test','{}')")
+            .bind(id)
+            .bind(title)
+            .bind(description)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'project')")
+            .bind(id)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+    }
+    seed.commit().await.unwrap();
+
+    let token = "d".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let create = json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("description-create-{}", Uuid::new_v4()),
+        "operations":[
+            {"operation":"create_object","local_ref":"task","kind":"task","title":"Evaluate retrieval launch","description":"Evaluate the obsoletequartz retrieval launch criteria. This Task records the current release decision.","fields":{"status":"todo","priority":"medium"}},
+            {"operation":"create_connection","source":{"local_ref":"task"},"kind":"related_to","target":{"object_id":anchor},"description":"The retrieval evaluation belongs to this disposable project."}
+        ]
+    });
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, create))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = json_body(response).await;
+    let object_id = Uuid::parse_str(
+        response["data"]["results"][0]["data"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+
+    let model = format!("description-model-{}", Uuid::new_v4());
+    let initial_hash: String = sqlx::query_scalar(
+        "SELECT object_embedding_source_hash($2,kind,title,description) FROM objects WHERE id=$1",
+    )
+    .bind(object_id)
+    .bind(embeddings::OBJECT_EMBEDDING_FORMAT)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO embeddings(object_id,model,dimensions,source_hash,format_version,input_mode,status,embedding,completed_at) VALUES($1,$2,3,$3,$4,'shared','completed','[0.1,0.2,0.3]'::vector,now())")
+        .bind(object_id)
+        .bind(&model)
+        .bind(initial_hash)
+        .bind(embeddings::OBJECT_EMBEDDING_FORMAT)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let first_update = json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("description-update-{}", Uuid::new_v4()),
+        "operations":[
+            {"operation":"update_object","object_id":object_id,"expected_revision":1,"changes":{"description":"Evaluate the newheliotrope retrieval launch after the quality review. The latest evidence removed the earlier release blocker."}},
+            {"operation":"create_connection","source":{"object_id":object_id},"kind":"derived_from","target":{"object_id":evidence},"description":"The refreshed release decision is supported by this evaluation evidence."}
+        ]
+    });
+    let first_update = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, first_update))
+        .await
+        .unwrap();
+    assert_eq!(first_update.status(), StatusCode::OK);
+    let first_update = json_body(first_update).await;
+    let run_id = Uuid::parse_str(first_update["data"]["run_id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        first_update["data"]["event_ids"].as_array().unwrap().len(),
+        2
+    );
+    let event: (String, String, i64, i64) = sqlx::query_as(
+        "SELECT actor_type,actor_id,from_revision,to_revision FROM object_events WHERE run_id=$1 AND target_type='object'",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        event,
+        ("centaur_agent".into(), "agent-universal-test".into(), 1, 2)
+    );
+    let run: (String, String) = sqlx::query_as("SELECT status,actor_id FROM runs WHERE id=$1")
+        .bind(run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(run.0, "completed");
+    assert_eq!(run.1, "agent-universal-test");
+
+    let invalidated: (String, bool, i32) = sqlx::query_as(
+        "SELECT status,embedding IS NULL,attempts FROM embeddings WHERE object_id=$1 AND model=$2",
+    )
+    .bind(object_id)
+    .bind(&model)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invalidated, ("pending".into(), true, 0));
+    let stale_job = db::claim_embedding_job(&pool, &model, 3, "shared")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stale_job.description.contains("newheliotrope"));
+
+    let final_description = "Approve the finalvermillion retrieval launch after the quality review. This Task now records the evidence-backed release outcome.";
+    let second_update = json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("description-update-{}", Uuid::new_v4()),
+        "operations":[
+            {"operation":"update_object","object_id":object_id,"expected_revision":2,"changes":{"title":"Approve retrieval launch","description":final_description}}
+        ]
+    });
+    let second_update = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, second_update))
+        .await
+        .unwrap();
+    assert_eq!(second_update.status(), StatusCode::OK);
+    assert!(
+        db::complete_embedding_job(&pool, &stale_job, &[0.4, 0.5, 0.6])
+            .await
+            .is_err()
+    );
+
+    let current = db::get_object(&pool, object_id).await.unwrap();
+    assert_eq!(current.revision, 3);
+    assert_eq!(current.title, "Approve retrieval launch");
+    assert_eq!(current.description, final_description);
+    let old_matches = db::full_text_candidates(
+        &pool,
+        TextSearchConfig::SIMPLE,
+        "obsoletequartz newheliotrope",
+        Some("task"),
+        10,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        old_matches
+            .iter()
+            .all(|candidate| candidate.object.id != object_id)
+    );
+    let new_matches = db::full_text_candidates(
+        &pool,
+        TextSearchConfig::SIMPLE,
+        "finalvermillion",
+        Some("task"),
+        10,
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        new_matches
+            .iter()
+            .any(|candidate| candidate.object.id == object_id)
+    );
+
+    let pending: (String, bool, i64, String) = sqlx::query_as(
+        "SELECT status,embedding IS NULL,count(*) OVER (),source_hash FROM embeddings WHERE object_id=$1 AND model=$2",
+    )
+    .bind(object_id)
+    .bind(&model)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let expected_hash: String = sqlx::query_scalar(
+        "SELECT object_embedding_source_hash($2,kind,title,description) FROM objects WHERE id=$1",
+    )
+    .bind(object_id)
+    .bind(embeddings::OBJECT_EMBEDDING_FORMAT)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pending, ("pending".into(), true, 1, expected_hash.clone()));
+
+    let latest_job = db::claim_embedding_job(&pool, &model, 3, "shared")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest_job.title, "Approve retrieval launch");
+    assert_eq!(latest_job.description, final_description);
+    assert_eq!(latest_job.source_hash, expected_hash);
+    db::fail_embedding_job(&pool, latest_job.id, "synthetic provider failure")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE embeddings SET available_at=now() WHERE id=$1")
+        .bind(latest_job.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let retry = db::claim_embedding_job(&pool, &model, 3, "shared")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retry.source_hash, latest_job.source_hash);
+    assert_eq!(
+        embeddings::format_object_document(&retry.kind, &retry.title, &retry.description),
+        embeddings::format_object_document("task", "Approve retrieval launch", final_description)
+    );
+    db::complete_embedding_job(&pool, &retry, &[0.7, 0.8, 0.9])
+        .await
+        .unwrap();
+    let completed: (String, bool, String) = sqlx::query_as(
+        "SELECT status,embedding IS NOT NULL,source_hash FROM embeddings WHERE id=$1",
+    )
+    .bind(retry.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        completed,
+        ("completed".into(), true, retry.source_hash.clone())
+    );
+
+    let no_op = json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("description-no-op-{}", Uuid::new_v4()),
+        "operations":[
+            {"operation":"update_object","object_id":object_id,"expected_revision":3,"changes":{"title":"Approve retrieval launch","description":final_description}}
+        ]
+    });
+    let no_op = app
+        .oneshot(request("POST", "/api/v2/apply", &token, no_op))
+        .await
+        .unwrap();
+    assert_eq!(no_op.status(), StatusCode::OK);
+    let unchanged_embedding: (String, bool, String) = sqlx::query_as(
+        "SELECT status,embedding IS NOT NULL,source_hash FROM embeddings WHERE id=$1",
+    )
+    .bind(retry.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unchanged_embedding,
+        ("completed".into(), true, retry.source_hash)
+    );
 }

@@ -154,6 +154,49 @@ async fn canonical_schema_has_exactly_sixteen_application_tables() {
 }
 
 #[tokio::test]
+async fn description_constraint_is_forward_only_and_counts_unicode_characters() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let validated: bool = sqlx::query_scalar(
+        "SELECT convalidated FROM pg_constraint WHERE conname='objects_description_600_characters_check'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!validated, "Issue #52 owns final constraint validation");
+
+    let accepted = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'entity','Unicode boundary',$2,'system','description-test','system','description-test','{}')")
+        .bind(accepted)
+        .bind("🦀".repeat(600))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'concept')")
+        .bind(accepted)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let rejected = sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'entity','Over limit',$2,'system','description-test','system','description-test','{}')")
+        .bind(Uuid::new_v4())
+        .bind("🦀".repeat(601))
+        .execute(&pool)
+        .await;
+    assert!(rejected.is_err());
+
+    let rejected_update = sqlx::query("UPDATE objects SET description=$2 WHERE id=$1")
+        .bind(accepted)
+        .bind("x".repeat(601))
+        .execute(&pool)
+        .await;
+    assert!(rejected_update.is_err());
+}
+
+#[tokio::test]
 async fn users_embed_multiple_provider_identities() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;

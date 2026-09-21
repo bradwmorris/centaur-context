@@ -838,6 +838,7 @@ async fn lock_writable_object(
             object.kind
         )));
     }
+    crate::domain::validate_object_description(&object.title, &object.description)?;
     Ok(object)
 }
 
@@ -1509,7 +1510,7 @@ mod tests {
     #[test]
     fn request_hash_is_stable() {
         let request = ApplyRequest {
-            contract_version: "1.0.0".into(),
+            contract_version: "1.1.0".into(),
             idempotency_key: "test".into(),
             chat_object_id: None,
             validate_only: false,
@@ -1527,7 +1528,7 @@ mod tests {
     #[test]
     fn unconnected_local_object_is_rejected_without_chat() {
         let request = ApplyRequest {
-            contract_version: "1.0.0".into(),
+            contract_version: "1.1.0".into(),
             idempotency_key: "test".into(),
             chat_object_id: None,
             validate_only: false,

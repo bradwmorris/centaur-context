@@ -13,6 +13,8 @@ CONTRACT = ROOT / "contract/context-contract.json"
 SCHEMA = ROOT / "contract/context-contract.schema.json"
 INSTRUCTIONS = ROOT / "generated/context-agent-instructions.md"
 RUNTIME_INSTRUCTIONS = ROOT / "services/sandbox/SYSTEM_PROMPT.md"
+APPLY_TOOL = ROOT / "tools/centaur_context/apply.py"
+DESCRIPTION_MIGRATION = ROOT / "migrations/0026_object_description_policy.sql"
 
 EXPECTED_TYPES = {"task", "chat", "user", "entity", "memory", "source", "note", "theme"}
 EXPECTED_TOOLS = {"context_search", "context_read", "context_apply"}
@@ -118,6 +120,14 @@ def main() -> int:
         fail("contract context_apply Object reference shape drifted")
     if len(contract["connection_kinds"]) != len(set(contract["connection_kinds"])):
         fail("connection kinds must be unique")
+    policy = contract["description_policy"]
+    if policy["max_characters"] != 600:
+        fail("canonical Object description maximum must be 600 Unicode characters")
+    if contract["limits"]["description_characters"] != policy["max_characters"]:
+        fail("description limit drifted from the canonical policy")
+    expected_examples = EXPECTED_WRITABLE
+    if set(policy["examples"]) != expected_examples:
+        fail("description examples must cover every interactive Object type")
     instructions = INSTRUCTIONS.read_text()
     if RUNTIME_INSTRUCTIONS.read_text() != instructions:
         fail("runtime Context instructions drifted from the generated fragment")
@@ -136,8 +146,25 @@ def main() -> int:
             fail(f"generated instructions are missing direct usage: {example}")
     if "do not inspect their executable or source code" not in instructions:
         fail("generated instructions must forbid tool implementation discovery")
+    for phrase in (
+        "at most 600",
+        "current snapshot, not a log",
+        "refresh materially stale descriptions",
+        "same `context_apply` request",
+    ):
+        if phrase not in instructions:
+            fail(f"generated instructions are missing description guidance: {phrase}")
     if len(instructions) > 1_800:
         fail("generated Context instructions exceed the 1,800-character budget")
+    apply_tool = APPLY_TOOL.read_text()
+    for example in policy["examples"].values():
+        if example not in apply_tool:
+            fail("context_apply examples drifted from the canonical description policy")
+    migration = DESCRIPTION_MIGRATION.read_text()
+    if "char_length(btrim(description)) <= 600" not in migration or "NOT VALID" not in migration:
+        fail("forward-only description constraint drifted from the canonical policy")
+    if "VALIDATE CONSTRAINT" in migration:
+        fail("Issue #51 must leave description constraint validation to Issue #52")
     print("Context contract and generated instructions are consistent")
     return 0
 
