@@ -17,8 +17,11 @@ context_apply --schema
 context_apply --file apply-request.json
 ```
 
-`context_apply --example` is local and makes no request. `context_apply
---schema` reads the live canonical contract without writing. Agents never need
+`context_apply --example` is local and prints validation-only create/update
+requests plus strong examples for every writable Object type. `context_apply
+--schema` reads the live canonical contract without writing. Object
+descriptions are current snapshots of at most 600 Unicode characters: they say
+what the Object is and why it matters in the current Context. Agents never need
 to inspect the generated command wrappers or Python source to use these tools.
 
 It is designed to be loaded by a Centaur installation as an approved tool; it

@@ -69,7 +69,7 @@ Centaur Context takes a middle path. It uses PostgreSQL, but stores knowledge in
 
 The types tell humans and agents what each Object represents and which extra fields it can have. Together, the types and relationships form the **ontology**: the system’s shared map of what it knows and how things fit together.
 
-Tip: place special emphasis on ‘descriptions’. A title alone is often ambiguous; a specific description gives text and semantic search enough context to find the right thing. If deeper graph traversal becomes necessary, a graph database may be worth revisiting. For this proof of concept, PostgreSQL gives us a simpler place to start.
+Tip: place special emphasis on ‘descriptions’. A title alone is often ambiguous; a concise description says what the Object is and why it matters in the current Context. Descriptions are current snapshots of at most 600 Unicode characters, not running logs; immutable Events and Runs retain the history. This gives text and semantic search enough context to find the right thing. If deeper graph traversal becomes necessary, a graph database may be worth revisiting. For this proof of concept, PostgreSQL gives us a simpler place to start.
 
 ## Connecting it to your Centaur
 

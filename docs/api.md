@@ -95,11 +95,14 @@ context_apply --file apply-request.json
 ```
 
 An apply file includes a stable batch-local name for each new Object so later
-operations can connect it without knowing its database ID:
+operations can connect it without knowing its database ID. Object descriptions
+are current snapshots of at most 600 Unicode characters after trimming. They
+say what the Object is and why it matters in the current Context; Events and
+Runs retain change history.
 
 ```json
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "idempotency_key": "editor-task-20260921-1",
   "operations": [
     {
@@ -107,7 +110,7 @@ operations can connect it without knowing its database ID:
       "local_ref": "task",
       "kind": "task",
       "title": "Review deployment",
-      "description": "Review the proposed deployment and record the decision.",
+      "description": "Review the proposed deployment and record the decision. This Task keeps the release approval explicit and reviewable.",
       "fields": {"status": "todo", "priority": "medium"}
     },
     {
@@ -124,6 +127,9 @@ operations can connect it without knowing its database ID:
 The batch creates its Run, immutable Events, Object subtype, and Connection in
 one transaction. A failed operation rolls back the entire batch. An exact retry
 returns the stored response; the same key with a different body is rejected.
+Use `update_object` with `expected_revision` to refresh a materially stale
+title or description. Put a known material change and its new description in
+the same batch; do not append dated status updates to the description.
 
 Retrieve context for the authenticated thread:
 

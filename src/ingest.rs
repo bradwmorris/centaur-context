@@ -916,16 +916,21 @@ async fn get_or_create_user(
             .bind(id)
             .fetch_one(&mut **tx)
             .await?;
+        let updated_description = if sender.user_kind == "human" {
+            format!("A human Slack user named {}.", sender.display_name)
+        } else {
+            format!("A Centaur agent on Slack named {}.", sender.display_name)
+        };
+        crate::domain::validate_object_description(&sender.display_name, &updated_description)?;
         let revision: Option<i64> = sqlx::query_scalar(
             r#"UPDATE objects SET title=$2,
-               description=CASE WHEN $3='human' THEN 'A human Slack user named ' || $2 || '.'
-                                ELSE 'A Centaur agent on Slack named ' || $2 || '.' END,
+               description=$3,
                revision=revision+1,updated_by_type=$4,updated_by_id=$5,updated_at=now()
                WHERE id=$1 AND title IS DISTINCT FROM $2 RETURNING revision"#,
         )
         .bind(id)
         .bind(&sender.display_name)
-        .bind(&sender.user_kind)
+        .bind(&updated_description)
         .bind(actor.actor_type)
         .bind(&actor.actor_id)
         .fetch_optional(&mut **tx)

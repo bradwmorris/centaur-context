@@ -24,7 +24,7 @@ The current Object types are:
 
 These are the types the current application supports, not a promise that an installation can invent new types without changing the schema and code.
 
-Descriptions matter. “Project Atlas” might mean several things; a description that says what it is, who it concerns, and why it matters makes the Object easier for both people and search to identify.
+Descriptions matter. “Project Atlas” might mean several things; a concise description that says what it is and why it matters in the current Context makes the Object easier for both people and search to identify. A description is a current snapshot of at most 600 Unicode characters after trimming, not a running log. Immutable Object Events and Runs retain its history.
 
 ## Connections
 
