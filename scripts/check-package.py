@@ -37,6 +37,15 @@ def main() -> None:
     for command in ("context_search", "context_read", "context_apply"):
         require(f'{command} = ' in tool_manifest, f"missing {command} entry point")
     require("centaur-context = " not in tool_manifest, "legacy agent command is still exposed")
+    workflow_manifest = text("tools/centaur_context_workflow/pyproject.toml")
+    require(
+        'name = "centaur-context-workflow"' in workflow_manifest,
+        "workflow adapter package is missing",
+    )
+    require(
+        'centaur-context = ' in workflow_manifest,
+        "workflow RPC compatibility entry point is missing",
+    )
     require(f'image: centaur-context:{VERSION}' in text("deploy/deployment.yaml"), "deployment version mismatch")
     dockerfile = text("Dockerfile")
     require(dockerfile.count("@sha256:") == 3, "all three container bases must be digest-pinned")
