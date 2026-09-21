@@ -58,6 +58,19 @@ pub fn router(app: AppState, token: String, approved_manifest_sha256: Option<Str
         .layer(TraceLayer::new_for_http())
 }
 
+pub fn router_with_maintenance(
+    app: AppState,
+    token: String,
+    approved_manifest_sha256: Option<String>,
+    maintenance: Option<crate::maintenance::MaintenanceConfig>,
+) -> Router {
+    let intake = router(app.clone(), token, approved_manifest_sha256);
+    match maintenance {
+        Some(config) => intake.merge(crate::maintenance::router(app, config)),
+        None => intake,
+    }
+}
+
 async fn health() -> Json<Value> {
     Json(json!({"ok":true}))
 }
@@ -96,12 +109,18 @@ async fn intake_auth(
     Ok(next.run(request).await)
 }
 
-fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, IntakeError> {
+pub(crate) fn required_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<String, IntakeError> {
     optional_header(headers, name)?
         .ok_or_else(|| IntakeError::BadRequest(format!("{name} is required")))
 }
 
-fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, IntakeError> {
+pub(crate) fn optional_header(
+    headers: &HeaderMap,
+    name: &'static str,
+) -> Result<Option<String>, IntakeError> {
     headers
         .get(name)
         .map(|value| {

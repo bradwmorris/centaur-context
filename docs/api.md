@@ -232,3 +232,9 @@ one unambiguous exact match, must pause when multiple exact matches remain, and
 may call Entity creation only when no match remains. An approved Task and its
 Entity link use separate stable Task and Connection keys so a partial failure
 can safely resume without duplicating either record.
+
+Owner-reviewed protected-record maintenance is available only on the optional
+intake listener with a separate maintenance credential and configured principal.
+See [reviewed maintenance](operations.md#reviewed-maintenance-on-the-intake-listener)
+for inventory, readback, exact-request approval and `/api/v2/maintenance/apply`.
+These routes are not part of the interactive-agent tool contract.

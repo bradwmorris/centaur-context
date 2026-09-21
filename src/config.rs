@@ -36,6 +36,7 @@ pub struct IntakeConfig {
     pub addr: SocketAddr,
     pub api_token: String,
     pub approved_manifest_sha256: Option<String>,
+    pub maintenance: Option<crate::maintenance::MaintenanceConfig>,
 }
 
 #[derive(Clone)]
@@ -266,6 +267,26 @@ impl Config {
             bail!("NETWORKING_MUTATION_API_TOKEN must differ from every other service credential");
         }
 
+        if let Some(maintenance) = intake.as_ref().and_then(|i| i.maintenance.as_ref()) {
+            let tokens = [
+                Some(agent_api_token.as_str()),
+                Some(note_write_api_token.as_str()),
+                Some(chat_ingest_api_token.as_str()),
+                Some(curator_api_token.as_str()),
+                intake.as_ref().map(|v| v.api_token.as_str()),
+                source_intake.as_ref().map(|v| v.api_token.as_str()),
+                research_mutation.as_ref().map(|v| v.api_token.as_str()),
+                networking_mutation.as_ref().map(|v| v.api_token.as_str()),
+                external_actions.as_ref().map(|v| v.api_token.as_str()),
+            ];
+            if tokens
+                .into_iter()
+                .flatten()
+                .any(|token| token == maintenance.api_token)
+            {
+                bail!("MAINTENANCE_API_TOKEN must differ from every other service credential");
+            }
+        }
         let static_dir = env::var("STATIC_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("web/dist"));
@@ -312,9 +333,10 @@ impl Config {
 }
 
 fn intake_config() -> Result<Option<IntakeConfig>> {
+    let maintenance = maintenance_config()?;
     let token = optional("INTAKE_API_TOKEN");
     let approved_manifest_sha256 = optional("INTAKE_APPROVED_MANIFEST_SHA256");
-    if token.is_none() && approved_manifest_sha256.is_none() {
+    if token.is_none() && approved_manifest_sha256.is_none() && maintenance.is_none() {
         return Ok(None);
     }
     let api_token = token.context(
@@ -335,6 +357,42 @@ fn intake_config() -> Result<Option<IntakeConfig>> {
         addr: parse_addr("INTAKE_ADDR", "0.0.0.0:8085")?,
         api_token,
         approved_manifest_sha256,
+        maintenance,
+    }))
+}
+
+fn maintenance_config() -> Result<Option<crate::maintenance::MaintenanceConfig>> {
+    let token = optional("MAINTENANCE_API_TOKEN");
+    let principal = optional("MAINTENANCE_ALLOWED_PRINCIPAL");
+    let hashes = optional("MAINTENANCE_APPROVED_REQUEST_SHA256");
+    if token.is_none() && principal.is_none() && hashes.is_none() {
+        return Ok(None);
+    }
+    let api_token = token.context("MAINTENANCE_API_TOKEN is required for maintenance")?;
+    if api_token.len() < 32 {
+        bail!("MAINTENANCE_API_TOKEN must be at least 32 characters");
+    }
+    let allowed_principal =
+        configured_principal(principal, "MAINTENANCE_ALLOWED_PRINCIPAL", "Maintenance")?;
+    let mut approved_request_hashes = HashSet::new();
+    if let Some(hashes) = hashes {
+        for hash in hashes.split(',').map(str::trim) {
+            if hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                bail!(
+                    "MAINTENANCE_APPROVED_REQUEST_SHA256 must be comma-separated lowercase SHA-256 digests"
+                );
+            }
+            approved_request_hashes.insert(hash.to_owned());
+        }
+    }
+    Ok(Some(crate::maintenance::MaintenanceConfig {
+        api_token,
+        allowed_principal,
+        approved_request_hashes,
     }))
 }
 

@@ -388,6 +388,18 @@ async fn universal_search(
     Ok(Json(json!({"data":data})))
 }
 
+pub(crate) fn maintenance_read_router(state: AppState) -> Router {
+    Router::new()
+        .route("/api/v2/maintenance/read", post(universal_read))
+        .route("/api/v2/maintenance/notes/{id}", get(read_note))
+        .route("/api/v2/maintenance/sources/{id}", get(read_source))
+        .route(
+            "/api/v2/maintenance/artifacts/{id}/content",
+            get(read_artifact_by_id),
+        )
+        .with_state(state)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UniversalReadRequest {
