@@ -43,3 +43,48 @@ the existing `update_object` operation with `expected_revision` when durable
 meaning or relevance has changed. They do not rewrite descriptions for minor
 field changes, duplicate Connections, or timestamps. Immutable Events and Runs
 retain the history.
+
+## Actionable Tasks
+
+`owner_object_id` is the assigned canonical User (human or agent), separate from
+immutable Object creator attribution. New Tasks require an active User assignee;
+agent/system creation requires `due_at`. `work_kind` is `general` or `code`;
+code work requires a canonical `https://github.com/owner/repo/issues/number` URL.
+Every supplied issue URL is validated across write paths. Existing records remain
+readable and unrelated edits remain possible; repair missing assignment, date and
+brief before agent execution. Never guess historical creator/owner/date values.
+
+Use `brief_markdown` for outcome, acceptance, capability/permission assessment,
+next action, dependencies, human inputs, ETA and evidence. Universal read includes
+the full brief and `execution_actor_id`. The UI labels Assigned to separately
+from Created by; a missing identity never falls back to a participant. Creator
+principals without a verified User mapping remain visibly attributed to the
+actual authenticated principal, rather than being guessed from the assignee.
+
+For a deterministic queue, `context_search --task-owner USER_ID --ready --limit 20`
+uses priority (high first), due date (earliest first, undated last), then Object ID.
+Optional `--task-status`, `--task-priority`, `--task-due-before` and `--task-cursor`
+filter before limiting. The API's `task_filters` accepts `owner_object_id`,
+`statuses`, `priority`, `due_before` (RFC3339), `ready`, and `cursor`. Empty query is
+allowed only for filtered task queries. `ready` means assigned, dated,
+agent-suitable backlog/todo work with a nonempty brief and no incomplete Task
+dependency. It is not a permission or completeness judgment: read the brief and
+all dependencies. Follow `next_cursor` promptly; if the queue changes, restart
+selection rather than treating a cursor as a durable work assignment.
+
+Claim by updating `status` to `doing` at the read revision. A repeated explicit
+`doing` update fails; a concurrent update from the same revision conflicts.
+The authenticated execution actor is recorded and another agent cannot alter an
+active claimed Task. Humans can explicitly hand off through a non-doing state.
+A blocked/review Task may resume through the existing revision-aware transition;
+do not infer abandonment from elapsed time. Completing work must record evidence
+and `completed_at`, clear any `blocked_reason`, and read back the resulting Task.
+The API checks state integrity, not the truth of an agent's evidence.
+
+Roll out consumers and the migration together. Old clients that omit new Task
+requirements will receive a clear validation error and must collect the missing
+information; there is no fabricated assignee/date fallback. The networking
+workflow-only listener now includes owner, due date and brief in its exact replay
+comparison. Rollback may restore a prior binary for unrelated reads, but writers
+must retain the required fields; do not remove constraints or overwrite history
+to make an incompatible producer succeed.

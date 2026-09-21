@@ -1,3 +1,4 @@
+mod support;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -225,7 +226,9 @@ async fn networking_listener_searches_entities_and_replays_bounded_writes() {
     assert_eq!(connection_replay["data"]["record"]["id"], connection_id);
     assert_eq!(connection_replay["data"]["reused"], true);
 
+    let owner = support::task_owner(&pool).await;
     let task = json!({
+        "owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Contact the selected person using the reviewed proposal.",
         "title":format!("Follow up with synthetic Entity {suffix}"),
         "description":"An exact approved networking follow-up created through the workflow-only listener.",
         "status":"todo",
@@ -347,6 +350,7 @@ async fn networking_listener_rejects_unknown_fields_and_broader_writes() {
 
     let broader_task = json!({
         "title":"Broader Task",
+        "owner_object_id":Uuid::new_v4(),"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Rejected broader task fixture.",
         "description":"A Task request whose broader state must be rejected before persistence access.",
         "status":"doing",
         "priority":"medium",

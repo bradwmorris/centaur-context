@@ -44,7 +44,10 @@ EXAMPLE_DOCUMENT = {
                 "kind": "task",
                 "title": "Review deployment",
                 "description": "Review the proposed deployment and record the decision. This Task keeps the release approval explicit and reviewable.",
-                "fields": {"status": "todo", "priority": "medium"},
+                "fields": {"status": "todo", "priority": "medium",
+                           "owner_object_id": "00000000-0000-0000-0000-000000000001",
+                           "due_at": "2099-01-01T00:00:00Z",
+                           "brief_markdown": "Review the proposed deployment; record acceptance evidence and the next action."},
             },
             {
                 "operation": "create_connection",

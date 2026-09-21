@@ -6,8 +6,8 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
     let mut query = QueryBuilder::<Postgres>::new(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
-           t.completed_at,t.github_issue_url,t.brief_markdown,
-           o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.archived_at IS NULL"#,
+           t.completed_at,t.work_kind,t.github_issue_url,t.brief_markdown,
+           o.created_by_type,o.created_by_id,o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(status) = filter.status {
         query.push(" AND t.status=").push_bind(status);
@@ -29,8 +29,8 @@ pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
     sqlx::query_as(
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
-           t.completed_at,t.github_issue_url,t.brief_markdown,
-           o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
+           t.completed_at,t.work_kind,t.github_issue_url,t.brief_markdown,
+           o.created_by_type,o.created_by_id,o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
     .bind(id)
     .fetch_optional(pool)
@@ -91,8 +91,8 @@ pub async fn create_task(
     sqlx::query(
         r#"INSERT INTO tasks
            (object_id,status,priority,owner_object_id,agent_suitable,blocked_reason,
-            due_at,completed_at,github_issue_url,brief_markdown)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
+            due_at,completed_at,github_issue_url,brief_markdown,work_kind)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
     )
     .bind(id)
     .bind(&input.status)
@@ -104,6 +104,7 @@ pub async fn create_task(
     .bind(input.completed_at)
     .bind(&input.github_issue_url)
     .bind(&input.brief_markdown)
+    .bind(&input.work_kind)
     .execute(&mut *tx)
     .await?;
     let run_id = insert_event(
@@ -342,6 +343,12 @@ pub async fn update_task(
         .provenance
         .unwrap_or_else(|| current.provenance.clone());
     let protected = changes.protected.unwrap_or(current.protected);
+    if changes.status.as_deref() == Some("doing") && current.status == "doing" {
+        return Err(DbError::Invalid(
+            "Task is already in progress; read its execution claim".into(),
+        ));
+    }
+    let work_kind = changes.work_kind.unwrap_or(current.work_kind);
     let status = changes.status.unwrap_or_else(|| current.status.clone());
     let priority = changes.priority.unwrap_or_else(|| current.priority.clone());
     let owner_object_id = changes.owner_object_id.unwrap_or(current.owner_object_id);
@@ -392,7 +399,7 @@ pub async fn update_task(
     sqlx::query(
         r#"UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,
            agent_suitable=$5,blocked_reason=$6,due_at=$7,completed_at=$8,
-           github_issue_url=$9,brief_markdown=$10 WHERE object_id=$1"#,
+           github_issue_url=$9,brief_markdown=$10,work_kind=$11 WHERE object_id=$1"#,
     )
     .bind(id)
     .bind(&status)
@@ -404,6 +411,7 @@ pub async fn update_task(
     .bind(completed_at)
     .bind(&github_issue_url)
     .bind(&brief_markdown)
+    .bind(&work_kind)
     .execute(&mut *tx)
     .await?;
     insert_event(
@@ -425,4 +433,78 @@ pub async fn update_task(
     .await?;
     tx.commit().await?;
     get_task(pool, id).await
+}
+
+/// Bounded deterministic task queue; semantic relevance is not execution priority.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskQueueFilter {
+    pub owner_object_id: Option<Uuid>,
+    #[serde(default)]
+    pub statuses: Vec<String>,
+    pub priority: Option<String>,
+    pub due_before: Option<String>,
+    #[serde(default)]
+    pub ready: bool,
+    pub cursor: Option<Uuid>,
+}
+
+pub async fn task_queue(
+    pool: &PgPool,
+    query: &str,
+    filter: TaskQueueFilter,
+    limit: i64,
+) -> Result<Value, DbError> {
+    use crate::domain::{TASK_PRIORITIES, TASK_STATUSES, allowed};
+    for status in &filter.statuses {
+        allowed(status.clone(), "status", TASK_STATUSES)?;
+    }
+    if let Some(priority) = &filter.priority {
+        allowed(priority.clone(), "priority", TASK_PRIORITIES)?;
+    }
+    let due_before = filter
+        .due_before
+        .map(|v| {
+            OffsetDateTime::parse(&v, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| DbError::Invalid("due_before must be RFC3339".into()))
+        })
+        .transpose()?;
+    let rows: Vec<Value> = sqlx::query_scalar(r#"
+      WITH eligible AS (
+        SELECT o.id,o.title,o.description,o.revision,o.created_by_type,o.created_by_id,
+          (to_jsonb(t) - 'brief_markdown') || jsonb_build_object('has_brief', nullif(btrim(t.brief_markdown),'') IS NOT NULL) AS task, t.due_at,
+          CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END AS rank
+        FROM tasks t JOIN objects o ON o.id=t.object_id
+        WHERE o.archived_at IS NULL
+          AND ($1::uuid IS NULL OR t.owner_object_id=$1)
+          AND (cardinality($2::text[])=0 OR t.status=ANY($2))
+          AND ($3::text IS NULL OR t.priority=$3)
+          AND ($4::timestamptz IS NULL OR t.due_at <= $4)
+          AND ($5='' OR strpos(lower(o.title || ' ' || o.description),lower($5))>0)
+          AND (NOT $6 OR (t.status IN ('backlog','todo') AND t.agent_suitable
+            AND t.due_at IS NOT NULL AND nullif(btrim(t.brief_markdown),'') IS NOT NULL
+            AND EXISTS (SELECT 1 FROM users u JOIN objects a ON a.id=u.object_id
+                        WHERE a.id=t.owner_object_id AND a.archived_at IS NULL)
+            AND NOT EXISTS (SELECT 1 FROM connections c JOIN tasks dep ON dep.object_id=c.target_object_id
+                            WHERE c.source_object_id=o.id AND c.kind='depends_on'
+                              AND c.archived_at IS NULL AND dep.status<>'done')))
+      ), numbered AS (
+        SELECT *, row_number() OVER (ORDER BY rank,due_at NULLS LAST,id) AS position FROM eligible
+      ) SELECT jsonb_build_object('id',id,'kind','task','title',title,'description',description,
+        'revision',revision,'created_by_type',created_by_type,'created_by_id',created_by_id,'subtype',task)
+        FROM numbered WHERE $7::uuid IS NULL OR position > (SELECT position FROM numbered WHERE id=$7)
+        ORDER BY position LIMIT $8
+    "#).bind(filter.owner_object_id).bind(filter.statuses).bind(filter.priority).bind(due_before)
+       .bind(query.trim()).bind(filter.ready).bind(filter.cursor).bind(limit+1).fetch_all(pool).await?;
+    let more = rows.len() > limit as usize;
+    let rows: Vec<Value> = rows.into_iter().take(limit as usize).collect();
+    let next = if more {
+        rows.last().map(|v| v["id"].clone())
+    } else {
+        None
+    };
+    Ok(
+        json!({"objects": rows, "next_cursor": next, "retrieval":"task_queue", "query":query,
+      "contract_version":crate::contract::version(),"tool_version":crate::contract::tool_version()}),
+    )
 }

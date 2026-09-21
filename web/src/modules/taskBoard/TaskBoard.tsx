@@ -1,9 +1,10 @@
 import { FormEvent, useDeferredValue, useMemo, useState } from "react";
 import { api } from "../../api";
 import { detailPath, navigate } from "../../routing";
-import type { Task, TaskStatus, UserAttribution } from "../../types";
+import type { Task, TaskStatus, ObjectVisual } from "../../types";
 import type { ModuleContext } from "../moduleRegistry";
 import "./taskBoard.css";
+import { TaskAssignee, TaskIssueLink, TaskReadiness } from "../../TaskIdentity";
 
 const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
   { status: "backlog", label: "Backlog", icon: "◌" },
@@ -92,7 +93,7 @@ export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: 
       }}>
         <header><span className="column-status" aria-hidden="true">{column.icon}</span><strong>{column.label}</strong><span>{grouped.get(column.status)?.length ?? 0}</span></header>
         <div className="task-column-cards">
-          {(grouped.get(column.status) ?? []).map((task) => <TaskCard key={task.object_id} task={task} owner={visuals.get(task.object_id)?.users.find((user) => user.role === "owner") ?? visuals.get(task.object_id)?.users[0]} moving={movingId === task.object_id} onDragStart={() => setDraggingId(task.object_id)} onDragEnd={() => setDraggingId(null)} onMove={(status) => requestMove(task, status)} />)}
+          {(grouped.get(column.status) ?? []).map((task) => <TaskCard key={task.object_id} task={task} visuals={visuals} moving={movingId === task.object_id} onDragStart={() => setDraggingId(task.object_id)} onDragEnd={() => setDraggingId(null)} onMove={(status) => requestMove(task, status)} />)}
           {(grouped.get(column.status)?.length ?? 0) === 0 ? <div className="column-empty">Drop tasks here</div> : null}
         </div>
       </section>)}
@@ -107,23 +108,18 @@ export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: 
   </section>;
 }
 
-function TaskCard({ task, owner, moving, onDragStart, onDragEnd, onMove }: { task: Task; owner?: UserAttribution; moving: boolean; onDragStart: () => void; onDragEnd: () => void; onMove: (status: TaskStatus) => void }) {
+function TaskCard({ task, visuals, moving, onDragStart, onDragEnd, onMove }: { task: Task; visuals: Map<string, ObjectVisual>; moving: boolean; onDragStart: () => void; onDragEnd: () => void; onMove: (status: TaskStatus) => void }) {
   return <article className={moving ? "task-board-card moving" : "task-board-card"} draggable={!moving} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.object_id); onDragStart(); }} onDragEnd={onDragEnd}>
     <button className="task-card-open" type="button" onClick={() => navigate(detailPath("tasks", task.object_id))} aria-label={`Open ${task.title}`} />
     <div className="task-card-title"><span className={`priority-dot ${task.priority}`} title={`${task.priority} priority`} /><strong>{task.title}</strong></div>
     {task.description ? <p>{task.description}</p> : null}
     {task.blocked_reason ? <p className="task-blocked-reason"><strong>Blocked:</strong> {task.blocked_reason}</p> : null}
-    <footer><div className="task-card-meta">{task.github_issue_url ? <a className="task-issue" href={task.github_issue_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>Issue</a> : null}{task.due_at ? <span className={isOverdue(task) ? "task-due overdue" : "task-due"}><CalendarIcon />{formatDue(task.due_at)}</span> : null}{task.agent_suitable ? <span className="agent-ready" title="Agent suitable">✦</span> : null}</div><div className="task-card-actions">{owner ? <BoardAvatar user={owner} /> : null}<select aria-label={`Move ${task.title}`} value={task.status} disabled={moving} onClick={(event) => event.stopPropagation()} onChange={(event) => onMove(event.target.value as TaskStatus)}>{columns.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}</select></div></footer>
+    <TaskReadiness task={task} />
+    <footer><div className="task-card-meta"><TaskIssueLink url={task.github_issue_url} />{task.due_at ? <span className={isOverdue(task) ? "task-due overdue" : "task-due"}><CalendarIcon />{formatDue(task.due_at)}</span> : null}{task.agent_suitable ? <span className="agent-ready" title="Agent suitable">✦</span> : null}</div><div className="task-card-actions"><TaskAssignee task={task} visuals={visuals} /><select aria-label={`Move ${task.title}`} value={task.status} disabled={moving} onClick={(event) => event.stopPropagation()} onChange={(event) => onMove(event.target.value as TaskStatus)}>{columns.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}</select></div></footer>
   </article>;
-}
-
-function BoardAvatar({ user }: { user: UserAttribution }) {
-  const [failed, setFailed] = useState(false);
-  return <span className={`board-avatar ${user.user_kind}`} title={user.title} aria-label={user.title} role="img">{user.avatar_asset_url && !failed ? <img src={user.avatar_asset_url} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : initials(user.title)}</span>;
 }
 
 function SearchIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg>; }
 function CalendarIcon() { return <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="10" rx="2" /><path d="M5 2v3M11 2v3M2.5 6.5h11" /></svg>; }
-function initials(value: string) { const parts = value.trim().split(/\s+/).filter(Boolean); return (parts.length > 1 ? `${parts[0][0]}${parts.at(-1)?.[0] ?? ""}` : parts[0]?.slice(0, 2) ?? "?").toUpperCase(); }
 function formatDue(value: string) { return dueDateFormatter.format(new Date(value)); }
 function isOverdue(task: Task) { return Boolean(task.due_at && task.status !== "done" && new Date(task.due_at).getTime() < Date.now()); }

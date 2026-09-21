@@ -14,7 +14,7 @@ describe("TaskBoard", () => {
   it("groups and filters tasks while hiding completed work by default", () => {
     render(<TaskBoard {...props} tasks={[task, { ...task, object_id: "task-2", title: "Finished", status: "done" }]} />);
     expect(screen.getByText("Polish the board")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Issue" })).toHaveAttribute("href", task.github_issue_url);
+    expect(screen.getByRole("link", { name: "Open GitHub issue example/project/issues/1" })).toHaveAttribute("href", task.github_issue_url);
     expect(screen.queryByText("Finished")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "Search task board" }), { target: { value: "missing" } });
     expect(screen.queryByText("Polish the board")).not.toBeInTheDocument();

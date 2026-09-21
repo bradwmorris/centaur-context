@@ -339,7 +339,9 @@ async fn read_contract(headers: HeaderMap) -> Result<Response, ApiError> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UniversalSearchRequest {
+    #[serde(default)]
     query: String,
+    task_filters: Option<db::TaskQueueFilter>,
     #[serde(default)]
     object_types: Vec<String>,
     limit: Option<i64>,
@@ -351,6 +353,16 @@ async fn universal_search(
     State(state): State<AppState>,
     Json(input): Json<UniversalSearchRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(filters) = input.task_filters {
+        if input.query.chars().count() > 1000 || input.object_types.iter().any(|v| v != "task") {
+            return Err(ApiError::BadRequest(
+                "task_filters accept only Task queries of at most 1000 characters".into(),
+            ));
+        }
+        return Ok(Json(
+            json!({"data": db::task_queue(&state.pool, &input.query, filters, input.limit.unwrap_or(20).clamp(1,100)).await?}),
+        ));
+    }
     let query = required_text(input.query, "query", 1000)?;
     if input.object_types.len() > OBJECT_KINDS.len() {
         return Err(ApiError::BadRequest("too many object_types".into()));
@@ -2007,6 +2019,7 @@ struct CreateTaskRequest {
     agent_suitable: bool,
     blocked_reason: Option<String>,
     due_at: Option<String>,
+    work_kind: Option<String>,
     github_issue_url: Option<String>,
     brief_markdown: Option<String>,
     originating_chat_object_id: Option<Uuid>,
@@ -2052,6 +2065,7 @@ async fn create_task(
             blocked_reason,
             due_at: parse_due_at(input.due_at)?,
             completed_at: (status == "done").then(OffsetDateTime::now_utc),
+            work_kind: input.work_kind.unwrap_or_else(|| "general".into()),
             github_issue_url: github_issue_url(input.github_issue_url)?,
             brief_markdown: optional_text(input.brief_markdown, "brief_markdown", 100_000)?,
             originating_chat_object_id: input.originating_chat_object_id,
@@ -2090,6 +2104,7 @@ struct UpdateTaskRequest {
     due_at: Option<String>,
     #[serde(default)]
     clear_due_at: bool,
+    work_kind: Option<String>,
     github_issue_url: Option<String>,
     #[serde(default)]
     clear_github_issue_url: bool,
@@ -2186,6 +2201,7 @@ async fn update_task(
                     None
                 }
             }),
+            work_kind: input.work_kind,
             github_issue_url: nullable_change(
                 github_issue_url(input.github_issue_url)?,
                 input.clear_github_issue_url,
@@ -2600,6 +2616,21 @@ impl IntoResponse for ApiError {
                 "validation_error",
                 error.to_string(),
             ),
+            Self::Db(DbError::Sqlx(error))
+                if error
+                    .as_database_error()
+                    .and_then(|e| e.constraint())
+                    .is_some_and(|name| name.starts_with("task_")) =>
+            {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invalid_task",
+                    error
+                        .as_database_error()
+                        .map(|e| e.message().to_owned())
+                        .unwrap_or_default(),
+                )
+            }
             Self::Db(DbError::Sqlx(error)) if is_constraint_error(&error) => (
                 StatusCode::CONFLICT,
                 "constraint_conflict",

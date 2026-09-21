@@ -111,7 +111,8 @@ pub async fn context_subtypes(
                         'owner_object_id',t.owner_object_id,'owner_title',owner.title,
                         'agent_suitable',t.agent_suitable,'blocked_reason',t.blocked_reason,
                         'due_at',t.due_at,'completed_at',t.completed_at,
-                        'github_issue_url',t.github_issue_url))
+                        'github_issue_url',t.github_issue_url,'work_kind',t.work_kind,
+                        'brief_markdown',t.brief_markdown,'execution_actor_id',t.execution_actor_id))
                     WHEN 'chat' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','chat','provider',ch.provider,'surface_kind',ch.surface_kind,
                         'channel_name',ch.channel_name,'current_thread',o.id=$2))

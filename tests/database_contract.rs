@@ -1,3 +1,4 @@
+mod support;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -396,7 +397,9 @@ async fn narrow_write_listener_creates_and_replays_one_open_task() {
         token.clone(),
     );
     let fixture = Uuid::new_v4().simple().to_string();
+    let owner = support::task_owner(&pool).await;
     let body = json!({
+        "owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z",
         "title":"Follow up on research",
         "description":"A bounded follow-up Task created through the narrow write listener.",
         "priority":"medium",
@@ -506,11 +509,12 @@ async fn artifacts_attach_to_any_object_and_are_immutable() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;
     };
+    let owner = support::task_owner(&pool).await;
     let object_id = Uuid::new_v4();
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'task','Task','Test task','system','test','system','test','{}')")
         .bind(object_id).execute(&mut *tx).await.unwrap();
-    sqlx::query("INSERT INTO tasks(object_id,status,priority,agent_suitable) VALUES($1,'todo','medium',true)").bind(object_id).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO tasks(object_id,status,priority,agent_suitable,owner_object_id,due_at) VALUES($1,'todo','medium',true,$2,'2099-01-01')").bind(object_id).bind(owner).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
     let artifact_id = Uuid::new_v4();
     sqlx::query("INSERT INTO artifacts(id,object_id,kind,title,content,media_type,sha256,size_bytes,capture_outcome,expected_size_bytes,metadata) VALUES($1,$2,'transcript','Interview','hello','text/plain',$3,5,'complete',5,'{}')")
