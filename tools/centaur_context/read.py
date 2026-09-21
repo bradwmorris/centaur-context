@@ -11,13 +11,21 @@ from .tool_common import run
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="context_read", description="Read canonical Centaur Context Objects."
+        prog="context_read",
+        description="Read canonical Centaur Context Objects.",
+        epilog=(
+            "example:\n"
+            "  context_read 00000000-0000-0000-0000-000000000001 "
+            "--include connections"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("object_ids", nargs="+")
+    parser.add_argument("object_ids", nargs="+", help="One or more Object UUIDs.")
     parser.add_argument(
         "--include",
         action="append",
         choices=("connections", "artifacts", "events", "messages"),
+        help="Include related data; repeat for multiple kinds.",
     )
     parser.add_argument(
         "--artifact-window",

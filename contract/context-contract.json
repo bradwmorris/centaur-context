@@ -47,6 +47,16 @@
       "read_only": false,
       "idempotent": true,
       "input": {"required": ["contract_version", "idempotency_key", "operations"], "optional": ["chat_object_id", "validate_only"]},
+      "operations": {
+        "create_object": {"required": ["local_ref", "kind", "title", "description"], "optional": ["provenance", "fields"]},
+        "update_object": {"required": ["object_id", "expected_revision"], "optional": ["changes"]},
+        "archive_object": {"required": ["object_id", "expected_revision"]},
+        "create_connection": {"required": ["source", "kind", "target", "description"], "optional": ["provenance"]},
+        "update_connection": {"required": ["connection_id", "expected_revision"], "optional": ["kind", "description", "provenance"]},
+        "archive_connection": {"required": ["connection_id", "expected_revision"]},
+        "append_artifact": {"required": ["object", "expected_revision", "kind"], "optional": ["title", "content", "uri", "media_type", "language", "capture_outcome", "capture_reason", "metadata"]}
+      },
+      "object_reference": {"exactly_one_of": ["object_id", "local_ref"]},
       "output": {"required": ["replayed", "validated_only", "request_hash", "contract_version", "tool_version", "run_id", "event_ids", "results"]}
     }
   },

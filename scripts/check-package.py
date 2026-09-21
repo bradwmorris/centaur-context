@@ -20,6 +20,7 @@ def text(path: str) -> str:
 
 
 def main() -> None:
+    subprocess.run([sys.executable, ROOT / "scripts/check-contract.py"], check=True)
     require(f'version = "{VERSION}"' in text("Cargo.toml"), "Cargo version mismatch")
     require(f'version = "{TOOL_VERSION}"' in text("tools/centaur_context/pyproject.toml"), "tool version mismatch")
     require(f'version = "{VERSION}"' in text("compatibility.toml"), "compatibility version mismatch")

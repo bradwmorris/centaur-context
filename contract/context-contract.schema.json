@@ -47,6 +47,19 @@
         "read_only": {"type": "boolean"},
         "idempotent": {"type": "boolean"},
         "input": {"$ref": "#/$defs/shape"},
+        "operations": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/$defs/shape"}
+        },
+        "object_reference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exactly_one_of"],
+          "properties": {
+            "exactly_one_of": {"type": "array", "minItems": 2, "items": {"type": "string"}, "uniqueItems": true}
+          }
+        },
         "output": {"$ref": "#/$defs/shape"}
       }
     },
