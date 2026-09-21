@@ -153,6 +153,17 @@ async fn top_connected_candidates_rank_active_graph_and_honor_exclusions() {
             .await
             .unwrap();
     }
+    for id in [first, tie_newer, tie_older, inactive_only, archived_hub]
+        .into_iter()
+        .chain(endpoints.iter().copied())
+        .chain([archived_endpoint])
+    {
+        sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'concept')")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
     for (source, target, archived) in [
         (first, endpoints[0], false),
         (first, endpoints[1], false),
