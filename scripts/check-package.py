@@ -106,6 +106,7 @@ def main() -> None:
         "tools/centaur_context/client.py",
         "tools/centaur_context/pyproject.toml",
         "tools/centaur_context/test_client.py",
+        "tools/centaur_context_workflow/pyproject.toml",
         "web/vite.config.ts",
     }
     violations = []
