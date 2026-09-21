@@ -143,7 +143,11 @@ curl --get 'http://centaur-context:8081/api/v2/context' \
   --data-urlencode 'limit=10'
 ```
 
-A response is a bounded search packet:
+A response is one bounded packet with two distinct sections. `objects` contains
+the existing query-relevant results. `general_context_objects` contains up to
+ten different active Objects ranked by active-Connection count for broad
+orientation. Query-relevant Objects are excluded from the general section and
+receive priority when the 12,000-character packet budget requires omission.
 
 ```json
 {
@@ -151,6 +155,7 @@ A response is a bounded search packet:
     "query": "What decisions affect this work?",
     "retrieval": "full_text",
     "objects": [],
+    "general_context_objects": [],
     "budget": {
       "max_characters": 12000,
       "serialized_characters": 187,

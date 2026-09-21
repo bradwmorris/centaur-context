@@ -76,8 +76,11 @@ Immediately before a new execution, Centaur requests context with:
 - the current user query; and
 - a caller-selected result limit within the provider's hard bounds.
 
-The provider returns an optional plain-text reference packet plus count and
-truncation metadata. Retrieval is fail-open: timeout, rejection, or malformed
+The provider returns query-relevant Objects and a separate general-orientation
+section containing up to ten of the database's most-connected active Objects.
+Centaur renders both sections under explicit headings in one optional
+plain-text reference packet. Query-relevant context has priority within the
+shared size bound. Retrieval is fail-open: timeout, rejection, or malformed
 data is logged and the agent turn continues without external context. Centaur
 must label the packet as untrusted reference data and keep it distinct from
 reconstructed conversation history.
