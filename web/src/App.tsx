@@ -213,7 +213,7 @@ export default function App() {
       </section>
 
       {createOpen && isCreateSection(section) && (section === "tasks"
-        ? <NewTask users={objects.filter((o) => o.kind === "user" && o.lifecycle === "active")} onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
+        ? <NewTask onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : section === "sources" ? <NewSource onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : section === "notes" ? <NewNote onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
         : section === "themes" ? <NewTheme onCancel={() => setCreateOpen(false)} onCreated={(item) => finishCreate(section, item.object_id, load, setCreateOpen)} />
@@ -469,9 +469,18 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   </form></CreateModal>;
 }
 
-function NewTask({ users, onCancel, onCreated }: { users: SharedObject[]; onCancel: () => void; onCreated: (item: Task) => void }) {
+export function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Task) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [users, setUsers] = useState<SharedObject[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  useEffect(() => {
+    let active = true;
+    void api.objects("", "user").then((items) => {
+      if (active) { setUsers(items.filter((u) => u.lifecycle === "active")); setLoadingUsers(false); }
+    }).catch((cause) => { if (active) { setError(message(cause)); setLoadingUsers(false); } });
+    return () => { active = false; };
+  }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
     try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", owner_object_id: String(data.get("owner_object_id")), due_at: data.get("due_at") ? new Date(String(data.get("due_at"))).toISOString() : null, work_kind: String(data.get("work_kind")), github_issue_url: String(data.get("github_issue_url") || "") || null, brief_markdown: String(data.get("brief_markdown") || ""), provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
@@ -482,13 +491,13 @@ function NewTask({ users, onCancel, onCreated }: { users: SharedObject[]; onCanc
     <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples.task} aria-label="Task description" />
     {error && <p className="form-error">{error}</p>}
     <div className="task-fields">
-      <label>Assigned to<select name="owner_object_id" required defaultValue=""><option value="" disabled>Select a user</option>{users.map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></label>
+      <label>Assigned to<select name="owner_object_id" required disabled={loadingUsers} defaultValue=""><option value="" disabled>{loadingUsers ? "Loading users…" : "Select a user"}</option>{users.map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></label>
       <label>Due<input type="datetime-local" name="due_at" /></label>
       <label>Work type<select name="work_kind"><option value="general">General</option><option value="code">Code / repository change</option></select></label>
       <label>GitHub issue<input name="github_issue_url" type="url" placeholder="https://github.com/owner/repo/issues/1" /></label>
       <label>Execution brief<textarea name="brief_markdown" placeholder="Outcome, acceptance, next action, and any inputs or blockers" /></label>
     </div>
-    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
+    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy || loadingUsers || users.length === 0}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
 }
 
