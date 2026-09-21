@@ -1,0 +1,33 @@
+[project]
+name = "centaur-context-workflow"
+description = "Workflow-only compatibility adapter for Centaur Context"
+version = "1.1.0"
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+centaur-context = "centaur_tool_centaur_context_workflow.client:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "centaur_tool_centaur_context_workflow"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.centaur]
+module = "client.py"
+secrets = [
+    {type = "http", name = "CENTAUR_CONTEXT_API_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_OS_API_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-os.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_NOTE_WRITE_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context-note-write.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_INTAKE_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context-intake.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_SOURCE_INTAKE_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context-source-intake.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_RESEARCH_MUTATION_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context-research-mutation.centaur.svc.cluster.local"]},
+    {type = "http", name = "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN", mode = "inject", inject_header = "Authorization", inject_formatter = "Bearer {{ .Value }}", hosts = ["centaur-context-external-action.centaur.svc.cluster.local"]},
+]
