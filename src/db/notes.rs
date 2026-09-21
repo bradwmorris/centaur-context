@@ -323,7 +323,7 @@ pub(super) async fn validate_note_links(
 ) -> Result<Option<Uuid>, DbError> {
     let resolved_chat_object_id = match originating_chat_object_id {
         Some(id) => Some(id),
-        None => resolve_actor_chat(pool, actor).await?,
+        None => resolve_actor_chat(pool, actor, links.intent).await?,
     };
     if let Some(chat_object_id) = resolved_chat_object_id {
         let valid: bool = sqlx::query_scalar(
@@ -440,12 +440,19 @@ pub(super) async fn validate_note_links(
     Ok(resolved_chat_object_id)
 }
 
-async fn resolve_actor_chat(pool: &PgPool, actor: &ActorContext) -> Result<Option<Uuid>, DbError> {
+async fn resolve_actor_chat(
+    pool: &PgPool,
+    actor: &ActorContext,
+    intent: &str,
+) -> Result<Option<Uuid>, DbError> {
     let Some(thread_key) = actor.centaur_thread_key.as_deref() else {
         return Ok(None);
     };
     let parts = thread_key.split(':').map(str::trim).collect::<Vec<_>>();
     if parts.len() < 4 || parts.iter().any(|part| part.is_empty()) {
+        if crate::contract::standalone_note_intent(intent) {
+            return Ok(None);
+        }
         return Err(DbError::Invalid(
             "authenticated thread key cannot be mapped to a Chat".into(),
         ));

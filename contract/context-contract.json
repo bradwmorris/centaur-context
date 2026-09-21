@@ -92,6 +92,7 @@
   },
   "rules": {
     "new_objects_require_connection": true,
+    "standalone_note_intents": ["insight", "question"],
     "verified_chat_adds_provenance_connection": true,
     "object_kind_is_immutable": true,
     "updates_require_expected_revision": true,

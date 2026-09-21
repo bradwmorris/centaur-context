@@ -963,3 +963,48 @@ async fn connection_graph_is_complete_stable_and_active_only() {
         .unwrap();
     assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
 }
+
+#[tokio::test]
+async fn dedicated_note_capture_accepts_non_chat_research_threads() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let actor = centaur_context::domain::ActorContext {
+        actor_type: "centaur_agent",
+        actor_id: "standalone-capture-test".into(),
+        centaur_thread_key: Some("research-session-without-chat".into()),
+        centaur_execution_id: None,
+        is_agent: true,
+    };
+    for intent in ["insight", "question"] {
+        let note = db::create_note(
+            &pool,
+            &actor,
+            db::NewNote {
+                title: format!("Independent {intent}"),
+                description: "An independent research thought awaiting evidence.".into(),
+                provenance: json!({"source_type":"test"}),
+                content: "What makes research cumulative?".into(),
+                content_format: "plain_text".into(),
+                intent: intent.into(),
+                source_artifact_id: None,
+                source_locator: None,
+                originating_chat_object_id: None,
+                derived_from_source_object_ids: vec![],
+                derived_from_note_object_ids: vec![],
+            },
+            &format!("independent-capture-{intent}"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(note.intent.as_deref(), Some(intent));
+        let links: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM connections WHERE source_object_id=$1 OR target_object_id=$1",
+        )
+        .bind(note.object_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(links, 0);
+    }
+}
