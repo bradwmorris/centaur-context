@@ -157,6 +157,9 @@ export interface Theme {
 }
 
 export interface Task {
+  work_kind?: "general" | "code";
+  created_by_type?: string;
+  created_by_id?: string;
   object_id: string;
   title: string;
   description: string;

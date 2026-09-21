@@ -1,0 +1,16 @@
+.task-assignee { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.task-assignee.missing, .task-readiness { color: var(--text-muted, #777); font-size: 11px; }
+.task-github-link { display: inline-flex; align-items: center; gap: 6px; position: relative; z-index: 2; color: inherit; padding: 4px; border-radius: 4px; flex-shrink: 0; }
+.task-github-link svg { width: 18px; height: 18px; }
+.task-github-link:hover { background: var(--hover); }
+.task-github-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.task-readiness { display: inline-block; }
+.task-fields { display: grid; gap: 12px; }
+.task-fields label { display: grid; gap: 5px; }
+
+.task-create-form { max-height: calc(86vh - 72px); overflow-y: auto; gap: 10px; }
+.task-create-form .create-body { min-height: 80px; }
+.task-fields { font-size: 13px; color: var(--text-secondary); }
+.task-fields input, .task-fields select, .task-fields textarea { width: 100%; border: 1px solid #3d3f47; border-radius: 6px; background: #141517; color: #d9dade; padding: 9px 10px; }
+.task-fields textarea { min-height: 80px; resize: vertical; }
+.task-create-form .create-footer { position: sticky; bottom: -14px; background: #151517; padding: 12px 0; }

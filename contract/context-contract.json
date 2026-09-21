@@ -6,7 +6,8 @@
   "object_types": {
     "task": {
       "interactive_write": true,
-      "fields": ["status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "completed_at", "github_issue_url", "brief_markdown"]
+      "creation_requirements": "Assigned active User; agent/system creation requires due_at. Code work requires canonical GitHub issue. Legacy gaps must be repaired before execution.",
+      "fields": ["status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "completed_at", "work_kind", "github_issue_url", "brief_markdown"]
     },
     "entity": {
       "interactive_write": true,
@@ -51,8 +52,9 @@
   "tools": {
     "context_search": {
       "operation": "search",
+      "task_filters": {"required": [], "optional": ["owner_object_id", "statuses", "priority", "due_before", "ready", "cursor"]},
       "read_only": true,
-      "input": {"required": ["query"], "optional": ["object_types", "limit", "lexical_only"]},
+      "input": {"required": ["query"], "optional": ["object_types", "limit", "lexical_only", "task_filters"]},
       "output": {"required": ["objects"]}
     },
     "context_read": {

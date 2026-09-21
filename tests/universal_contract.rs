@@ -1,3 +1,4 @@
+mod support;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -56,6 +57,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
         eprintln!("skipping universal contract: TEST_DATABASE_URL is not set");
         return;
     };
+    let owner = support::task_owner(&pool).await;
     let anchor = Uuid::new_v4();
     let mut seed = pool.begin().await.unwrap();
     sqlx::query(
@@ -89,7 +91,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
         "contract_version":"1.1.0",
         "idempotency_key":key,
         "operations":[
-            {"operation":"create_object","local_ref":"task","kind":"task","title":"Universal task","description":"A disposable Task created by the universal contract test.","fields":{"status":"todo","priority":"medium"}},
+            {"operation":"create_object","local_ref":"task","kind":"task","title":"Universal task","description":"A disposable Task created by the universal contract test.","fields":{"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Review this task and record verification evidence."}},
             {"operation":"create_object","local_ref":"entity","kind":"entity","title":"Universal entity","description":"A disposable Entity created by the universal contract test.","fields":{"entity_kind":"concept"}},
             {"operation":"create_object","local_ref":"source","kind":"source","title":"Universal source","description":"A disposable Source metadata record without canonical captured content.","fields":{"source_kind":"article","canonical_uri":"https://example.invalid/universal"}},
             {"operation":"create_object","local_ref":"note","kind":"note","title":"Universal note","description":"A disposable Note created by the universal contract test.","fields":{"content":"Test evidence.","content_format":"markdown","intent":"insight"}},
@@ -251,6 +253,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
         eprintln!("skipping description retrieval contract: TEST_DATABASE_URL is not set");
         return;
     };
+    let owner = support::task_owner(&pool).await;
     let anchor = Uuid::new_v4();
     let evidence = Uuid::new_v4();
     let mut seed = pool.begin().await.unwrap();
@@ -294,7 +297,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
         "contract_version":"1.1.0",
         "idempotency_key":format!("description-create-{}", Uuid::new_v4()),
         "operations":[
-            {"operation":"create_object","local_ref":"task","kind":"task","title":"Evaluate retrieval launch","description":"Evaluate the obsoletequartz retrieval launch criteria. This Task records the current release decision.","fields":{"status":"todo","priority":"medium"}},
+            {"operation":"create_object","local_ref":"task","kind":"task","title":"Evaluate retrieval launch","description":"Evaluate the obsoletequartz retrieval launch criteria. This Task records the current release decision.","fields":{"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Review this task and record verification evidence."}},
             {"operation":"create_connection","source":{"local_ref":"task"},"kind":"related_to","target":{"object_id":anchor},"description":"The retrieval evaluation belongs to this disposable project."}
         ]
     });

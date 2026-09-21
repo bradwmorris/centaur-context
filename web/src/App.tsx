@@ -5,6 +5,7 @@ import { DescriptionSnippet } from "./DescriptionSnippet";
 import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
+import { TaskAssignee, TaskIssueLink, TaskReadiness } from "./TaskIdentity";
 import { InlineEditor } from "./InlineEditor";
 import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
 import { SchemaWorkspace } from "./SchemaWorkspace";
@@ -196,7 +197,7 @@ export default function App() {
                   <span className="record-main">
                     <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
                     <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                    <span className="record-users"><AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} /></span>
+                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <><TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
                   </span>
                   <DescriptionSnippet description={itemDescription(item, objects)} />
                   <time>{relative(item.created_at)}</time>
@@ -468,19 +469,35 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
   </form></CreateModal>;
 }
 
-function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Task) => void }) {
+export function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreated: (item: Task) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [users, setUsers] = useState<SharedObject[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  useEffect(() => {
+    let active = true;
+    void api.objects("", "user").then((items) => {
+      if (active) { setUsers(items.filter((u) => u.lifecycle === "active")); setLoadingUsers(false); }
+    }).catch((cause) => { if (active) { setError(message(cause)); setLoadingUsers(false); } });
+    return () => { active = false; };
+  }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
+    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", owner_object_id: String(data.get("owner_object_id")), due_at: data.get("due_at") ? new Date(String(data.get("due_at"))).toISOString() : null, work_kind: String(data.get("work_kind")), github_issue_url: String(data.get("github_issue_url") || "") || null, brief_markdown: String(data.get("brief_markdown") || ""), provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
     catch (cause) { setError(message(cause)); setBusy(false); }
   };
-  return <CreateModal title="New task" onClose={onCancel}><form className="create-form" onSubmit={submit}>
+  return <CreateModal title="New task" onClose={onCancel}><form className="create-form task-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Task title" aria-label="Task title" />
     <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples.task} aria-label="Task description" />
     {error && <p className="form-error">{error}</p>}
-    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : "Create task"}</button></div></div>
+    <div className="task-fields">
+      <label>Assigned to<select name="owner_object_id" required disabled={loadingUsers} defaultValue=""><option value="" disabled>{loadingUsers ? "Loading users…" : "Select a user"}</option>{users.map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></label>
+      <label>Due<input type="datetime-local" name="due_at" /></label>
+      <label>Work type<select name="work_kind"><option value="general">General</option><option value="code">Code / repository change</option></select></label>
+      <label>GitHub issue<input name="github_issue_url" type="url" placeholder="https://github.com/owner/repo/issues/1" /></label>
+      <label>Execution brief<textarea name="brief_markdown" placeholder="Outcome, acceptance, next action, and any inputs or blockers" /></label>
+    </div>
+    <div className="create-footer"><label className="property-chip"><input type="checkbox" name="agent_suitable" /> Agent suitable</label><div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy || loadingUsers || users.length === 0}>{busy ? "Creating…" : "Create task"}</button></div></div>
   </form></CreateModal>;
 }
 
@@ -910,11 +927,14 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
             <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
             <Property label="Agent suitability"><label className="check"><input type="checkbox" checked={task.agent_suitable} onChange={(event) => void saveProperty({ agent_suitable: event.target.checked })} /> Suitable</label></Property>
             <Property label="Priority"><span className="property-value-wrap">{task.priority}</span></Property>
-            <Property label="Owner">{task.owner_object_id ? <><ObjectId id={task.owner_object_id} /><ObjectContext visual={visuals.get(task.owner_object_id)} /></> : "Unassigned"}</Property>
-            <Property label="Due">{task.due_at ? new Date(task.due_at).toLocaleString() : "No due date"}</Property>
+            <Property label="Created by"><span>{objects.find((o) => o.id === object.created_by_id)?.title ?? `${object.created_by_type}: ${object.created_by_id}`}</span></Property>
+            <Property label="Assigned to"><TaskAssignee task={task} visuals={visuals} /><select aria-label="Assigned to" value={task.owner_object_id ?? ""} onChange={(e) => void saveProperty({ owner_object_id: e.target.value })}><option value="" disabled>Select a user</option>{objects.filter((o) => o.kind === "user" && o.lifecycle === "active").map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></Property>
+            <Property label="Due"><input key={task.due_at ?? "unset"} aria-label="Due" type="datetime-local" defaultValue={localDateTime(task.due_at)} onBlur={(e) => { if (e.target.value && localDateTime(task.due_at) !== e.target.value) void saveProperty({ due_at: new Date(e.target.value).toISOString() }); }} /></Property>
             <Property label="Completed">{task.completed_at ? new Date(task.completed_at).toLocaleString() : "Not complete"}</Property>
             <Property label="Blocked reason"><span className="property-value-wrap">{task.blocked_reason ?? "None"}</span></Property>
-            <Property label="GitHub issue">{safeGithubUrl(task.github_issue_url) ? <a href={safeGithubUrl(task.github_issue_url)!} target="_blank" rel="noopener noreferrer">Open issue</a> : "None"}</Property>
+            <Property label="Work type"><select aria-label="Work type" value={task.work_kind ?? "general"} onChange={(e) => void saveProperty({ work_kind: e.target.value })}><option value="general">General</option><option value="code">Code / repository change</option></select></Property>
+            <Property label="GitHub issue"><TaskIssueLink url={task.github_issue_url} showLabel /><InlineEditor label="GitHub issue URL" value={task.github_issue_url ?? ""} onSave={async (value) => { await saveFields(value ? { github_issue_url: value } : { clear_github_issue_url: true }); return value; }} onReload={load} /></Property>
+            <Property label="Readiness"><TaskReadiness task={task} showComplete /></Property>
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
@@ -1325,11 +1345,7 @@ function DetailLoading({ error }: { error: string | null }) { return <div classN
 function relative(value: string) { const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000); if (seconds < 60) return "now"; if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`; if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`; return `${Math.floor(seconds / 86400)}d ago`; }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : "Something went wrong."; }
 function conflictMessage(cause: unknown) { return cause instanceof ApiError && cause.status === 409 ? "This record changed elsewhere. Refresh before saving again." : message(cause); }
-function safeGithubUrl(value: string | null) {
-  if (!value) return null;
-  try { const url = new URL(value); return url.protocol === "https:" && url.hostname.toLowerCase() === "github.com" ? url.href : null; }
-  catch { return null; }
-}
+function localDateTime(value: string | null) { if (!value) return ""; const date = new Date(value); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
 function finishCreate(section: Section, id: string, load: () => Promise<void>, setCreateOpen: (open: boolean) => void) { setCreateOpen(false); navigate(detailPath(section, id)); void load(); }
 function shortId(value: string) { return value.length > 12 ? `${value.slice(0, 8)}…` : value; }
 function textValue(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value : fallback; }

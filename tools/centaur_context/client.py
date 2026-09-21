@@ -383,26 +383,17 @@ class CentaurContextClient:
             raise RuntimeError("Centaur Context returned invalid JSON") from exc
 
     def context_search(
-        self,
-        query: str,
-        *,
-        object_types: list[str] | None = None,
-        limit: int = 20,
-        lexical_only: bool = False,
+        self, query: str, *, object_types: list[str] | None = None,
+        limit: int = 20, lexical_only: bool = False,
+        task_filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Search all canonical Object types through the universal API."""
-        query = _required(query, "query")
-        kinds = [_required(value, "object_type") for value in (object_types or [])]
-        return self._request(
-            "POST",
-            "/api/v2/search",
-            json={
-                "query": query,
-                "object_types": kinds,
-                "limit": _bounded_limit(limit),
-                "lexical_only": bool(lexical_only),
-            },
-        )
+        """Search Objects, or use a deterministic filtered Task queue."""
+        query = query.strip() if task_filters is not None else _required(query, "query")
+        body = {"query": query, "object_types": [_required(v, "object_type") for v in (object_types or [])],
+                "limit": _bounded_limit(limit), "lexical_only": bool(lexical_only)}
+        if task_filters is not None:
+            body["task_filters"] = task_filters
+        return self._request("POST", "/api/v2/search", json=body)
 
     def context_read(
         self,

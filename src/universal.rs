@@ -754,8 +754,8 @@ async fn insert_subtype(
             sqlx::query(
                 r#"INSERT INTO tasks
                    (object_id,status,priority,owner_object_id,agent_suitable,blocked_reason,due_at,
-                    completed_at,github_issue_url,brief_markdown)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
+                    completed_at,github_issue_url,brief_markdown,work_kind)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)"#,
             )
             .bind(id)
             .bind(status)
@@ -767,6 +767,7 @@ async fn insert_subtype(
             .bind(completed_at)
             .bind(optional_string(fields, "github_issue_url")?)
             .bind(optional_string(fields, "brief_markdown")?)
+            .bind(string_or(fields, "work_kind", "general")?)
             .execute(&mut **tx)
             .await?;
         }
@@ -1006,6 +1007,14 @@ async fn update_subtype(
         return Ok(());
     }
     let snapshot = db::target_snapshot(tx, "object", id).await?;
+    if kind == "task"
+        && changes.get("status").and_then(Value::as_str) == Some("doing")
+        && snapshot["subtype"]["status"] == "doing"
+    {
+        return Err(DbError::Invalid(
+            "Task is already in progress; read its execution claim".into(),
+        ));
+    }
     let mut fields = snapshot["subtype"].as_object().cloned().unwrap_or_default();
     for (key, value) in changes {
         if !["title", "description", "provenance"].contains(&key.as_str()) {
@@ -1032,7 +1041,7 @@ async fn update_subtype(
             }
             sqlx::query(
                 r#"UPDATE tasks SET status=$2,priority=$3,owner_object_id=$4,agent_suitable=$5,
-                   blocked_reason=$6,due_at=$7,completed_at=$8,github_issue_url=$9,brief_markdown=$10
+                   blocked_reason=$6,due_at=$7,completed_at=$8,github_issue_url=$9,brief_markdown=$10,work_kind=$11
                    WHERE object_id=$1"#,
             )
             .bind(id).bind(status).bind(priority)
@@ -1043,6 +1052,7 @@ async fn update_subtype(
             .bind(completed_at)
             .bind(optional_string(&fields, "github_issue_url")?)
             .bind(optional_string(&fields, "brief_markdown")?)
+            .bind(string_or(&fields, "work_kind", "general")?)
             .execute(&mut **tx).await?;
         }
         "entity" => {

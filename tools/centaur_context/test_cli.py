@@ -87,3 +87,17 @@ def test_apply_schema_reads_contract_without_applying(monkeypatch, capsys):
     assert contract["tools"]["context_apply"]["operations"]["create_object"][
         "required"
     ] == ["local_ref", "kind", "title", "description"]
+
+
+def test_task_selection_uses_filters_without_a_fabricated_text_query(monkeypatch, capsys):
+    captured = []
+    class Client:
+        def context_search(self, query, **kwargs):
+            captured.append((query, kwargs))
+            return {"objects": [], "next_cursor": None}
+    monkeypatch.setattr(search, "_client", lambda: Client())
+    search.app(["--task-owner", "00000000-0000-4000-8000-000000000001", "--ready", "--task-status", "todo", "--limit", "5"])
+    assert captured[0][0] == ""
+    assert captured[0][1]["task_filters"] == {"owner_object_id": "00000000-0000-4000-8000-000000000001", "ready": True, "statuses": ["todo"]}
+    assert captured[0][1]["limit"] == 5
+    assert json.loads(capsys.readouterr().out)["next_cursor"] is None

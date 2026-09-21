@@ -375,6 +375,9 @@ struct CreateTaskRequest {
     status: String,
     priority: String,
     agent_suitable: bool,
+    owner_object_id: Uuid,
+    due_at: String,
+    brief_markdown: String,
     provenance: Value,
     derived_from_source_object_ids: Vec<Uuid>,
 }
@@ -390,7 +393,7 @@ async fn create_task(
         || !input.derived_from_source_object_ids.is_empty()
     {
         return Err(ApiError::Forbidden(
-            "the Networking-mutation listener creates only unassigned todo Tasks without Source links"
+            "the Networking-mutation listener creates only assigned todo Tasks without Source links"
                 .into(),
         ));
     }
@@ -398,12 +401,22 @@ async fn create_task(
     let description = object_description(&title, input.description)?;
     let priority = allowed(input.priority, "priority", TASK_PRIORITIES)?;
     let provenance = required_provenance(input.provenance)?;
+    let due_at = time::OffsetDateTime::parse(
+        &input.due_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map_err(|_| ApiError::BadRequest("due_at must be RFC3339".into()))?
+    .to_offset(time::UtcOffset::UTC);
+    let brief_markdown = required_text(input.brief_markdown, "brief_markdown", 100_000)?;
     let expected = json!({
         "title":&title,
         "description":&description,
         "status":"todo",
         "priority":&priority,
         "agent_suitable":false,
+        "owner_object_id":input.owner_object_id,
+        "due_at":due_at.format(&time::format_description::well_known::Rfc3339).map_err(|_| ApiError::BadRequest("invalid due_at".into()))?,
+        "brief_markdown":&brief_markdown,
         "provenance":&provenance,
     });
     let task = db::create_task(
@@ -415,13 +428,14 @@ async fn create_task(
             provenance,
             status: "todo".into(),
             priority,
-            owner_object_id: None,
+            owner_object_id: Some(input.owner_object_id),
             agent_suitable: false,
             blocked_reason: None,
-            due_at: None,
+            due_at: Some(due_at),
             completed_at: None,
+            work_kind: "general".into(),
             github_issue_url: None,
-            brief_markdown: None,
+            brief_markdown: Some(brief_markdown),
             originating_chat_object_id: None,
             derived_from_source_object_ids: Vec::new(),
         },
@@ -439,6 +453,9 @@ async fn create_task(
             "status",
             "priority",
             "agent_suitable",
+            "owner_object_id",
+            "due_at",
+            "brief_markdown",
             "provenance",
         ],
     )?;

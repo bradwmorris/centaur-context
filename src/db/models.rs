@@ -73,6 +73,8 @@ pub struct ConnectionGraphSnapshot {
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 pub struct Task {
+    pub created_by_type: String,
+    pub created_by_id: String,
     pub object_id: Uuid,
     pub title: String,
     pub description: String,
@@ -89,6 +91,7 @@ pub struct Task {
     pub due_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<OffsetDateTime>,
+    pub work_kind: String,
     pub github_issue_url: Option<String>,
     pub brief_markdown: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -794,6 +797,7 @@ pub struct NewTask {
     pub blocked_reason: Option<String>,
     pub due_at: Option<OffsetDateTime>,
     pub completed_at: Option<OffsetDateTime>,
+    pub work_kind: String,
     pub github_issue_url: Option<String>,
     pub brief_markdown: Option<String>,
     pub originating_chat_object_id: Option<Uuid>,
@@ -813,6 +817,7 @@ pub struct TaskChanges {
     pub blocked_reason: Option<Option<String>>,
     pub due_at: Option<Option<OffsetDateTime>>,
     pub completed_at: Option<Option<OffsetDateTime>>,
+    pub work_kind: Option<String>,
     pub github_issue_url: Option<Option<String>>,
     pub brief_markdown: Option<Option<String>>,
 }

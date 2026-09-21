@@ -519,3 +519,17 @@ def test_tool_manifest_declares_every_specialized_write_credential():
         "CENTAUR_CONTEXT_EXTERNAL_ACTION_TOKEN",
     ]:
         assert f'name = "{name}"' in manifest
+
+
+def test_task_queue_preserves_filters_and_allows_empty_query():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return response({"objects": [], "next_cursor": None})
+    value = client(handler)
+    filters = {"owner_object_id": "00000000-0000-4000-8000-000000000001", "ready": True, "statuses": ["todo", "backlog"]}
+    assert value.context_search("", task_filters=filters, limit=8)["objects"] == []
+    assert json.loads(requests[0].content)["task_filters"] == filters
+    assert json.loads(requests[0].content)["limit"] == 8
+    with pytest.raises(ValueError):
+        value.context_search("")

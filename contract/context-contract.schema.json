@@ -19,6 +19,7 @@
         "required": ["interactive_write", "fields"],
         "properties": {
           "interactive_write": {"type": "boolean"},
+          "creation_requirements": {"type": "string"},
           "fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
         }
       }
@@ -77,6 +78,7 @@
         "read_only": {"type": "boolean"},
         "idempotent": {"type": "boolean"},
         "input": {"$ref": "#/$defs/shape"},
+        "task_filters": {"$ref": "#/$defs/shape"},
         "operations": {
           "type": "object",
           "minProperties": 1,
