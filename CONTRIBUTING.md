@@ -30,7 +30,7 @@ npm --prefix web audit --audit-level=high
 npm --prefix web run type-check
 npm --prefix web test -- --run
 npm --prefix web run build
-python3 -m pytest tools/centaur_context/test_client.py scripts/test_rename_contract.py
+python3 -m pytest tools/centaur_context/test_client.py tools/centaur_context/test_cli.py scripts/test_rename_contract.py
 python3 -m compileall -q tools/centaur_context
 git diff --check
 ```

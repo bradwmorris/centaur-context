@@ -278,6 +278,14 @@ On every model invocation, Centaur supplies only the short stable Context
 explanation as trusted application instructions, together with the selected
 persona and relevant runtime input.
 
+That short explanation includes one exact direct invocation for each universal
+tool. Each command's `--help` explains its arguments. `context_apply --example`
+prints a validation-only create-and-connect template without making a
+network call, and `context_apply --schema` reads the live canonical contract.
+An agent must not need to inspect generated command wrappers or Python source
+to learn how to call these tools. This remains entirely within Centaur's
+existing external-tool extension mechanism and requires no Centaur-core change.
+
 The full JSON contract is not pasted into every prompt. Retrieved Context
 records remain clearly labelled untrusted reference data. Tool availability and
 prompt text never bypass server validation.
@@ -390,6 +398,10 @@ support the short compatibility cutover and removal decision.
       private application tools.
 - [ ] The full application-tool catalogue is not added to the system prompt;
       agents discover their installed allowlisted tools lazily.
+- [ ] The short generated instructions show one exact invocation for each base
+      tool, all three `--help` outputs are self-explanatory, and
+      `context_apply --example` plus `--schema` expose write details without
+      source inspection or a Centaur-core change.
 - [ ] Agent-specific tools and workflows remain in the private overlay, and
       Centaur's normal shell, filesystem, Git, and browser capabilities remain
       separate and unchanged.

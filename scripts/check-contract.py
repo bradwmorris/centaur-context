@@ -17,6 +17,15 @@ RUNTIME_INSTRUCTIONS = ROOT / "services/sandbox/SYSTEM_PROMPT.md"
 EXPECTED_TYPES = {"task", "chat", "user", "entity", "memory", "source", "note", "theme"}
 EXPECTED_TOOLS = {"context_search", "context_read", "context_apply"}
 EXPECTED_WRITABLE = {"task", "entity", "source", "note", "theme"}
+EXPECTED_APPLY_OPERATIONS = {
+    "create_object",
+    "update_object",
+    "archive_object",
+    "create_connection",
+    "update_connection",
+    "archive_connection",
+    "append_artifact",
+}
 
 
 def fail(message: str) -> None:
@@ -101,6 +110,12 @@ def main() -> int:
         fail("contract interactive-write classification drifted")
     if set(contract["tools"]) != EXPECTED_TOOLS:
         fail("contract must expose exactly the three universal Context tools")
+    if set(contract["tools"]["context_apply"]["operations"]) != EXPECTED_APPLY_OPERATIONS:
+        fail("contract context_apply operations drifted from the universal API")
+    if contract["tools"]["context_apply"].get("object_reference") != {
+        "exactly_one_of": ["object_id", "local_ref"]
+    }:
+        fail("contract context_apply Object reference shape drifted")
     if len(contract["connection_kinds"]) != len(set(contract["connection_kinds"])):
         fail("connection kinds must be unique")
     instructions = INSTRUCTIONS.read_text()
@@ -109,6 +124,20 @@ def main() -> int:
     for value in (contract["contract_version"], contract["ontology_version"], *EXPECTED_TOOLS):
         if value not in instructions:
             fail(f"generated instructions are missing {value}")
+    direct_examples = (
+        "context_search 'words to find' --object-type task --limit 10",
+        "context_read OBJECT_UUID --include connections",
+        "context_apply --file REQUEST.json",
+        "context_apply --example",
+        "context_apply --schema",
+    )
+    for example in direct_examples:
+        if example not in instructions:
+            fail(f"generated instructions are missing direct usage: {example}")
+    if "do not inspect their executable or source code" not in instructions:
+        fail("generated instructions must forbid tool implementation discovery")
+    if len(instructions) > 1_800:
+        fail("generated Context instructions exceed the 1,800-character budget")
     print("Context contract and generated instructions are consistent")
     return 0
 
