@@ -49,6 +49,7 @@ def main() -> None:
     require(f'image: centaur-context:{VERSION}' in text("deploy/deployment.yaml"), "deployment version mismatch")
     dockerfile = text("Dockerfile")
     require(dockerfile.count("@sha256:") == 3, "all three container bases must be digest-pinned")
+    require("COPY contract/ ./contract/" in dockerfile, "Docker build omits the embedded contract")
     require("centaur-infra-env" not in text("deploy/deployment.yaml"), "deployment depends on a Centaur-core Secret")
     require("0.0.0.0/0" not in text("deploy/network-policy.yaml"), "default NetworkPolicy allows public egress")
     require(
