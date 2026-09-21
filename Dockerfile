@@ -10,6 +10,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 COPY migrations/ ./migrations/
+COPY contract/ ./contract/
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
