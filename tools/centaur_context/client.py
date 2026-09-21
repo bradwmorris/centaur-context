@@ -449,7 +449,7 @@ class CentaurContextClient:
         kind: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        """Build a concise context packet of at most ten canonical Objects."""
+        """Build query-relevant context plus ten general-orientation Objects."""
         query = _clean(query)
         if not query:
             raise ValueError("query is required")

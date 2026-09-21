@@ -116,6 +116,91 @@ async fn object_lists_use_stable_recent_and_active_connection_density_ordering()
     );
 }
 
+#[tokio::test]
+async fn top_connected_candidates_rank_active_graph_and_honor_exclusions() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let first = Uuid::new_v4();
+    let tie_newer = Uuid::new_v4();
+    let tie_older = Uuid::new_v4();
+    let inactive_only = Uuid::new_v4();
+    let archived_hub = Uuid::new_v4();
+    let endpoints = (0..5).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+    let archived_endpoint = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    for (id, title, updated_at, archived) in [
+        (first, "top first", "2099-03-03T00:00:00Z", false),
+        (tie_newer, "tie newer", "2099-03-02T00:00:00Z", false),
+        (tie_older, "tie older", "2099-03-01T00:00:00Z", false),
+        (
+            inactive_only,
+            "inactive edges only",
+            "2099-03-04T00:00:00Z",
+            false,
+        ),
+        (archived_hub, "archived hub", "2099-03-05T00:00:00Z", true),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at,archived_at) VALUES($1,'entity',$2,'Top-connected selection test Object.','system','top-connected-test','system','top-connected-test','{}',$3::timestamptz,$3::timestamptz,CASE WHEN $4 THEN now() ELSE NULL END)")
+            .bind(id).bind(title).bind(updated_at).bind(archived).execute(&mut *tx).await.unwrap();
+    }
+    for (index, id) in endpoints.iter().chain([&archived_endpoint]).enumerate() {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,archived_at) VALUES($1,'entity',$2,'Top-connected endpoint Object.','system','top-connected-test','system','top-connected-test','{}',CASE WHEN $3 THEN now() ELSE NULL END)")
+            .bind(id)
+            .bind(format!("top endpoint {index}"))
+            .bind(*id == archived_endpoint)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    for (source, target, archived) in [
+        (first, endpoints[0], false),
+        (first, endpoints[1], false),
+        (first, endpoints[2], false),
+        (tie_newer, endpoints[3], false),
+        (tie_newer, endpoints[4], false),
+        (tie_older, endpoints[0], false),
+        (tie_older, endpoints[1], false),
+        (inactive_only, archived_endpoint, false),
+        (archived_hub, endpoints[0], false),
+        (first, endpoints[4], true),
+    ] {
+        sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,archived_at) VALUES($1,$2,'related_to',$3,'Top-connected selection edge.','system','top-connected-test','system','top-connected-test','{}',CASE WHEN $4 THEN now() ELSE NULL END)")
+            .bind(Uuid::new_v4()).bind(source).bind(target).bind(archived).execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let candidates = db::top_connected_candidates(&pool, &[], 100).await.unwrap();
+    let selected = candidates
+        .iter()
+        .filter(|candidate| {
+            [first, tie_newer, tie_older, inactive_only, archived_hub]
+                .contains(&candidate.object.id)
+        })
+        .map(|candidate| (candidate.object.id, candidate.connection_count))
+        .collect::<Vec<_>>();
+    assert_eq!(selected, vec![(first, 3), (tie_newer, 2), (tie_older, 2)]);
+
+    let backfilled = db::top_connected_candidates(&pool, &[first, tie_newer], 100)
+        .await
+        .unwrap();
+    assert!(
+        !backfilled
+            .iter()
+            .any(|candidate| candidate.object.id == first)
+    );
+    assert!(
+        !backfilled
+            .iter()
+            .any(|candidate| candidate.object.id == tie_newer)
+    );
+    assert!(
+        backfilled
+            .iter()
+            .any(|candidate| candidate.object.id == tie_older)
+    );
+}
+
 async fn migrated_pool() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgPool)> {
     let pool = test_pool().await?;
     let guard = DB_TEST_LOCK.lock().await;

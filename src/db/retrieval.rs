@@ -59,6 +59,37 @@ pub async fn context_anchor_candidates(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
+pub async fn top_connected_candidates(
+    pool: &PgPool,
+    excluded_object_ids: &[Uuid],
+    limit: i64,
+) -> Result<Vec<SearchCandidate>, DbError> {
+    let rows: Vec<SearchCandidateRow> = sqlx::query_as(
+        r#"SELECT o.id,o.kind,o.title,o.description,o.protected,
+                  'active'::text AS lifecycle,o.revision,o.created_by_type,o.created_by_id,
+                  o.updated_by_type,o.updated_by_id,o.provenance,o.created_at,o.updated_at,
+                  o.archived_at,0::float8 AS relevance,count(c.id)::bigint AS connection_count
+           FROM objects o
+           JOIN connections c
+             ON c.archived_at IS NULL
+            AND (c.source_object_id=o.id OR c.target_object_id=o.id)
+           JOIN objects other
+             ON other.id=CASE WHEN c.source_object_id=o.id
+                              THEN c.target_object_id ELSE c.source_object_id END
+            AND other.archived_at IS NULL
+           WHERE o.archived_at IS NULL
+             AND NOT (o.id=ANY($1::uuid[]))
+           GROUP BY o.id
+           ORDER BY connection_count DESC,o.updated_at DESC,o.id
+           LIMIT $2"#,
+    )
+    .bind(excluded_object_ids)
+    .bind(limit.clamp(1, 100))
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
 pub async fn context_subtypes(
     pool: &PgPool,
     object_ids: &[Uuid],

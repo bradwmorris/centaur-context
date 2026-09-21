@@ -44,6 +44,15 @@ pub struct ContextBudget {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ContextPacket {
+    pub query: String,
+    pub retrieval: String,
+    pub objects: Vec<RetrievedObject>,
+    pub general_context_objects: Vec<RetrievedObject>,
+    pub budget: ContextBudget,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct SearchPacket {
     pub query: String,
     pub retrieval: String,
@@ -103,7 +112,7 @@ pub async fn context(
     kind: Option<&str>,
     chat_object_id: Uuid,
     limit: i64,
-) -> Result<SearchPacket, DbError> {
+) -> Result<ContextPacket, DbError> {
     let limit = limit.clamp(1, 10);
     let (retrieval, mut fused) = retrieve(
         pool,
@@ -144,10 +153,12 @@ pub async fn context(
             .then_with(|| left.object.id.cmp(&right.object.id))
     });
 
+    let total_relevant_objects = fused.len();
+    fused.truncate(limit as usize);
     let ids = fused.iter().map(|item| item.object.id).collect::<Vec<_>>();
     let mut connections = db::context_connections(pool, &ids).await?;
     let mut subtypes = db::context_subtypes(pool, &ids, Some(chat_object_id)).await?;
-    let candidates = fused
+    let relevant_candidates = fused
         .into_iter()
         .map(|item| {
             let id = item.object.id;
@@ -159,11 +170,44 @@ pub async fn context(
             )
         })
         .collect::<Vec<_>>();
-    Ok(build_budgeted_packet(
+
+    let connected = db::top_connected_candidates(pool, &ids, 10).await?;
+    let general_ids = connected
+        .iter()
+        .map(|item| item.object.id)
+        .collect::<Vec<_>>();
+    let mut general_connections = db::context_connections(pool, &general_ids).await?;
+    let mut general_subtypes = db::context_subtypes(pool, &general_ids, None).await?;
+    let general_candidates = connected
+        .into_iter()
+        .map(|item| {
+            let id = item.object.id;
+            let connection_count = item.connection_count;
+            RetrievedObject {
+                id,
+                kind: item.object.kind,
+                title: item.object.title,
+                description: item.object.description,
+                revision: item.object.revision,
+                subtype: general_subtypes.remove(&id),
+                relevance: Relevance {
+                    score: connection_count as f64,
+                    rationale: format!(
+                        "General context: {connection_count} active Connections to active Objects."
+                    ),
+                },
+                evidence: None,
+                connections: general_connections.remove(&id).unwrap_or_default(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(build_budgeted_context_packet(
         query,
         &retrieval,
-        candidates,
-        limit as usize,
+        relevant_candidates,
+        total_relevant_objects,
+        general_candidates,
         CONTEXT_MAX_CHARACTERS,
     ))
 }
@@ -334,100 +378,120 @@ fn retrieved(
     }
 }
 
-fn build_budgeted_packet(
+fn build_budgeted_context_packet(
     query: &str,
     retrieval: &str,
-    candidates: Vec<RetrievedObject>,
-    limit: usize,
+    relevant_candidates: Vec<RetrievedObject>,
+    total_relevant_objects: usize,
+    general_candidates: Vec<RetrievedObject>,
     max_characters: usize,
-) -> SearchPacket {
-    let total_objects = candidates.len();
-    let total_connections = candidates
+) -> ContextPacket {
+    let total_general_objects = general_candidates.len();
+    let total_connections = relevant_candidates
         .iter()
+        .chain(&general_candidates)
         .map(|object| object.connections.len())
         .sum::<usize>();
     let mut objects = Vec::new();
-    for mut candidate in candidates {
-        if objects.len() >= limit {
-            break;
-        }
-        loop {
-            let mut proposed = objects.clone();
-            proposed.push(candidate.clone());
-            let packet = packet_with_budget(
-                query,
-                retrieval,
-                proposed,
-                max_characters,
-                total_objects,
-                total_connections,
-            );
-            if serialized_characters(&packet) <= max_characters {
-                objects.push(candidate);
-                break;
-            }
-            if candidate.connections.pop().is_none() {
-                return packet_with_budget(
+    let mut general_context_objects = Vec::new();
+
+    for (general, candidates) in [(false, relevant_candidates), (true, general_candidates)] {
+        for mut candidate in candidates {
+            loop {
+                let mut proposed_objects = objects.clone();
+                let mut proposed_general = general_context_objects.clone();
+                if general {
+                    proposed_general.push(candidate.clone());
+                } else {
+                    proposed_objects.push(candidate.clone());
+                }
+                let packet = context_packet_with_budget(
                     query,
                     retrieval,
-                    objects,
+                    proposed_objects,
+                    proposed_general,
                     max_characters,
-                    total_objects,
+                    total_relevant_objects,
+                    total_general_objects,
                     total_connections,
                 );
+                if serialized_context_characters(&packet) <= max_characters {
+                    if general {
+                        general_context_objects.push(candidate);
+                    } else {
+                        objects.push(candidate);
+                    }
+                    break;
+                }
+                if candidate.connections.pop().is_none() {
+                    return context_packet_with_budget(
+                        query,
+                        retrieval,
+                        objects,
+                        general_context_objects,
+                        max_characters,
+                        total_relevant_objects,
+                        total_general_objects,
+                        total_connections,
+                    );
+                }
             }
         }
     }
-    packet_with_budget(
+
+    context_packet_with_budget(
         query,
         retrieval,
         objects,
+        general_context_objects,
         max_characters,
-        total_objects,
+        total_relevant_objects,
+        total_general_objects,
         total_connections,
     )
 }
 
-fn packet_with_budget(
+#[allow(clippy::too_many_arguments)]
+fn context_packet_with_budget(
     query: &str,
     retrieval: &str,
     objects: Vec<RetrievedObject>,
+    general_context_objects: Vec<RetrievedObject>,
     max_characters: usize,
-    total_objects: usize,
+    total_relevant_objects: usize,
+    total_general_objects: usize,
     total_connections: usize,
-) -> SearchPacket {
+) -> ContextPacket {
     let included_connections = objects
         .iter()
+        .chain(&general_context_objects)
         .map(|object| object.connections.len())
         .sum::<usize>();
-    let mut packet = SearchPacket {
+    let mut packet = ContextPacket {
         query: query.to_owned(),
         retrieval: retrieval.to_owned(),
-        budget: Some(ContextBudget {
+        budget: ContextBudget {
             max_characters,
             serialized_characters: 0,
-            omitted_objects: total_objects.saturating_sub(objects.len()),
+            omitted_objects: total_relevant_objects
+                .saturating_add(total_general_objects)
+                .saturating_sub(objects.len() + general_context_objects.len()),
             omitted_connections: total_connections.saturating_sub(included_connections),
-        }),
+        },
         objects,
+        general_context_objects,
     };
     for _ in 0..3 {
-        let used = serialized_characters(&packet);
-        if packet
-            .budget
-            .as_ref()
-            .is_some_and(|budget| budget.serialized_characters == used)
-        {
+        let used = serialized_context_characters(&packet);
+        if packet.budget.serialized_characters == used {
             break;
         }
-        if let Some(budget) = &mut packet.budget {
-            budget.serialized_characters = used;
-        }
+        packet.budget.serialized_characters = used;
     }
     packet
 }
 
-fn serialized_characters(packet: &SearchPacket) -> usize {
+fn serialized_context_characters(packet: &ContextPacket) -> usize {
     serde_json::to_string(packet)
         .expect("context packet is serializable")
         .chars()
@@ -560,8 +624,8 @@ fn rationale(item: &Fused, context_builder: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextConnection, RRF_K, Relevance, RetrievedObject, build_budgeted_packet,
-        connection_boost, serialized_characters,
+        ContextConnection, RRF_K, Relevance, RetrievedObject, build_budgeted_context_packet,
+        connection_boost, serialized_context_characters,
     };
     use uuid::Uuid;
 
@@ -604,7 +668,7 @@ mod tests {
     #[test]
     fn context_budget_keeps_complete_unicode_objects_and_reports_omissions() {
         let complete_description = "東京 launch approved. ".repeat(20);
-        let packet = build_budgeted_packet(
+        let packet = build_budgeted_context_packet(
             "launch",
             "full_text",
             vec![
@@ -612,25 +676,28 @@ mod tests {
                 candidate(&"Another complete event. ".repeat(20), 5),
                 candidate("Third complete event.", 0),
             ],
-            10,
+            3,
+            vec![candidate("A general orientation Object.", 2)],
             1_600,
         );
-        let budget = packet.budget.as_ref().unwrap();
-        assert!(serialized_characters(&packet) <= budget.max_characters);
+        let budget = &packet.budget;
+        assert!(serialized_context_characters(&packet) <= budget.max_characters);
         assert!(budget.omitted_objects > 0 || budget.omitted_connections > 0);
         assert_eq!(packet.objects[0].description, complete_description);
     }
 
     #[test]
-    fn context_budget_never_exceeds_ten_objects() {
-        let packet = build_budgeted_packet(
-            "all",
+    fn context_budget_prioritizes_relevant_objects_before_general_context() {
+        let packet = build_budgeted_context_packet(
+            "launch",
             "full_text",
-            (0..20).map(|_| candidate("Complete.", 0)).collect(),
-            10,
-            100_000,
+            vec![candidate(&"Relevant detail. ".repeat(20), 0)],
+            1,
+            vec![candidate(&"General detail. ".repeat(20), 0)],
+            900,
         );
-        assert_eq!(packet.objects.len(), 10);
-        assert_eq!(packet.budget.unwrap().omitted_objects, 10);
+        assert_eq!(packet.objects.len(), 1);
+        assert!(packet.general_context_objects.is_empty());
+        assert_eq!(packet.budget.omitted_objects, 1);
     }
 }
