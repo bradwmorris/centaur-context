@@ -22,8 +22,13 @@ Memories, Object Events, and Runs are system-managed. Supporting Artifacts may
 be appended, but only the specialist Source-ingestion path may promote an
 Artifact as a Source's canonical captured content.
 
-Every new Object requires a meaningful Connection. A verified current Chat is
-connected deterministically as provenance in the same transaction.
+New Objects require a meaningful Connection except Insight and Question Notes,
+which may stand alone without a Source, Connection, or originating Chat. Later
+Connections can be added when justified; never invent one to save an idea.
+Excerpts retain their evidence and connectivity requirements. A verified current
+Chat is connected deterministically as provenance in the same transaction.
+The contract's `standalone_note_intents` lists the exceptions to
+`new_objects_require_connection`.
 
 ## Object descriptions
 

@@ -520,3 +520,106 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
         ("completed".into(), true, retry.source_hash)
     );
 }
+
+#[tokio::test]
+async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let token = "n".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let mut ids = Vec::new();
+    for intent in ["insight", "question"] {
+        let body = json!({"contract_version":"1.1.0","idempotency_key":format!("standalone-{intent}-{}",Uuid::new_v4()),"operations":[{
+            "operation":"create_object","local_ref":"note","kind":"note","title":format!("Standalone {intent}"),
+            "description":"An independently captured research thought awaiting further evidence.","fields":{"intent":intent,"content":"What makes research context useful?"}
+        }]});
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let first = json_body(response).await["data"].clone();
+        assert!(first["run_id"].is_string());
+        assert_eq!(first["event_ids"].as_array().unwrap().len(), 1);
+        let id = first["results"][0]["data"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let replay = app
+            .clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, body))
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        let replay = json_body(replay).await["data"].clone();
+        assert_eq!(replay["run_id"], first["run_id"]);
+        assert_eq!(replay["replayed"], true);
+        let read = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/read",
+                &token,
+                json!({"object_ids":[id],"include":["connections"]}),
+            ))
+            .await
+            .unwrap();
+        let read = json_body(read).await["data"].clone();
+        assert_eq!(
+            read["objects"][0]["object"]["created_by_id"],
+            "agent-universal-test"
+        );
+        assert!(
+            read["objects"][0]["connections"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        ids.push(id);
+    }
+    let connect = json!({"contract_version":"1.1.0","idempotency_key":format!("later-link-{}",Uuid::new_v4()),"operations":[{
+        "operation":"create_connection","source":{"object_id":ids[1]},"target":{"object_id":ids[0]},"kind":"derived_from","description":"This question develops the earlier research thought."
+    }]});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, connect))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    for (kind, fields) in [
+        ("source", json!({"source_kind":"article"})),
+        (
+            "note",
+            json!({"intent":"excerpt","content":"Unverified quotation."}),
+        ),
+    ] {
+        let body = json!({"contract_version":"1.1.0","idempotency_key":format!("not-exempt-{}",Uuid::new_v4()),"operations":[{
+            "operation":"create_object","local_ref":"object","kind":kind,"title":"Must not create","description":"A negative case for the standalone exemption.","fields":fields
+        }]});
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    // A linked Excerpt must still supply verifiable captured evidence.
+    let invalid_excerpt = json!({"contract_version":"1.1.0","idempotency_key":format!("invalid-evidence-{}",Uuid::new_v4()),"operations":[
+        {"operation":"create_object","local_ref":"excerpt","kind":"note","title":"Missing evidence","description":"A negative excerpt evidence case.","fields":{"intent":"excerpt","content":"Unverified quotation."}},
+        {"operation":"create_connection","source":{"local_ref":"excerpt"},"target":{"object_id":ids[0]},"kind":"derived_from","description":"A link cannot substitute for captured evidence."}
+    ]});
+    let response = app
+        .oneshot(request("POST", "/api/v2/apply", &token, invalid_excerpt))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

@@ -53,6 +53,12 @@ pub fn object_fields(kind: &str) -> Option<Vec<&'static str>> {
         .map(|values| values.iter().filter_map(Value::as_str).collect())
 }
 
+pub fn standalone_note_intent(intent: &str) -> bool {
+    CONTRACT["rules"]["standalone_note_intents"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(intent)))
+}
+
 pub fn connection_kind(kind: &str) -> bool {
     CONTRACT["connection_kinds"]
         .as_array()

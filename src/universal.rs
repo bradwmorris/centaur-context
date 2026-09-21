@@ -173,7 +173,7 @@ pub async fn apply(
     }
 
     let local_ids = assign_local_ids(&request.operations)?;
-    validate_new_object_connections(&request, &local_ids)?;
+    validate_new_object_connections(&request)?;
     let run_id = Uuid::new_v4();
     if !request.validate_only {
         let run_key = format!(
@@ -318,10 +318,7 @@ fn assign_local_ids(operations: &[ApplyOperation]) -> Result<BTreeMap<String, Uu
     Ok(ids)
 }
 
-fn validate_new_object_connections(
-    request: &ApplyRequest,
-    local_ids: &BTreeMap<String, Uuid>,
-) -> Result<(), DbError> {
+fn validate_new_object_connections(request: &ApplyRequest) -> Result<(), DbError> {
     if request.chat_object_id.is_some() {
         return Ok(());
     }
@@ -338,8 +335,19 @@ fn validate_new_object_connections(
             ObjectReference::Id { .. } => None,
         })
         .collect::<BTreeSet<_>>();
-    for local_ref in local_ids.keys() {
-        if !connected.contains(local_ref.as_str()) {
+    for operation in &request.operations {
+        let ApplyOperation::CreateObject {
+            local_ref,
+            kind,
+            fields,
+            ..
+        } = operation
+        else {
+            continue;
+        };
+        let standalone_note = kind == "note"
+            && contract::standalone_note_intent(&string_or(fields, "intent", "insight")?);
+        if !standalone_note && !connected.contains(local_ref.as_str()) {
             return Err(DbError::Invalid(format!(
                 "new Object {local_ref} requires a Connection"
             )));
@@ -1541,7 +1549,6 @@ mod tests {
                 fields: Map::from_iter([("entity_kind".into(), json!("person"))]),
             }],
         };
-        let ids = assign_local_ids(&request.operations).unwrap();
-        assert!(validate_new_object_connections(&request, &ids).is_err());
+        assert!(validate_new_object_connections(&request).is_err());
     }
 }

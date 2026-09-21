@@ -59,7 +59,13 @@
       }
     },
     "limits": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
-    "rules": {"type": "object", "additionalProperties": {"type": "boolean"}}
+    "rules": {
+      "type": "object",
+      "properties": {
+        "standalone_note_intents": {"type": "array", "items": {"type": "string", "enum": ["insight", "question"]}}
+      },
+      "additionalProperties": {"type": "boolean"}
+    }
   },
   "$defs": {
     "tool": {

@@ -17,6 +17,17 @@ DESCRIPTION_EXAMPLES = {
 }
 
 EXAMPLE_DOCUMENT = {
+    "standalone_insight": {
+        "contract_version": "1.1.0",
+        "idempotency_key": "replace-with-one-stable-note-key",
+        "validate_only": True,
+        "operations": [{
+            "operation": "create_object", "local_ref": "idea", "kind": "note",
+            "title": "Evaluate context ownership",
+            "description": "A tentative idea about context ownership and switching costs. Saved for later investigation without claiming supporting evidence.",
+            "fields": {"intent": "insight", "content": "Context ownership may affect switching costs."},
+        }],
+    },
     "description_policy": {
         "max_unicode_characters_after_trimming": 600,
         "guidance": "Current snapshot, not a log: say what the Object is and why it matters in this Context now.",
