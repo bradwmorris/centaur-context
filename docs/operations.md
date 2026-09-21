@@ -104,3 +104,51 @@ Object-summary queue to drain. Disabling all embedding settings immediately
 returns the service to lexical-only mode without changing canonical Artifacts.
 Restore a backup only for canonical migration-integrity failure, not for ordinary
 derived-vector failure.
+
+## Reviewed maintenance on the intake listener
+
+Protected research corrections use the existing optional intake listener and
+universal apply engine. They do not require unprotecting records. In addition to
+`INTAKE_API_TOKEN`, set a distinct `MAINTENANCE_API_TOKEN` (at least 32 characters)
+and one `MAINTENANCE_ALLOWED_PRINCIPAL`. Keep the maintenance credential out of
+interactive agents. Maintenance routes are absent unless configured; this token
+cannot authenticate to the separate import routes.
+
+- `GET /api/v2/maintenance/objects` and `/connections` inventory every row,
+  including archived rows. Optional `lifecycle=active|archived`, `limit=1..200`
+  (default 100) and UUID `cursor` return `data` and `next_cursor`. Follow until
+  `next_cursor` is null. UUID ordering is stable across updates/archives; pause
+  writers for final reconciliation because concurrent inserts are not a snapshot.
+- `POST /api/v2/maintenance/read` uses the universal read request/response,
+  including archived Objects, Artifacts and Events. Note subtype text in this
+  response is a 400-character excerpt. Use `GET /api/v2/maintenance/notes/{id}`
+  for full Note content, `/sources/{id}` for complete Source metadata, and
+  `/artifacts/{id}/content` for captured text (the existing bounded content-window
+  parameters apply). These routes reuse the existing read handlers. The inventory, unlike
+  ordinary Object Connection readback, includes archived Connections too.
+- `POST /api/v2/maintenance/apply` uses the universal apply request, limited to
+  20 operations. Existing Source/Note/Entity/Theme/Task records may be corrected
+  or archived; text, Note intent and Source canonical URI are the allowed Object
+  correction fields. Explicit-ID relationship creation/update/archive and
+  supporting Artifact append are supported. Creator, provenance on Objects,
+  protection, system-managed records and canonical captured-content promotion
+  cannot be changed. Existing relationship changes need an ID and revision;
+  create cannot silently update a matching edge. No implicit Chat connections.
+
+Start with `validate_only: true`. The transaction rolls back and returns previews
+with prior state and `approval_sha256`. Review the exact request and its preview,
+then configure `MAINTENANCE_APPROVED_REQUEST_SHA256` as the comma-separated list
+of approved hashes. With no list configured, every commit is denied. The digest
+covers the typed request after normalizing `validate_only` to false, including
+IDs, values, operation order, revisions and idempotency key. Do not compute it
+from arbitrary raw JSON serialization. Commit that request with validation off;
+replay the exact request and read back its records. Revoked approval also denies
+replay. Revisions and authorization are never inferred from a dry run.
+
+Every committed batch retains attribution and immutable Events plus prior-state
+snapshots in its Run result. Export affected state before committing. Active
+corrections can be compensated by another reviewed revision-aware batch. Archives
+retain history but this surface offers **no unarchive or automatic rollback**.
+Archive reversal requires separate supported owner recovery. Failed batches save
+nothing. Remove maintenance configuration and credentials after reconciliation;
+remove intake configuration too when no other owner operation needs that listener.

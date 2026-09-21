@@ -123,10 +123,33 @@ pub fn request_hash(request: &ApplyRequest) -> Result<String, DbError> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum WriteAuthority {
+    Ordinary,
+    ReviewedMaintenance,
+}
+
+pub(crate) async fn apply_maintenance(
+    pool: &PgPool,
+    actor: &ActorContext,
+    request: ApplyRequest,
+) -> Result<ApplyResponse, DbError> {
+    apply_with_authority(pool, actor, request, WriteAuthority::ReviewedMaintenance).await
+}
+
 pub async fn apply(
     pool: &PgPool,
     actor: &ActorContext,
     request: ApplyRequest,
+) -> Result<ApplyResponse, DbError> {
+    apply_with_authority(pool, actor, request, WriteAuthority::Ordinary).await
+}
+
+async fn apply_with_authority(
+    pool: &PgPool,
+    actor: &ActorContext,
+    request: ApplyRequest,
+    authority: WriteAuthority,
 ) -> Result<ApplyResponse, DbError> {
     validate_request(&request)?;
     let request_hash = request_hash(&request)?;
@@ -208,7 +231,36 @@ pub async fn apply(
     let mut results = Vec::new();
     let mut sequence = 1_i64;
     for operation in &request.operations {
-        let result = execute_operation(
+        let before = if authority == WriteAuthority::ReviewedMaintenance {
+            let target = match operation {
+                ApplyOperation::UpdateObject { object_id, .. }
+                | ApplyOperation::ArchiveObject { object_id, .. }
+                | ApplyOperation::AppendArtifact {
+                    object: ObjectReference::Id { object_id },
+                    ..
+                } => Some(("object", "objects", *object_id)),
+                ApplyOperation::UpdateConnection { connection_id, .. }
+                | ApplyOperation::ArchiveConnection { connection_id, .. } => {
+                    Some(("connection", "connections", *connection_id))
+                }
+                _ => None,
+            };
+            if let Some((kind, table, id)) = target {
+                // Hold the row lock before reading the recovery snapshot.
+                let sql = format!("SELECT id FROM {table} WHERE id=$1 FOR UPDATE");
+                sqlx::query_scalar::<_, Uuid>(&sql)
+                    .bind(id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or(DbError::NotFound)?;
+                Some(db::target_snapshot(&mut tx, kind, id).await?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut result = execute_operation(
             &mut tx,
             actor,
             operation,
@@ -216,8 +268,12 @@ pub async fn apply(
             (!request.validate_only).then_some(run_id),
             &mut sequence,
             &mut event_ids,
+            authority,
         )
         .await?;
+        if let Some(before) = before {
+            result["before"] = before;
+        }
         results.push(result);
     }
 
@@ -234,6 +290,7 @@ pub async fn apply(
                 (!request.validate_only).then_some(run_id),
                 &mut sequence,
                 &mut event_ids,
+                authority,
             )
             .await?;
             results.push(json!({"operation":"automatic_chat_connection","data":result}));
@@ -259,7 +316,13 @@ pub async fn apply(
             results: response
                 .results
                 .into_iter()
-                .map(|value| json!({"operation":value["operation"],"valid":true}))
+                .map(|value| {
+                    if authority == WriteAuthority::ReviewedMaintenance {
+                        value
+                    } else {
+                        json!({"operation":value["operation"],"valid":true})
+                    }
+                })
                 .collect(),
             ..response
         });
@@ -378,6 +441,7 @@ async fn execute_operation(
     run_id: Option<Uuid>,
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
+    authority: WriteAuthority,
 ) -> Result<Value, DbError> {
     match operation {
         ApplyOperation::CreateObject {
@@ -411,7 +475,15 @@ async fn execute_operation(
             expected_revision,
             changes,
         } => {
-            let value = update_object(tx, actor, *object_id, *expected_revision, changes).await?;
+            let value = update_object(
+                tx,
+                actor,
+                *object_id,
+                *expected_revision,
+                changes,
+                authority,
+            )
+            .await?;
             record_event(
                 tx,
                 run_id,
@@ -432,7 +504,8 @@ async fn execute_operation(
             object_id,
             expected_revision,
         } => {
-            let value = archive_object(tx, actor, *object_id, *expected_revision).await?;
+            let value =
+                archive_object(tx, actor, *object_id, *expected_revision, authority).await?;
             record_event(
                 tx,
                 run_id,
@@ -469,6 +542,7 @@ async fn execute_operation(
                 run_id,
                 sequence,
                 event_ids,
+                authority,
             )
             .await?;
             Ok(json!({"operation":"create_connection","data":value}))
@@ -488,6 +562,7 @@ async fn execute_operation(
                 kind.as_deref(),
                 description.as_deref(),
                 provenance_value.clone(),
+                authority,
             )
             .await?;
             record_event(
@@ -510,7 +585,9 @@ async fn execute_operation(
             connection_id,
             expected_revision,
         } => {
-            let value = archive_connection(tx, actor, *connection_id, *expected_revision).await?;
+            let value =
+                archive_connection(tx, actor, *connection_id, *expected_revision, authority)
+                    .await?;
             record_event(
                 tx,
                 run_id,
@@ -555,6 +632,7 @@ async fn execute_operation(
                 capture_outcome,
                 capture_reason.as_deref(),
                 metadata,
+                authority,
             )
             .await?;
             record_event(
@@ -820,6 +898,7 @@ fn validate_fields(
 async fn lock_writable_object(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
+    authority: WriteAuthority,
 ) -> Result<Object, DbError> {
     let object: Object = sqlx::query_as(
         r#"SELECT id,kind,title,description,protected,
@@ -835,9 +914,19 @@ async fn lock_writable_object(
     if object.lifecycle != "active" {
         return Err(DbError::NotFound);
     }
-    if object.protected {
+    if object.protected && authority == WriteAuthority::Ordinary {
         return Err(DbError::Invalid(
             "protected Objects cannot be changed through context_apply".into(),
+        ));
+    }
+    if authority == WriteAuthority::ReviewedMaintenance
+        && !matches!(
+            object.kind.as_str(),
+            "source" | "note" | "entity" | "theme" | "task"
+        )
+    {
+        return Err(DbError::Invalid(
+            "maintenance cannot change system-managed Objects".into(),
         ));
     }
     if !contract::interactive_writable(&object.kind) {
@@ -846,7 +935,9 @@ async fn lock_writable_object(
             object.kind
         )));
     }
-    crate::domain::validate_object_description(&object.title, &object.description)?;
+    if authority == WriteAuthority::Ordinary {
+        crate::domain::validate_object_description(&object.title, &object.description)?;
+    }
     Ok(object)
 }
 
@@ -856,8 +947,9 @@ async fn update_object(
     id: Uuid,
     expected_revision: i64,
     changes: &Map<String, Value>,
+    authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id).await?;
+    let current = lock_writable_object(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1055,8 +1147,9 @@ async fn archive_object(
     actor: &ActorContext,
     id: Uuid,
     expected_revision: i64,
+    authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id).await?;
+    let current = lock_writable_object(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1090,6 +1183,7 @@ async fn validate_endpoints(
     source_id: Uuid,
     kind: &str,
     target_id: Uuid,
+    authority: WriteAuthority,
 ) -> Result<(), DbError> {
     if source_id == target_id {
         return Err(DbError::Invalid(
@@ -1115,7 +1209,9 @@ async fn validate_endpoints(
             "Connections require active endpoint Objects".into(),
         ));
     }
-    if source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2) {
+    if authority == WriteAuthority::Ordinary
+        && (source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2))
+    {
         return Err(DbError::Invalid(
             "protected Objects require separate Connection authority".into(),
         ));
@@ -1142,8 +1238,9 @@ async fn create_connection(
     run_id: Option<Uuid>,
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
+    authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    validate_endpoints(tx, source_id, kind, target_id).await?;
+    validate_endpoints(tx, source_id, kind, target_id, authority).await?;
     let description = required_text(description.to_owned(), "description", 1000)?;
     let inserted: Option<Connection> = sqlx::query_as(
         r#"INSERT INTO connections
@@ -1192,6 +1289,11 @@ async fn create_connection(
     if current.description == description && current.provenance == provenance_value {
         return Ok(json!({"connection":current,"reused":true}));
     }
+    if authority == WriteAuthority::ReviewedMaintenance || current.protected {
+        return Err(DbError::Invalid(
+            "changing an existing Connection requires its explicit ID and expected revision".into(),
+        ));
+    }
     let mut root = current.provenance.as_object().cloned().unwrap_or_default();
     let mut assertions = root
         .remove("assertions")
@@ -1235,6 +1337,7 @@ async fn create_connection(
 async fn lock_connection(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
+    authority: WriteAuthority,
 ) -> Result<Connection, DbError> {
     let connection: Connection =
         sqlx::query_as("SELECT * FROM connections WHERE id=$1 AND archived_at IS NULL FOR UPDATE")
@@ -1242,7 +1345,7 @@ async fn lock_connection(
             .fetch_optional(&mut **tx)
             .await?
             .ok_or(DbError::NotFound)?;
-    if connection.protected {
+    if connection.protected && authority == WriteAuthority::Ordinary {
         return Err(DbError::Invalid(
             "protected Connections require separate authority".into(),
         ));
@@ -1250,6 +1353,7 @@ async fn lock_connection(
     Ok(connection)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_connection(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
@@ -1258,13 +1362,21 @@ async fn update_connection(
     kind: Option<&str>,
     description: Option<&str>,
     provenance_value: Option<Value>,
+    authority: WriteAuthority,
 ) -> Result<Connection, DbError> {
-    let current = lock_connection(tx, id).await?;
+    let current = lock_connection(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
     let kind = kind.unwrap_or(&current.kind);
-    validate_endpoints(tx, current.source_object_id, kind, current.target_object_id).await?;
+    validate_endpoints(
+        tx,
+        current.source_object_id,
+        kind,
+        current.target_object_id,
+        authority,
+    )
+    .await?;
     let description = required_text(
         description.unwrap_or(&current.description).to_owned(),
         "description",
@@ -1295,8 +1407,9 @@ async fn archive_connection(
     actor: &ActorContext,
     id: Uuid,
     expected_revision: i64,
+    authority: WriteAuthority,
 ) -> Result<Connection, DbError> {
-    let current = lock_connection(tx, id).await?;
+    let current = lock_connection(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1327,8 +1440,9 @@ async fn append_artifact(
     capture_outcome: &str,
     capture_reason: Option<&str>,
     metadata: &Value,
+    authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let object = lock_writable_object(tx, object_id).await?;
+    let object = lock_writable_object(tx, object_id, authority).await?;
     if object.revision != expected_revision {
         return Err(DbError::Conflict);
     }

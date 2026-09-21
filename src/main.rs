@@ -119,10 +119,11 @@ async fn main() -> Result<()> {
     );
     let curator = centaur_context::curator::router(state.clone(), config.curator_api_token);
     let intake = intake_listener.as_ref().map(|(_, config)| {
-        centaur_context::intake::router(
+        centaur_context::intake::router_with_maintenance(
             state.clone(),
             config.api_token.clone(),
             config.approved_manifest_sha256.clone(),
+            config.maintenance.clone(),
         )
     });
     let source_intake = source_intake_listener.as_ref().map(|(_, config)| {
