@@ -467,8 +467,11 @@ mod tests {
             let address = listener.local_addr().unwrap();
             let serve = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = [0; 4096];
-                socket.read(&mut request).await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 4096);
+                    request.push(socket.read_u8().await.unwrap());
+                }
                 socket
                     .write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\n{body}").as_bytes())
                     .await
