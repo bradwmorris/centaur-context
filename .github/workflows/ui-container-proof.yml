@@ -1,0 +1,59 @@
+name: UI container proof
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ui-container-proof.yml
+      - scripts/fixtures/ui-status-desk/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: acceptance
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 76d530470956990859e72a050b1a5c4ab85b2f12
+          path: core
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Create external two-view acceptance overlay
+        run: |
+          node core/scripts/create-ui-example.mjs "$RUNNER_TEMP/overlay"
+          mkdir "$RUNNER_TEMP/overlay/views/status-desk"
+          cp acceptance/scripts/fixtures/ui-status-desk/* "$RUNNER_TEMP/overlay/views/status-desk/"
+          python3 - <<'PYTHON'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'overlay'
+          manifest = json.loads((root / 'views/task-summary/manifest.json').read_text())
+          manifest.update(id='example:status-desk', label='Status desk', order=50)
+          (root / 'views/status-desk/manifest.json').write_text(json.dumps(manifest))
+          (root / 'views.config.json').write_text(json.dumps({'schemaVersion': 1, 'views': ['views/task-summary/manifest.json', 'views/status-desk/manifest.json']}))
+          PYTHON
+      - name: Build actual composed and stock images
+        run: |
+          node core/scripts/context-ui.mjs image --config "$RUNNER_TEMP/overlay/views.config.json" --tag context63-acceptance:76d5304
+          node core/scripts/context-ui.mjs image --tag context63-stock:76d5304
+          test -z "$(git -C core status --porcelain)"
+      - name: Export images and reviewable source
+        run: |
+          mkdir "$RUNNER_TEMP/proof"
+          docker save context63-acceptance:76d5304 context63-stock:76d5304 | gzip > "$RUNNER_TEMP/proof/images.tar.gz"
+          docker image inspect context63-acceptance:76d5304 context63-stock:76d5304 > "$RUNNER_TEMP/proof/images.json"
+          cp -R "$RUNNER_TEMP/overlay" "$RUNNER_TEMP/proof/overlay"
+          printf '%s\n' '76d530470956990859e72a050b1a5c4ab85b2f12' > "$RUNNER_TEMP/proof/core-revision.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: context63-container-proof
+          path: ${{ runner.temp }}/proof
+          retention-days: 7
