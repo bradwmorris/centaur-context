@@ -673,6 +673,10 @@ pub async fn run_worker(
         if let Err(error) = pass(&pool, &client, &config, mode == "preview").await {
             tracing::warn!(%error,"memory dream pass failed; retry on next scheduled wake");
         }
+        // Start the idle interval after this pass. A fixed tick can arrive just
+        // before the durable attempt timestamp is one interval old and otherwise
+        // skip an entire additional interval.
+        timer.reset();
     }
 }
 
