@@ -2378,7 +2378,14 @@ async fn list_runs(
                     allowed(
                         value,
                         "status",
-                        &["open", "running", "completed", "failed", "reversed", "preview"],
+                        &[
+                            "open",
+                            "running",
+                            "completed",
+                            "failed",
+                            "reversed",
+                            "preview",
+                        ],
                     )
                 })
                 .transpose()?,
