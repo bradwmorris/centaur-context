@@ -134,6 +134,12 @@ cannot authenticate to the separate import routes.
   protection, system-managed records and canonical captured-content promotion
   cannot be changed. Existing relationship changes need an ID and revision;
   create cannot silently update a matching edge. No implicit Chat connections.
+  The maintenance-only `update_description` operation requires `object_id`,
+  `expected_revision` and `description`. It is the sole exception for correcting
+  descriptions on archived Objects and system-managed kinds; it changes only the
+  Object description, revision, update attribution and timestamp. Ordinary
+  `/api/v2/apply` rejects this operation, and `update_object` keeps its existing
+  active, interactively writable kind restrictions.
 
 Start with `validate_only: true`. The transaction rolls back and returns previews
 with prior state and `approval_sha256`. Review the exact request and its preview,

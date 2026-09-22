@@ -50,9 +50,9 @@ pub use sources::*;
 pub use tasks::*;
 
 use embeddings::vector_literal;
-pub(crate) use events::insert_event_for_run;
 pub(crate) use events::target_snapshot;
 use events::{idempotent_entity, insert_event};
+pub(crate) use events::{insert_event_for_run, insert_event_for_run_with_before};
 use models::{
     ArtifactSearchCandidateRow, ContextAnchorCandidateRow, ObjectVisualSource, SearchCandidateRow,
 };
