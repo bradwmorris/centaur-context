@@ -552,12 +552,32 @@ async fn verify_actor_chat(
                 "chat_object_id must reference a Chat with a provider thread identity".into(),
             )
         })?;
-    let supplied = actor
-        .centaur_thread_key
-        .as_deref()
-        .and_then(normalize_thread_key)
-        .ok_or_else(|| ApiError::BadRequest("X-Centaur-Thread-Key is invalid".into()))?;
-    if supplied != expected {
+    let supplied = actor.centaur_thread_key.as_deref().unwrap_or("");
+    let matches = if let Some(qualified) = normalize_thread_key(supplied) {
+        qualified == expected
+    } else {
+        // Centaur Slack sessions use provider:channel:thread. Accept this only
+        // when the stored identity is unambiguous across workspaces.
+        let parts: Vec<_> = supplied.split(':').collect();
+        if parts.len() != 3 || parts[0] != "slack" || parts[1..].iter().any(|p| p.is_empty()) {
+            return Err(ApiError::BadRequest(
+                "X-Centaur-Thread-Key is invalid".into(),
+            ));
+        }
+        let identity_matches = chat.provider.as_deref() == Some("slack")
+            && chat.channel_id.as_deref() == Some(parts[1])
+            && chat.thread_id.as_deref() == Some(parts[2]);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM chats WHERE provider='slack' AND channel_id=$1 AND thread_id=$2",
+        )
+        .bind(parts[1])
+        .bind(parts[2])
+        .fetch_one(&state.pool)
+        .await
+        .map_err(DbError::from)?;
+        identity_matches && count == 1
+    };
+    if !matches {
         return Err(ApiError::Forbidden(
             "The requested Chat does not match the authenticated thread.".into(),
         ));

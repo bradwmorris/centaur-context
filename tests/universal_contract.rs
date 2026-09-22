@@ -628,6 +628,202 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
 }
 
 #[tokio::test]
+async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broadening_writes() {
+    use sha2::{Digest, Sha256};
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let source = Uuid::new_v4();
+    let chat = Uuid::new_v4();
+    let unrelated_source = Uuid::new_v4();
+    let artifact = Uuid::new_v4();
+    let channel = format!("C{}", Uuid::new_v4());
+    let mut seed = pool.begin().await.unwrap();
+    for (id, kind) in [
+        (source, "source"),
+        (unrelated_source, "source"),
+        (chat, "chat"),
+    ] {
+        sqlx::query("INSERT INTO objects (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,$2,'Protected excerpt fixture','Synthetic protected capture test.',true,'system','test','system','test')")
+            .bind(id).bind(kind).execute(&mut *seed).await.unwrap();
+    }
+    sqlx::query("INSERT INTO sources (object_id,source_kind) VALUES ($1,'article'),($2,'article')")
+        .bind(source)
+        .bind(unrelated_source)
+        .execute(&mut *seed)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO chats (object_id,provider,workspace_id,channel_id,thread_id,surface_kind) VALUES ($1,'slack','Tsynthetic',$2,'123.456','channel')").bind(chat).bind(&channel).execute(&mut *seed).await.unwrap();
+    seed.commit().await.unwrap();
+    let content = "Let agents message each other.";
+    sqlx::query("INSERT INTO artifacts (id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome) VALUES ($1,$2,'transcript',$3,'text/plain',$4,$5,'complete')")
+        .bind(artifact).bind(source).bind(content).bind(format!("{:x}",Sha256::digest(content))).bind(content.len() as i64).execute(&pool).await.unwrap();
+    let token = "e".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("protected-excerpt-{}",Uuid::new_v4()),"chat_object_id":chat,"operations":[
+        {"operation":"create_object","local_ref":"excerpt","kind":"note","title":"Primitive agent messaging","description":"Verbatim synthetic evidence of agent collaboration.","fields":{"intent":"excerpt","content":content,"source_artifact_id":artifact,"source_locator":{"type":"character_range","start":0,"end":content.len()}}},
+        {"operation":"create_connection","source":{"local_ref":"excerpt"},"target":{"object_id":source},"kind":"derived_from","description":"This exact excerpt comes from the protected Source's transcript."}
+    ]});
+    let req = |b: Value, thread: &str| {
+        let mut r = request("POST", "/api/v2/apply", &token, b);
+        r.headers_mut()
+            .insert("x-centaur-thread-key", thread.parse().unwrap());
+        r
+    };
+    let short = format!("slack:{channel}:123.456");
+    // Mismatched identities fail before any note is committed.
+    for thread in [
+        "slack:other:123.456".to_owned(),
+        format!("slack:wrong:{channel}:123.456"),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(req(body.clone(), &thread))
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    }
+    let mut invalid_evidence = body.clone();
+    invalid_evidence["operations"][0]["fields"]["content"] =
+        json!("Not present in the transcript.");
+    let r = app
+        .clone()
+        .oneshot(req(invalid_evidence, &short))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let unauthorized = request("POST", "/api/v2/apply", "wrong-token", body.clone());
+    let r = app.clone().oneshot(unauthorized).await.unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let mut wrong_source = body.clone();
+    wrong_source["operations"][1]["target"]["object_id"] = json!(unrelated_source);
+    let r = app
+        .clone()
+        .oneshot(req(wrong_source, &short))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // An invalid unrelated protected edge rolls back the otherwise valid Note.
+    let mut bad = body.clone();
+    bad["operations"][1]["kind"] = json!("related_to");
+    let r = app.clone().oneshot(req(bad, &short)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM notes WHERE source_artifact_id=$1")
+        .bind(artifact)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let r = app
+        .clone()
+        .oneshot(req(body.clone(), &short))
+        .await
+        .unwrap();
+    let status = r.status();
+    let result = json_body(r).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["data"]["results"].as_array().unwrap().len(), 3);
+    let note =
+        Uuid::parse_str(result["data"]["results"][0]["data"]["id"].as_str().unwrap()).unwrap();
+    let r = app
+        .clone()
+        .oneshot(req(body.clone(), &short))
+        .await
+        .unwrap();
+    assert_eq!(json_body(r).await["data"]["replayed"], true);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM connections WHERE target_object_id=$1 OR source_object_id=$1",
+    )
+    .bind(note)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 2);
+    let (revision, protected): (i64, bool) =
+        sqlx::query_as("SELECT revision,protected FROM objects WHERE id=$1")
+            .bind(source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((revision, protected), (1, true));
+    // Fully qualified identities still work; validation does not create another Note.
+    let mut validate = body.clone();
+    validate["validate_only"] = json!(true);
+    let r = app
+        .clone()
+        .oneshot(req(
+            validate.clone(),
+            &format!("slack:Tsynthetic:{channel}:123.456"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    // Original thinking and actionable follow-up also connect without editing the Source.
+    let owner = support::task_owner(&pool).await;
+    for (kind, fields, relation) in [
+        (
+            "note",
+            json!({"intent":"insight","content":"My own interpretation."}),
+            "derived_from",
+        ),
+        (
+            "note",
+            json!({"intent":"question","content":"How does this generalize?"}),
+            "derived_from",
+        ),
+        (
+            "task",
+            json!({"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Evaluate the Source's coordination model."}),
+            "about",
+        ),
+    ] {
+        let research = json!({"contract_version":"1.1.0","idempotency_key":format!("research-{}",Uuid::new_v4()),"chat_object_id":chat,"validate_only":true,"operations":[
+            {"operation":"create_object","local_ref":"research","kind":kind,"title":"Research follow-up","description":"A synthetic follow-up to the selected Source.","fields":fields},
+            {"operation":"create_connection","source":{"local_ref":"research"},"target":{"object_id":source},"kind":relation,"description":"This research follows directly from the selected Source."}
+        ]});
+        let r = app.clone().oneshot(req(research, &short)).await.unwrap();
+        let status = r.status();
+        let response = json_body(r).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    // Caller-supplied links to the protected Chat do not inherit the automatic exception.
+    let explicit = json!({"contract_version":"1.1.0","idempotency_key":format!("explicit-chat-{}",Uuid::new_v4()),"operations":[{"operation":"create_connection","source":{"object_id":chat},"target":{"object_id":note},"kind":"about","description":"A caller cannot claim the server-generated provenance exception."}]});
+    let r = app.clone().oneshot(req(explicit, &short)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let update = json!({"contract_version":"1.1.0","idempotency_key":format!("protected-edit-{}",Uuid::new_v4()),"operations":[{"operation":"update_object","object_id":source,"expected_revision":1,"changes":{"description":"Unauthorized edit."}}]});
+    let r = app.clone().oneshot(req(update, &short)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // A second workspace using the same short identity makes that identity ambiguous.
+    let mut seed = pool.begin().await.unwrap();
+    let other = Uuid::new_v4();
+    sqlx::query("INSERT INTO objects (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,'chat','Other workspace','Synthetic ambiguity test.','system','test','system','test')").bind(other).execute(&mut *seed).await.unwrap();
+    sqlx::query("INSERT INTO chats (object_id,provider,workspace_id,channel_id,thread_id,surface_kind) VALUES ($1,'slack','Tother',$2,'123.456','channel')").bind(other).bind(&channel).execute(&mut *seed).await.unwrap();
+    seed.commit().await.unwrap();
+    let r = app
+        .clone()
+        .oneshot(req(validate.clone(), &short))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    let r = app
+        .clone()
+        .oneshot(req(
+            validate,
+            &format!("slack:Tsynthetic:{channel}:123.456"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations() {
     let Some(pool) = test_pool().await else {
         return;

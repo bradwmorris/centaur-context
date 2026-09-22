@@ -309,6 +309,7 @@ async fn apply_with_authority(
                 &mut sequence,
                 &mut event_ids,
                 authority,
+                true,
             )
             .await?;
             results.push(json!({"operation":"automatic_chat_connection","data":result}));
@@ -646,6 +647,7 @@ async fn execute_operation(
                 sequence,
                 event_ids,
                 authority,
+                false,
             )
             .await?;
             Ok(json!({"operation":"create_connection","data":value}))
@@ -1466,6 +1468,7 @@ async fn validate_endpoints(
     kind: &str,
     target_id: Uuid,
     authority: WriteAuthority,
+    verified_chat_connection: bool,
 ) -> Result<(), DbError> {
     if source_id == target_id {
         return Err(DbError::Invalid(
@@ -1494,9 +1497,29 @@ async fn validate_endpoints(
     if authority == WriteAuthority::Ordinary
         && (source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2))
     {
-        return Err(DbError::Invalid(
-            "protected Objects require separate Connection authority".into(),
-        ));
+        // Connecting new research to a protected Source does not edit the Source.
+        // Excerpts additionally have to cite an Artifact owned by that Source.
+        let research_source_link = target.is_some_and(|row| row.1 == "source")
+            && source.is_some_and(|row| !row.2)
+            && ((kind == "about" && source.is_some_and(|row| row.1 == "task"))
+                || (kind == "derived_from"
+                    && source.is_some_and(|row| row.1 == "note")
+                    && sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS (SELECT 1 FROM notes n LEFT JOIN artifacts a ON a.id=n.source_artifact_id WHERE n.object_id=$1 AND (n.intent IN ('insight','question') OR (n.intent='excerpt' AND a.object_id=$2)))",
+                    )
+                    .bind(source_id)
+                    .bind(target_id)
+                    .fetch_one(&mut **tx)
+                    .await?));
+        let chat_provenance_link = verified_chat_connection
+            && kind == "about"
+            && source.is_some_and(|row| row.1 == "chat")
+            && target.is_some_and(|row| !row.2);
+        if !research_source_link && !chat_provenance_link {
+            return Err(DbError::Invalid(
+                "protected Objects require separate Connection authority".into(),
+            ));
+        }
     }
     if kind == "themed"
         && (source.is_some_and(|row| row.1 == "theme") || target.is_none_or(|row| row.1 != "theme"))
@@ -1521,8 +1544,17 @@ async fn create_connection(
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
     authority: WriteAuthority,
+    verified_chat_connection: bool,
 ) -> Result<Value, DbError> {
-    validate_endpoints(tx, source_id, kind, target_id, authority).await?;
+    validate_endpoints(
+        tx,
+        source_id,
+        kind,
+        target_id,
+        authority,
+        verified_chat_connection,
+    )
+    .await?;
     let description = required_text(description.to_owned(), "description", 1000)?;
     let inserted: Option<Connection> = sqlx::query_as(
         r#"INSERT INTO connections
@@ -1657,6 +1689,7 @@ async fn update_connection(
         kind,
         current.target_object_id,
         authority,
+        false,
     )
     .await?;
     let description = required_text(
