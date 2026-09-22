@@ -99,6 +99,7 @@ fn validate_scope(request: &ApplyRequest) -> Result<(), IntakeError> {
     for operation in &request.operations {
         match operation {
             ApplyOperation::UpdateDescription { .. } => {}
+            ApplyOperation::PromoteSourceArtifact { .. } => {}
             ApplyOperation::UpdateObject { changes, .. } => {
                 const FIELDS: &[&str] = &[
                     "title",
