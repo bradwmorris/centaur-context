@@ -691,6 +691,11 @@ pub async fn pass(
     if !claimed {
         return Ok(None);
     }
+    // Owning the only worker lease proves any prior running attempt was
+    // interrupted. Preserve its input/history, but do not leave a false active
+    // dependency behind after a process crash or lost database connection.
+    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
+        .execute(pool).await?;
     let mut batch = read_batch(pool).await?;
     if batch.memories.is_empty() {
         return Ok(None);
