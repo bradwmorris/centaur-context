@@ -555,7 +555,26 @@ async fn execute_purge(
         if keys.is_empty() {
             continue;
         }
-        let count=sqlx::query(&format!("DELETE FROM {table} t WHERE EXISTS (SELECT 1 FROM jsonb_array_elements($1::jsonb) k WHERE to_jsonb(t) @> k)")).bind(json!(keys)).execute(&mut *tx).await?.rows_affected();
+        // Match only typed primary keys: serializing immutable Event payloads here
+        // multiplies large history by the number of selected keys and prevents
+        // indexed lookup. Table and column names come solely from policy constants.
+        let (columns, predicate) = if *table == "context_apply_requests" {
+            (
+                "principal_id text, idempotency_key text",
+                "t.principal_id = k.principal_id AND t.idempotency_key = k.idempotency_key",
+            )
+        } else if SUBTYPES.contains(table) {
+            ("object_id uuid", "t.object_id = k.object_id")
+        } else {
+            ("id uuid", "t.id = k.id")
+        };
+        let count = sqlx::query(&format!(
+            "DELETE FROM {table} t USING jsonb_to_recordset($1::jsonb) AS k({columns}) WHERE {predicate}"
+        ))
+        .bind(json!(keys))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if count != keys.len() as u64 {
             return Err(IntakeError::Conflict(
                 "purge row count changed; transaction rolled back".into(),
