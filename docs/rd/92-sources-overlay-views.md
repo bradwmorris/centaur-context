@@ -9,7 +9,9 @@ sort, pagination and detail navigation. Task API 1 remains compatible. Manifest
 schema/API 1 gains `sources` as an explicitly supported section; exact core pins
 still reject older hosts. Separate overlay Grid and Board components own layout.
 The proposed Board groups by existing source kind, without writes or new state.
-Overlay adoption target and final grouping await the owner's response.
+The owner approved the demonstrated Source-kind grouping and requested merge after
+reviewing the standalone overlay. Private deployment adoption remains a separate
+step; this merge does not select or change a live deployment.
 
 ## Network/security review and selected boundary
 
@@ -95,7 +97,16 @@ API assertions and exported images/overlay). No private workspace data was used.
 The review URLs use isolated loopback ports 59292 (composed) and 59293 (stock).
 
 This proves the neutral review overlay, not adoption into an unspecified private
-repository. Source-kind grouping and the private adopter target still require
-owner resolution before merge/adoption. Production outbound previews remain off
+repository. The owner approved this demonstrated grouping and requested merge. The private
+adopter target still needs selection before deployment, not before this merge. Production outbound previews remain off
 unless an operator explicitly enables them. Publisher availability, unsupported
 image formats and IPv6-only sites can still produce a fallback.
+
+## Owner review outcome
+
+After reviewing the running demo, the owner said, “Yeah, this looks fine” and
+asked to merge. This approves the demonstrated standalone delivery and
+Source-kind columns. Merge includes the reusable core prerequisite, opt-in
+thumbnail service and neutral overlay example. It does not install the overlay
+in a private repository or deploy a new image. The running application only
+receives these views after a pinned core-plus-overlay build is deployed.
