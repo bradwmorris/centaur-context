@@ -502,6 +502,57 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
         .execute(&pool)
         .await
         .unwrap();
+    // Extension-owned tables are system bookkeeping, never unknown application targets.
+    sqlx::query("CREATE TABLE fixture77_extension_catalog(id integer PRIMARY KEY)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER EXTENSION vector ADD TABLE fixture77_extension_catalog")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let req = request(vec![selection(&pool, "objects", rollback_fixture).await]);
+    let (status, _) = call(&unapproved, "POST", "/api/v2/maintenance/purge", TOKEN, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, catalog) = call(
+        &unapproved,
+        "GET",
+        "/api/v2/maintenance/tables",
+        TOKEN,
+        Value::Null,
+    )
+    .await;
+    assert!(
+        catalog["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "fixture77_extension_catalog"
+                && r["category"] == "extension_bookkeeping")
+    );
+    // Even an extension-owned CASCADE cannot remove unreviewed rows implicitly.
+    sqlx::query("ALTER TABLE fixture77_extension_catalog ADD COLUMN object_id uuid REFERENCES objects(id) ON DELETE CASCADE").execute(&pool).await.unwrap();
+    let req = request(vec![selection(&pool, "objects", rollback_fixture).await]);
+    let (_, preview) = call(&unapproved, "POST", "/api/v2/maintenance/purge", TOKEN, req).await;
+    assert!(
+        preview["data"]["manifest"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["table"] == "fixture77_extension_catalog")
+    );
+    sqlx::query("ALTER EXTENSION vector DROP TABLE fixture77_extension_catalog")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // The same ordinary unknown table must still fail closed.
+    let req = request(vec![selection(&pool, "objects", rollback_fixture).await]);
+    let (status, _) = call(&unapproved, "POST", "/api/v2/maintenance/purge", TOKEN, req).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    sqlx::query("DROP TABLE fixture77_extension_catalog")
+        .execute(&pool)
+        .await
+        .unwrap();
     // Catalog includes replay records, receipt bookkeeping, views and derived indexes.
     let (status, catalog) = call(
         &unapproved,

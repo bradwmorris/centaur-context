@@ -7,7 +7,7 @@ private research and conversations.
 
 - `GET /api/v2/maintenance/tables`: complete public relation catalog, category,
   table count, primary key and supported purge policy. Views, derived indexes and
-  bookkeeping are distinguished from application tables.
+  bookkeeping (including extension-owned tables) are distinguished from application tables.
 - `GET /api/v2/maintenance/table-rows?table=objects&limit=100`: bounded stable-key
   pages. Pass the returned `next_cursor` URL-encoded to continue. Rows include
   `key`, `row_sha256` and the complete recovery-readable `row`. Concurrent writes
