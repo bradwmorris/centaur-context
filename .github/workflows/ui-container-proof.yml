@@ -52,7 +52,7 @@ jobs:
           docker image inspect context63-acceptance:76d5304 context63-stock:76d5304 > "$RUNNER_TEMP/proof/images.json"
           cp -R "$RUNNER_TEMP/overlay" "$RUNNER_TEMP/proof/overlay"
           printf '%s\n' '76d530470956990859e72a050b1a5c4ab85b2f12' > "$RUNNER_TEMP/proof/core-revision.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: context63-container-proof
           path: ${{ runner.temp }}/proof
