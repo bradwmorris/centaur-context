@@ -134,19 +134,30 @@ export async function stageComposition({ config, coreRoot = root } = {}) {
 
 function cleanEnv() {
   const result = {};
-  for (const key of ['PATH', 'HOME', 'TMPDIR', 'SystemRoot', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'CENTAUR_CONTEXT_DEV_API_TARGET', 'CENTAUR_OS_DEV_API_TARGET']) if (process.env[key]) result[key] = process.env[key];
+  for (const key of ['PATH', 'HOME', 'TMPDIR', 'SystemRoot', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'CENTAUR_CONTEXT_DEV_API_TARGET']) if (process.env[key]) result[key] = process.env[key];
   return result;
 }
 async function run(program, args, cwd) {
   await new Promise((resolve, reject) => {
-    const child = spawn(program, args, { cwd, stdio: 'inherit', env: cleanEnv() });
-    const stop = () => child.kill('SIGTERM');
+    const child = spawn(program, args, { cwd, stdio: 'inherit', env: cleanEnv(), detached: process.platform !== 'win32' });
+    const stop = () => {
+      try { if (process.platform === 'win32') child.kill('SIGTERM'); else process.kill(-child.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     const cleanup = () => { process.off('SIGINT', stop); process.off('SIGTERM', stop); };
     child.on('error', error => { cleanup(); reject(error); });
     child.on('exit', code => { cleanup(); code === 0 ? resolve() : reject(new Error(`${program} exited ${code}`)); });
   });
 }
+export async function publishOutput(source, output) {
+  // Reserve the destination atomically, then copy its children (Node 22 refuses
+  // copying the root itself with errorOnExist even into our new empty directory).
+  await fs.mkdir(output, { recursive: false });
+  for (const name of await fs.readdir(source)) {
+    await fs.cp(path.join(source, name), path.join(output, name), { recursive: true, errorOnExist: true, force: false });
+  }
+}
+
 export async function main(args) {
   const command = args.shift(); const options = {};
   if (!['dev', 'build', 'image'].includes(command)) fail('Usage: context-ui.mjs dev|build|image [--config FILE] [--out-dir DIR | --tag IMAGE]');
@@ -170,7 +181,7 @@ export async function main(args) {
       if (options['--config']) await run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], path.join(web, '.context-overlay'));
       await run('npm', ['run', 'type-check'], web);
       if (command === 'dev') await run('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--strictPort', '--port', options['--port'] ?? '5173'], web);
-      else { await run('npm', ['run', 'build'], web); await fs.mkdir(output, { recursive: false }); await fs.cp(path.join(web, 'dist'), output, { recursive: true, errorOnExist: true, force: false }); }
+      else { await run('npm', ['run', 'build'], web); await publishOutput(path.join(web, 'dist'), output); }
     }
   } finally { await fs.rm(stage, { recursive: true, force: true }); }
 }

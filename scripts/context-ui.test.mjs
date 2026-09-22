@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { readOverlay, stageComposition } from './context-ui.mjs';
+import { readOverlay, stageComposition, publishOutput } from './context-ui.mjs';
 const root = path.resolve(import.meta.dirname, '..');
 const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 async function fixture(t) {
@@ -64,4 +64,57 @@ test('rejects unlocked dependencies and dependency install scripts', async t => 
   await assert.rejects(readOverlay(f.config, sha), /Unsupported non-registry/);
   await edit(lock, l => l.packages['node_modules/bad'] = { resolved: 'https://registry.npmjs.org/bad/-/bad-1.0.0.tgz', integrity: 'sha512-test', hasInstallScript: true });
   await assert.rejects(readOverlay(f.config, sha), /lifecycle script/);
+});
+
+test('second view is added solely in the overlay with deterministic order', async t => {
+  const f = await fixture(t);
+  await fs.cp(path.join(f.overlay, 'views/task-summary'), path.join(f.overlay, 'views/second'), { recursive: true });
+  await edit(path.join(f.overlay, 'views/second/manifest.json'), m => { m.id = 'example:second'; m.order = -1; });
+  await edit(f.config, c => c.views.push('views/second/manifest.json'));
+  const result = await readOverlay(f.config, sha);
+  assert.deepEqual(result.views.map(v => v.id), ['example:second', 'example:task-summary']);
+});
+
+test('dev HTTP cannot serve unselected overlay files or import private host modules', { skip: process.env.CONTEXT_UI_INTEGRATION !== '1', timeout: 120000 }, async t => {
+  const { spawn } = await import('node:child_process');
+  const { createServer } = await import('node:net');
+  const f = await fixture(t);
+  const secret = path.join(f.overlay, 'unrelated.txt');
+  await fs.writeFile(secret, 'context-fixture-secret-never-served');
+  await fs.writeFile(path.join(f.overlay, '.env'), 'VITE_SECRET=context-fixture-secret-never-served');
+  const listener = createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const port = listener.address().port; await new Promise(resolve => listener.close(resolve));
+  // A type-only private import must be rejected too, not silently erased by TS.
+  await fs.appendFile(path.join(f.overlay, 'views/task-summary/index.tsx'), '\nimport type { Task } from "../../../src/types";\n');
+  const child = spawn(process.execPath, [path.join(root, 'scripts/context-ui.mjs'), 'dev', '--config', f.config, '--port', String(port)], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+  let logs = ''; child.stdout.on('data', b => logs += b); child.stderr.on('data', b => logs += b);
+  const exited = new Promise(resolve => child.on('exit', resolve));
+  t.after(async () => { child.kill('SIGTERM'); await exited; });
+  const base = `http://127.0.0.1:${port}`;
+  for (let count = 0; count < 500 && !logs.includes('Local:'); count++) {
+    if (child.exitCode !== null) assert.fail(logs);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.match(logs, /Local:/);
+  for (const file of [secret, path.join(f.overlay, '.env')]) {
+    const response = await fetch(`${base}/@fs${file}`);
+    assert.equal(response.status, 403);
+    assert.doesNotMatch(await response.text(), /context-fixture-secret-never-served/);
+  }
+  const imported = await fetch(`${base}/.context-overlay/views/0/index.tsx`);
+  assert.equal(imported.status, 500);
+  assert.match(await imported.text(), /private|outside|public/);
+  child.kill('SIGTERM'); await exited;
+  await assert.rejects(fetch(base)); // Shutdown must stop the actual Vite process.
+});
+
+
+test('publishes a build into a new directory and refuses to merge into existing output', async t => {
+  const f = await fixture(t); const source = path.join(f.temp, 'dist'); const dest = path.join(f.temp, 'output');
+  await fs.mkdir(path.join(source, 'assets'), { recursive: true });
+  await fs.writeFile(path.join(source, 'index.html'), 'synthetic build');
+  await fs.writeFile(path.join(source, 'assets/app.js'), 'export const test = 1;');
+  await publishOutput(source, dest);
+  assert.equal(await fs.readFile(path.join(dest, 'index.html'), 'utf8'), 'synthetic build');
+  await assert.rejects(publishOutput(source, dest), { code: 'EEXIST' });
 });

@@ -87,7 +87,7 @@ jobs:
           npm run build
 
       - name: Test UI composition contract
-        run: node --test scripts/context-ui.test.mjs
+        run: CONTEXT_UI_INTEGRATION=1 node --test scripts/context-ui.test.mjs
 
       - name: Install and test agent client
         run: |

@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { loadEnv, type Plugin } from "vite";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 const composed = existsSync(path.resolve("context-composition.json"));
 const webRoot = process.cwd();
@@ -12,6 +13,20 @@ const extensionDependencies = composed && existsSync(path.join(webRoot, ".contex
 const extensionBoundary: Plugin = {
   name: "context-extension-import-boundary",
   enforce: "pre",
+  transform(code, id) {
+    if (!id.startsWith(extensionRoot + path.sep) || !/\.[jt]sx?(?:\?|$)/.test(id)) return null;
+    const sourceFile = ts.createSourceFile(id, code, ts.ScriptTarget.Latest, true, id.includes(".tsx") || id.includes(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    const check = (node: ts.Node) => {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        const source = node.moduleSpecifier.text;
+        if (source.startsWith(".") && !path.resolve(path.dirname(id), source).startsWith(extensionRoot + path.sep)) throw new Error("External view imports must stay inside selected sources; use the public host interface");
+        if (source.startsWith("/") || source.includes("web/src")) throw new Error("External views cannot import private host modules");
+      }
+      ts.forEachChild(node, check);
+    };
+    check(sourceFile);
+    return null;
+  },
   resolveId(source, importer) {
     if (!importer?.startsWith(extensionRoot + path.sep)) return null;
     if (source === "/@react-refresh" || source.startsWith("\0") || source.startsWith(path.join(webRoot, ".context-overlay/node_modules") + path.sep)) return null;
