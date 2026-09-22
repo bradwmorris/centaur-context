@@ -15,7 +15,7 @@ It turns completed interactions into structured records, connects them to what i
 
 There are two main components:
 
-- **context (read)** retrieves and builds a relevant context packet before the agent responds — word search, semantic search and a lightweight traversal. This is just retrieval code, no LLM call.
+- **context (read)** retrieves and builds a relevant context packet before the agent responds — title/description word search, kind/title/description semantic search and a lightweight traversal. Captured Artifact bodies are read explicitly after an Object is selected. This is just retrieval code, no LLM call.
 - **curator (write)** — completed agent interactions are pushed to the knowledge base and queued as runs. A separate agent reviews and writes knowledge to the database, creating connections and refining memories, tasks, etc.
 
 This creates a simple, compounding loop. Knowledge accumulates and becomes accessible to future interactions.

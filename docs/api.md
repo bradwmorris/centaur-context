@@ -83,6 +83,14 @@ Source workflow Runs use these required fields: start takes `run_id`,
 `status`, start/completion timestamps, `duration_ms`, and `component`; finish
 takes `status`. Other workflow fields are optional.
 
+Normal Object discovery through `/api/v2/search`, `/api/v2/search/objects`, and
+`/api/v2/context` searches canonical Object titles and descriptions. Hybrid
+search combines that full-text index with semantic embeddings of Object kind,
+title, and description. Captured Artifact bodies remain available through
+explicit Object, Source, and Artifact reads, and their stored embeddings are
+preserved. Neither Artifact body text nor chunk vectors contribute candidates,
+ranking, or evidence excerpts to Object discovery.
+
 ## Minimal examples
 
 The public Python package exposes exactly `context_search`, `context_read`, and
