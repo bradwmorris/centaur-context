@@ -425,8 +425,14 @@ fn preview_rows(
     for (table, rs) in &rows {
         for row in rs {
             let mentions_selected = contains_id(row, &ids);
+            // A successful Memory preview is finished work with retained history,
+            // not an active operation. Require both its kind and completion time.
+            let completed_memory_preview = row["kind"] == "memory_dream"
+                && row["status"] == "preview"
+                && row["completed_at"].is_string();
             if table == "runs"
                 && mentions_selected
+                && !completed_memory_preview
                 && !matches!(
                     row["status"].as_str(),
                     Some("completed" | "failed" | "reversed" | "delivered" | "suppressed")
