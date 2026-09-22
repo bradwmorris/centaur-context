@@ -14,6 +14,13 @@ All paths are versioned under `/api/v2`.
 | Source intake | `http://centaur-context-source-intake:8086` | `SOURCE_INTAKE_API_TOKEN` | The configured `X-Centaur-Principal-Id`, `X-Centaur-Thread-Key`; optional `X-Centaur-Execution-Id` |
 | Networking mutation | `http://centaur-context-networking-mutation:8089` | `NETWORKING_MUTATION_API_TOKEN` | The exact configured `X-Centaur-Principal-Id`, a canonical `X-Centaur-Thread-Key`; optional `X-Centaur-Execution-Id`; `Idempotency-Key` on creates |
 
+For verified Slack Chat requests, the thread header accepts
+`slack:workspace:channel:thread` and `slack:workspace:bot-name:channel:thread`.
+The optional `bot-` routing namespace identifies the agent session, not a
+separate conversation. Both forms must match the stored Chat's workspace,
+channel and thread; authenticated principal attribution is unchanged.
+
+
 Send credentials as `Authorization: Bearer <token>`. Tokens belong in Centaur's
 trusted transport, never in an agent sandbox. JSON successes use
 `{"data": ...}`; JSON errors use
