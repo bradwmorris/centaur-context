@@ -263,13 +263,28 @@ fn thread_keys(value: &Value, keys: &mut BTreeSet<String>) {
 fn cancellation_change(
     rows: &Snapshot,
     request: &PurgeRequest,
-    run_id: uuid::Uuid,
-    hash: &str,
-    chat_id: uuid::Uuid,
-    observations: &[ExecutorObservation],
-    evidence_sha256: &str,
-    reason: &str,
+    action: &Reconciliation,
 ) -> Result<(Value, Vec<Value>), IntakeError> {
+    let Reconciliation::CancelInteraction {
+        run_id,
+        row_sha256,
+        chat_id,
+        owner_observations,
+        evidence_sha256,
+        reason,
+    } = action
+    else {
+        return Err(IntakeError::BadRequest(
+            "cancellation action required".into(),
+        ));
+    };
+    let (run_id, chat_id, hash, observations, evidence_sha256) = (
+        *run_id,
+        *chat_id,
+        row_sha256.as_str(),
+        owner_observations.as_slice(),
+        evidence_sha256.as_str(),
+    );
     let run = exact_row(rows, "runs", run_id, Some(hash))?;
     let chat = rows["chats"]
         .iter()
@@ -477,21 +492,10 @@ async fn reconciliation_plan(
             Reconciliation::CancelInteraction {
                 run_id,
                 row_sha256,
-                chat_id,
-                owner_observations,
-                evidence_sha256,
                 reason,
+                ..
             } => {
-                let (change, proofs) = cancellation_change(
-                    rows,
-                    request,
-                    *run_id,
-                    row_sha256,
-                    *chat_id,
-                    owner_observations,
-                    evidence_sha256,
-                    reason,
-                )?;
+                let (change, proofs) = cancellation_change(rows, request, action)?;
                 let run = exact_row(rows, "runs", *run_id, Some(row_sha256))?;
                 plan.changes.push(change);
                 plan.proofs.extend(proofs);
@@ -803,10 +807,10 @@ fn preview_rows_with_plan(
         if proof["must_retain"] != true {
             continue;
         }
-        if let Some(table) = proof["table"].as_str() {
-            if set.contains_key(&(table.into(), proof["key"].to_string())) {
-                blockers.push(json!({"table":table,"key":proof["key"],"reason":"reconciliation proof must remain retained"}));
-            }
+        if let Some(table) = proof["table"].as_str()
+            && set.contains_key(&(table.into(), proof["key"].to_string()))
+        {
+            blockers.push(json!({"table":table,"key":proof["key"],"reason":"reconciliation proof must remain retained"}));
         }
     }
     for (src, dst, sc, dc) in fks {
