@@ -29,6 +29,13 @@ idempotent write must reuse its original key and identical body.
 
 ## Endpoints
 
+The optional private Codex listener (loopback port 8090 by default) exposes
+`POST /api/v2/codex/capture`, `GET /api/v2/codex/session`, and the universal
+contract/search/read/apply routes. It requires its separate capture or tool
+credential plus `X-Codex-Session-Id` and `X-Codex-Repository`; configuration fixes
+the host and canonical human identity. No existing service token grants access.
+See [Codex desktop integration](codex.md). It is disabled unless configured.
+
 The request column lists body fields unless it says `query` or `path`.
 
 | Surface | Method | Path | Request or purpose |

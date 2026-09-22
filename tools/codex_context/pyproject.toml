@@ -1,0 +1,20 @@
+[project]
+name = "centaur-codex-context"
+version = "0.1.0"
+description = "Local Codex Chat capture and three Context MCP tools"
+requires-python = ">=3.11"
+dependencies = ["centaur-context==1.1.0"]
+
+[project.scripts]
+centaur-codex-context = "codex_context.bridge:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["codex_context"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"../../contract/context-contract.json" = "codex_context/context-contract.json"
+"../../generated/context-agent-instructions.md" = "codex_context/context-agent-instructions.md"

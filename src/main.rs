@@ -109,6 +109,27 @@ async fn main() -> Result<()> {
         embeddings: embedding_client.clone(),
         text_search_config: config.text_search_config,
     };
+    let codex_server = if let Some(codex) = config.codex.clone() {
+        let listener = TcpListener::bind(codex.addr)
+            .await
+            .context("bind private Codex listener")?;
+        info!(address=%codex.addr,"private Codex listener ready");
+        Some((
+            listener,
+            centaur_context::codex::router(state.clone(), codex),
+        ))
+    } else {
+        None
+    };
+    let codex_server = async move {
+        if let Some((listener, router)) = codex_server {
+            axum::serve(listener, router)
+                .await
+                .context("Codex server stopped")
+        } else {
+            std::future::pending::<Result<()>>().await
+        }
+    };
     let human = api::human_router(state.clone(), config.static_dir, config.identity_assets_dir);
     let agent = api::agent_router(state.clone(), config.agent_api_token);
     let note_write = api::note_write_router(state.clone(), config.note_write_api_token);
@@ -202,6 +223,7 @@ async fn main() -> Result<()> {
                 curator_embeddings,
                 curator_model,
                 curator_text_search_config,
+                config.curator_providers,
             )
             .await;
         } else {
@@ -312,6 +334,7 @@ async fn main() -> Result<()> {
         result = research_mutation_server => result?,
         result = networking_mutation_server => result?,
         result = external_action_server => result?,
+        result = codex_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
         _ = memory_capture_worker => unreachable!("memory capture worker runs until shutdown"),

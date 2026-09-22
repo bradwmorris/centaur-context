@@ -6,6 +6,8 @@ use crate::ingest::ApprovedSlackSurfaces;
 
 #[derive(Clone)]
 pub struct Config {
+    pub codex: Option<crate::codex::CodexConfig>,
+    pub curator_providers: Vec<String>,
     pub database_url: String,
     pub human_addr: SocketAddr,
     pub agent_addr: SocketAddr,
@@ -191,6 +193,30 @@ impl Config {
                 .map_err(anyhow::Error::msg)?;
         let embedding = embedding_config()?;
         let curator_model = curator_model_config()?;
+        let curator_providers = env::var("CURATOR_ALLOWED_PROVIDERS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if curator_providers
+            .iter()
+            .any(|v| !matches!(v.as_str(), "slack" | "codex"))
+        {
+            bail!("CURATOR_ALLOWED_PROVIDERS must contain slack and/or codex");
+        }
+        let codex = codex_config()?;
+        if codex.as_ref().is_some_and(|c| c.curate)
+            && (curator_model.is_none()
+                || (!curator_providers.is_empty()
+                    && !curator_providers.iter().any(|v| v == "codex")))
+        {
+            bail!("CODEX_CURATE requires a Curator model with codex in CURATOR_ALLOWED_PROVIDERS");
+        }
         let memory_dream_mode = env::var("MEMORY_DREAM_MODE").unwrap_or_else(|_| "off".into());
         if !matches!(memory_dream_mode.as_str(), "off" | "preview" | "apply") {
             bail!("MEMORY_DREAM_MODE must be off, preview or apply");
@@ -309,7 +335,33 @@ impl Config {
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .join("identity-assets")
             });
+        if let Some(codex) = &codex {
+            let tokens = [
+                Some(agent_api_token.as_str()),
+                Some(note_write_api_token.as_str()),
+                Some(chat_ingest_api_token.as_str()),
+                Some(curator_api_token.as_str()),
+                intake.as_ref().map(|v| v.api_token.as_str()),
+                intake
+                    .as_ref()
+                    .and_then(|v| v.maintenance.as_ref())
+                    .map(|v| v.api_token.as_str()),
+                source_intake.as_ref().map(|v| v.api_token.as_str()),
+                research_mutation.as_ref().map(|v| v.api_token.as_str()),
+                networking_mutation.as_ref().map(|v| v.api_token.as_str()),
+                external_actions.as_ref().map(|v| v.api_token.as_str()),
+            ];
+            if tokens
+                .into_iter()
+                .flatten()
+                .any(|v| v == codex.capture_token || v == codex.tool_token)
+            {
+                bail!("Codex credentials must differ from every existing service credential");
+            }
+        }
         Ok(Self {
+            codex,
+            curator_providers,
             database_url,
             human_addr: parse_addr("HUMAN_ADDR", "0.0.0.0:8080")?,
             agent_addr: parse_addr("AGENT_ADDR", "0.0.0.0:8081")?,
@@ -348,6 +400,59 @@ impl Config {
             identity_assets_dir,
         })
     }
+}
+
+fn codex_config() -> Result<Option<crate::codex::CodexConfig>> {
+    let capture = optional("CODEX_CAPTURE_API_TOKEN");
+    let tools = optional("CODEX_TOOL_API_TOKEN");
+    let configured = capture.is_some()
+        || tools.is_some()
+        || optional("CODEX_HOST_ID").is_some()
+        || optional("CODEX_HUMAN_USER_ID").is_some()
+        || optional("CODEX_REPOSITORIES").is_some()
+        || optional("CODEX_CURATE").is_some();
+    if !configured {
+        return Ok(None);
+    }
+    let capture_token = capture.context("CODEX_CAPTURE_API_TOKEN is required")?;
+    let tool_token = tools.context("CODEX_TOOL_API_TOKEN is required")?;
+    if capture_token.len() < 32 || tool_token.len() < 32 || capture_token == tool_token {
+        bail!("Codex capture and tool credentials must be distinct and at least 32 characters");
+    }
+    let host_id = required("CODEX_HOST_ID")?
+        .parse()
+        .context("CODEX_HOST_ID must be a UUID")?;
+    let human_id = required("CODEX_HUMAN_USER_ID")?
+        .parse()
+        .context("CODEX_HUMAN_USER_ID must be a UUID")?;
+    let repositories: HashSet<String> = required("CODEX_REPOSITORIES")?
+        .split(',')
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect();
+    if repositories.iter().any(|v| {
+        v.is_empty()
+            || v.len() > 80
+            || !v
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    }) {
+        bail!("CODEX_REPOSITORIES must contain exact alphanumeric, dash or underscore aliases");
+    }
+    let curate = match optional("CODEX_CURATE").as_deref().unwrap_or("false") {
+        "true" => true,
+        "false" => false,
+        _ => bail!("CODEX_CURATE must be true or false"),
+    };
+    Ok(Some(crate::codex::CodexConfig {
+        addr: parse_addr("CODEX_ADDR", "127.0.0.1:8090")?,
+        capture_token,
+        tool_token,
+        host_id,
+        human_id,
+        repositories,
+        curate,
+    }))
 }
 
 fn intake_config() -> Result<Option<IntakeConfig>> {
