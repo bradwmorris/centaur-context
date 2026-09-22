@@ -323,3 +323,92 @@ async fn credentials_targets_and_system_objects_are_separate() {
         StatusCode::OK
     );
 }
+
+#[tokio::test]
+async fn git_receipts_are_verified_deduplicated_and_reversible() {
+    use sha1::{Digest, Sha1};
+    let Some(pool) = pool().await else { return };
+    let (app, cfg) = setup(pool.clone(), true).await;
+    let sid = Uuid::new_v4();
+    let baseline = "a".repeat(40);
+    let raw = format!(
+        "tree {}\nparent {baseline}\nauthor Example <example@example.invalid> 1 +0000\ncommitter Example <example@example.invalid> 1 +0000\n\nAdd capture recovery\n",
+        "b".repeat(40)
+    );
+    let bytes = [format!("commit {}\0", raw.len()).as_bytes(), raw.as_bytes()].concat();
+    let oid = format!("{:x}", Sha1::digest(bytes));
+    let mut b = batch();
+    b["git_receipts"] = json!([{"turn_id":b["finished_turn_id"],"baseline":baseline,"commits":[{"oid":oid,"raw":raw}]}]);
+    let (status, result) = response(
+        app.clone(),
+        request(
+            "/api/v2/codex/capture",
+            &cfg.capture_token,
+            sid,
+            "organization",
+            Some(b.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let memory: Uuid = result["data"]["outcome_memory_ids"][0]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (description, actor): (String, String) =
+        sqlx::query_as("SELECT description,created_by_id FROM objects WHERE id=$1")
+            .bind(memory)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(description.contains("Add capture recovery"));
+    assert!(actor.starts_with("codex-capture:"));
+    assert!(!description.contains("passed"));
+    b["batch_id"] = json!(Uuid::new_v4());
+    let (_, replayed) = response(
+        app.clone(),
+        request(
+            "/api/v2/codex/capture",
+            &cfg.capture_token,
+            sid,
+            "organization",
+            Some(b.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(replayed["data"]["outcome_memory_ids"], json!([]));
+    b["batch_id"] = json!(Uuid::new_v4());
+    b["git_receipts"][0]["commits"][0]["raw"] = json!("Forged completion evidence");
+    assert_eq!(
+        response(
+            app,
+            request(
+                "/api/v2/codex/capture",
+                &cfg.capture_token,
+                sid,
+                "organization",
+                Some(b)
+            )
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let run: Uuid = sqlx::query_scalar(
+        "SELECT id FROM runs WHERE kind='memory_capture' AND primary_object_id=$1",
+    )
+    .bind(memory)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let undo = centaur_context::dreaming::undo(&pool, run).await.unwrap();
+    assert_eq!(undo["changes"], 2);
+    let archived: bool =
+        sqlx::query_scalar("SELECT archived_at IS NOT NULL FROM objects WHERE id=$1")
+            .bind(memory)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(archived);
+}
