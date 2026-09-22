@@ -30,6 +30,7 @@ pub(super) async fn insert_event(
     to_revision: i64,
     changes: Value,
 ) -> Result<Uuid, DbError> {
+    crate::runs::assert_thread_not_fenced(tx, actor.centaur_thread_key.as_deref()).await?;
     let target_type = if entity_type == "connection" {
         "connection"
     } else {

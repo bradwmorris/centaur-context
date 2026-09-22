@@ -166,6 +166,7 @@ async fn apply_with_authority(
     validate_authority_operations(&request, authority)?;
     let request_hash = request_hash(&request)?;
     let mut tx = pool.begin().await?;
+    crate::runs::assert_thread_not_fenced(&mut tx, actor.centaur_thread_key.as_deref()).await?;
 
     if !request.validate_only {
         let claimed: Option<bool> = sqlx::query_scalar(

@@ -14,6 +14,25 @@ pub(crate) fn is_terminal(kind: &Value, status: &Value, completed_at: &Value) ->
         || (kind == "memory_dream" && status == "preview" && !completed_at.is_null())
 }
 
+pub(crate) async fn assert_thread_not_fenced(
+    tx: &mut Transaction<'_, Postgres>,
+    thread_key: Option<&str>,
+) -> Result<(), DbError> {
+    sqlx::query("LOCK TABLE maintenance_execution_fences IN SHARE MODE")
+        .execute(&mut **tx)
+        .await?;
+    let fenced: bool = sqlx::query_scalar("SELECT context_thread_is_fenced($1)")
+        .bind(thread_key)
+        .fetch_one(&mut **tx)
+        .await?;
+    if fenced {
+        return Err(DbError::Invalid(
+            "provider thread is permanently fenced by reviewed maintenance".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub const VERDICTS: &[&str] = &["unreviewed", "pass", "mixed", "fail"];
 
 #[derive(Clone, Debug, Deserialize, Default)]

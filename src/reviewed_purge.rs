@@ -226,8 +226,7 @@ pub(crate) enum Reconciliation {
 pub(crate) struct ExecutorObservation {
     context_run_id: uuid::Uuid,
     thread_key: String,
-    #[serde(with = "time::serde::rfc3339")]
-    observed_at: time::OffsetDateTime,
+    observed_at: String,
     operation: String,
     identity_origin: String,
     response: ExecutorResponse,
@@ -337,7 +336,12 @@ fn cancellation_change(
     let mut observed_keys = BTreeSet::new();
     for o in observations {
         let parts: Vec<_> = o.thread_key.split(':').collect();
-        let age = time::OffsetDateTime::now_utc() - o.observed_at;
+        let observed_at = time::OffsetDateTime::parse(
+            &o.observed_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| IntakeError::Conflict("invalid owner observation timestamp".into()))?;
+        let age = time::OffsetDateTime::now_utc() - observed_at;
         if o.context_run_id != run_id
             || o.operation != "interrupt_active_execution"
             || !o.response.ok
@@ -377,6 +381,8 @@ fn cancellation_change(
             }
         })
         .collect();
+    let mut related_identities =
+        vec![json!({"id":run["id"],"kind":run["kind"],"idempotency_key":run["idempotency_key"]})];
     let mut proofs = vec![proof_row("chats", chat)];
     for r in &rows["runs"] {
         if r["id"] == json!(run_id) {
@@ -396,10 +402,13 @@ fn cancellation_change(
                 ));
             }
             proofs.push(proof_row("runs", r));
+            related_identities.push(
+                json!({"id":r["id"],"kind":r["kind"],"idempotency_key":r["idempotency_key"]}),
+            );
         }
     }
     Ok((
-        json!({"action":"cancel_interaction","table":"runs","key":key("runs",run),"before_sha256":digest(run),"reason":reason,"changes":{"status":"cancelled","completed_at":"$commit_time"},"fence":{"run_id":run_id,"run_kind":run["kind"],"idempotency_key":run["idempotency_key"],"chat_object_id":chat_id,"provider":"slack","workspace_id":chat["workspace_id"],"channel_id":chat["channel_id"],"thread_id":chat["thread_id"]},"owner_observations":observation_json,"evidence_sha256":evidence_sha256}),
+        json!({"action":"cancel_interaction","table":"runs","key":key("runs",run),"before_sha256":digest(run),"reason":reason,"changes":{"status":"cancelled","completed_at":"$commit_time"},"fence":{"run_id":run_id,"run_kind":run["kind"],"idempotency_key":run["idempotency_key"],"chat_object_id":chat_id,"provider":"slack","workspace_id":chat["workspace_id"],"channel_id":chat["channel_id"],"thread_id":chat["thread_id"],"related_run_identities":related_identities},"owner_observations":observation_json,"evidence_sha256":evidence_sha256}),
         proofs,
     ))
 }
@@ -1010,8 +1019,8 @@ async fn execute_purge(
             .await?;
         let sql = if change["action"] == "cancel_interaction" {
             let f = &change["fence"];
-            sqlx::query("INSERT INTO maintenance_execution_fences(run_id,run_kind,idempotency_key,chat_object_id,provider,workspace_id,channel_id,thread_id,owner_evidence,principal_id) VALUES($1::text::uuid,'slack_interaction',$2,$3::text::uuid,'slack',$4,$5,$6,$7,$8)")
-                .bind(f["run_id"].as_str()).bind(f["idempotency_key"].as_str()).bind(f["chat_object_id"].as_str()).bind(f["workspace_id"].as_str()).bind(f["channel_id"].as_str()).bind(f["thread_id"].as_str()).bind(&change["owner_observations"]).bind(&actor.actor_id).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO maintenance_execution_fences(run_id,run_kind,idempotency_key,chat_object_id,provider,workspace_id,channel_id,thread_id,owner_evidence,principal_id,related_run_identities) VALUES($1::text::uuid,'slack_interaction',$2,$3::text::uuid,'slack',$4,$5,$6,$7,$8,$9)")
+                .bind(f["run_id"].as_str()).bind(f["idempotency_key"].as_str()).bind(f["chat_object_id"].as_str()).bind(f["workspace_id"].as_str()).bind(f["channel_id"].as_str()).bind(f["thread_id"].as_str()).bind(&change["owner_observations"]).bind(&actor.actor_id).bind(&f["related_run_identities"]).execute(&mut *tx).await?;
             "UPDATE runs SET status='cancelled',completed_at=now(),updated_at=now() WHERE id=$1::text::uuid RETURNING to_jsonb(runs)"
         } else {
             "UPDATE runs SET chat_object_id=NULL,updated_at=now() WHERE id=$1::text::uuid RETURNING to_jsonb(runs)"

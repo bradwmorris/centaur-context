@@ -10,6 +10,7 @@ CREATE TABLE maintenance_execution_fences (
     channel_id text NOT NULL,
     thread_id text NOT NULL,
     owner_evidence jsonb NOT NULL,
+    related_run_identities jsonb NOT NULL,
     principal_id text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(run_kind,idempotency_key)
@@ -30,14 +31,23 @@ ALTER TABLE runs ADD CONSTRAINT runs_kind_status_check CHECK (
     (kind IN ('human_mutation','system_mutation','mutation','legacy_import') AND status IN ('open','running','completed','failed','reversed'))
 );
 
+-- Exact provider keys, including legacy unqualified and modern bot-qualified forms.
+CREATE FUNCTION context_thread_is_fenced(thread_key text) RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT EXISTS(SELECT 1 FROM maintenance_execution_fences f WHERE f.provider='slack'
+        AND split_part(thread_key,':',1)='slack' AND split_part(thread_key,':',2)=f.workspace_id
+        AND ((cardinality(string_to_array(thread_key,':'))=5 AND split_part(thread_key,':',3)<>'' AND split_part(thread_key,':',4)=f.channel_id AND split_part(thread_key,':',5)=f.thread_id)
+          OR (cardinality(string_to_array(thread_key,':'))=4 AND split_part(thread_key,':',3)=f.channel_id AND split_part(thread_key,':',4)=f.thread_id)))
+$$;
 CREATE FUNCTION context_run_is_fenced(target uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
-    WITH RECURSIVE ancestors(id,parent_run_id,chat_object_id) AS (
-        SELECT id,parent_run_id,chat_object_id FROM runs WHERE id=target
+    WITH RECURSIVE ancestors(id,parent_run_id,chat_object_id,input) AS (
+        SELECT id,parent_run_id,chat_object_id,input FROM runs WHERE id=target
         UNION
-        SELECT r.id,r.parent_run_id,r.chat_object_id FROM runs r JOIN ancestors a ON r.id=a.parent_run_id
+        SELECT r.id,r.parent_run_id,r.chat_object_id,r.input FROM runs r JOIN ancestors a ON r.id=a.parent_run_id
     )
     SELECT EXISTS(SELECT 1 FROM maintenance_execution_fences f WHERE f.run_id=target
+        OR EXISTS(SELECT 1 FROM jsonb_array_elements(f.related_run_identities) i WHERE i->>'id'=target::text)
         OR EXISTS(SELECT 1 FROM ancestors a WHERE a.id=f.run_id OR a.chat_object_id=f.chat_object_id))
+        OR EXISTS(SELECT 1 FROM ancestors a WHERE context_thread_is_fenced(a.input->>'centaur_thread_key') OR context_thread_is_fenced(a.input->>'source_thread_id'))
 $$;
 CREATE FUNCTION guard_maintenance_execution_fence() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE allowed boolean := false;
@@ -51,7 +61,10 @@ BEGIN
                 OR (to_jsonb(NEW)-ARRAY['status','completed_at','updated_at'])=(to_jsonb(OLD)-ARRAY['status','completed_at','updated_at']) AND NEW.status='cancelled') THEN RETURN NEW; END IF;
         END IF;
         IF context_run_is_fenced(NEW.id) OR context_run_is_fenced(NEW.parent_run_id)
+            OR context_thread_is_fenced(NEW.input->>'centaur_thread_key') OR context_thread_is_fenced(NEW.input->>'source_thread_id')
+            OR EXISTS(SELECT 1 FROM jsonb_path_query(NEW.trace,'$.**.source_thread_id') k WHERE context_thread_is_fenced(k #>> '{}'))
             OR EXISTS(SELECT 1 FROM maintenance_execution_fences f WHERE (f.run_kind=NEW.kind AND f.idempotency_key=NEW.idempotency_key) OR f.chat_object_id=NEW.chat_object_id
+                OR EXISTS(SELECT 1 FROM jsonb_array_elements(f.related_run_identities) i WHERE i->>'kind'=NEW.kind AND i->>'idempotency_key'=NEW.idempotency_key)
                 OR (NEW.kind='slack_interaction' AND f.workspace_id=NEW.input->>'workspace_id' AND f.channel_id=NEW.input->>'channel_id' AND f.thread_id=NEW.input->>'thread_id')) THEN
             RAISE EXCEPTION 'execution identity is permanently fenced by reviewed maintenance';
         END IF;

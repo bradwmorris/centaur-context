@@ -384,6 +384,53 @@ async fn cancellation_requires_owner_proof_and_permanently_fences_execution_iden
             .unwrap(),
         ingest_before
     );
+    // Ordinary apply cannot evade the fence with a fresh mutation Run and no
+    // Chat/parent pointer. Check both supported authenticated Slack thread forms.
+    let ordinary = agent_router(state(&pool), TOKEN.into());
+    for fenced_thread in [
+        thread.clone(),
+        format!("slack:{workspace}:{channel}:{thread_id}"),
+    ] {
+        let counts_before: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM objects),(SELECT count(*) FROM runs),(SELECT count(*) FROM object_events),(SELECT count(*) FROM context_apply_requests)").fetch_one(&pool).await.unwrap();
+        let retry_uuid = Uuid::new_v4();
+        let apply = json!({"contract_version":"1.1.0","idempotency_key":format!("fresh-fenced-retry-{retry_uuid}"),"operations":[
+            {"operation":"create_object","local_ref":"retry_note","kind":"note","title":format!("Synthetic forbidden retry {retry_uuid}"),"description":"Synthetic regression fixture that must never be created from a fenced execution.","fields":{"content":"Original retry text must not be saved.","content_format":"plain_text","intent":"insight"}},
+            {"operation":"create_connection","source":{"local_ref":"retry_note"},"kind":"related_to","target":{"object_id":retained},"description":"Synthetic connected note used to exercise otherwise valid ordinary apply."}
+        ]});
+        let response = ordinary
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v2/apply")
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .header("x-centaur-principal-id", "synthetic-retry-agent")
+                    .header("x-centaur-thread-key", &fenced_thread)
+                    .header("content-type", "application/json")
+                    .body(Body::from(apply.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            status.is_client_error(),
+            "ordinary apply accepted fenced thread: {status} {body}"
+        );
+        assert!(
+            body.contains("fenced"),
+            "must reject for the execution fence, not unrelated validation: {body}"
+        );
+        let counts_after: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM objects),(SELECT count(*) FROM runs),(SELECT count(*) FROM object_events),(SELECT count(*) FROM context_apply_requests)").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            counts_after, counts_before,
+            "fenced ordinary apply must be mutation-free"
+        );
+        assert!(sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'mutation','running','centaur_agent','synthetic-retry-agent',$2,$3)")
+            .bind(Uuid::new_v4()).bind(format!("context_apply:fresh:{retry_uuid}")).bind(json!({"centaur_thread_key":fenced_thread})).execute(&pool).await.is_err(),"direct mutation insertion must also enforce the fence without Chat or parent");
+    }
     // Terminal cancellation permits separate fixture deletion; retained real Event still protects its Run.
     let mut detach_req = request(vec![selection(&pool, "objects", chat).await]);
     detach_req["reconciliations"] = json!([{"action":"detach_chat","run_id":run,"row_sha256":hash(&row(&pool,"runs",run).await),"chat_id":chat,"reason":"Delete confirmed fixture Chat while retaining real execution evidence"}]);
