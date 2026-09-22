@@ -113,3 +113,48 @@ unknown/removed `?view=` renders the canonical list with a notice. To remove the
 whole overlay, omit `--config` and rebuild to a new output directory or image tag.
 Canonical data needs no migration or deletion. Re-deploying a previous verified
 bundle/backend pair is a separate deployment operation.
+
+## Sources Grid and Kanban
+
+Sources has a separate API-1 `SourceViewProps` contract: read-only `sources` and
+`visuals`, `loading`, `error`, `completeness`, `reload()` and `openSource(id)`.
+It does not expose Task mutations. Host search/sort controls remain visible in
+external Sources views; the host follows all Source pages for that query.
+Task API-1 views continue to work. Source manifests use `section: "sources"` and
+pin a core commit that supports it; older Task-only hosts reject them.
+
+Create the neutral example outside the checkout, then own/edit its files there:
+
+```sh
+node scripts/create-source-ui-example.mjs /new/external/sources-overlay
+node scripts/context-ui.mjs image --config /new/external/sources-overlay/views.config.json --tag context-sources:review
+```
+
+The independent Grid and Kanban use `sources:grid` and `sources:board`. The Board
+groups by existing Source type and is read-only. This does not change Tasks Board
+or introduce reading/workflow statuses. Removing these manifests restores the
+stock Sources List, including fallback from old custom-view URLs.
+
+### Optional web preview images
+
+`sourceThumbnailUrl(source, refreshKey?)` builds a same-origin image URL. A host
+without `SOURCE_THUMBNAILS_ENABLED=true` returns 404 and the view must show a
+fallback. Enabling the flag allows bounded server-side HTTPS retrieval of public
+web metadata/images; review the [design/security record](rd/92-sources-overlay-views.md)
+first. There is no new listener, agent credential or browser access to the DB.
+
+YouTube watch/shorts/embed/live and youtu.be links use YouTube's public thumbnail.
+Other public pages use their first valid Open Graph/Twitter image URL. Unsupported
+or missing images fall back. Only JPEG/PNG/WebP with bounded dimensions are served.
+HTTP, non-443 ports, credentials, private/reserved destinations and IPv6-only sites
+are unsupported. Redirects and metadata image URLs are independently validated.
+
+Cache policy: at most 32 URLs, 2 MiB each; success TTL one hour, failure TTL five
+minutes. Refresh previews requests revalidation with a one-minute minimum interval
+per URL. Browser caching lasts at most one minute. Source URL edits change the
+server cache key; revision changes change the browser URL. Cache loss/eviction can
+refetch images. Fetches allow at most two active and 16 pending requests, with a
+20-second queue timeout and 15-second overall resolution timeout. Pages are limited
+to 1 MiB; each fetch allows at most three redirects. No Source data, revisions or
+Events change when previews refresh. Publishers see the server IP, not browser
+cookies or referrers. No live deployment is implicitly enabled by building views.

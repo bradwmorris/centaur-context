@@ -181,12 +181,14 @@ export default function App() {
               <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
               <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
             </header>
-            {activeModule ? <ContextModuleView module={activeModule} context={{ tasks, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
+            {(!activeModule || section === "sources") && <>
             <div className="list-toolbar">
               {section !== "tasks" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
               {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={(event) => setSort(event.target.value as ListSort)}><option value="recent">Recently added</option><option value="connections">Most connected</option></select></label>}
               <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
             </div>
+            </>}
+            {activeModule ? <ContextModuleView module={activeModule} context={{ tasks, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
               {currentItems.map((item) => (

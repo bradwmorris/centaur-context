@@ -230,8 +230,10 @@ This actual Desktop probe revealed `AgentMessage.phase=final_answer`, whereas th
 isolated CLI probe used `final`. The adapter now accepts both public final phases
 and still excludes analysis. A regression test covers commentary + final_answer
 without analysis. Only the one known missed reply in the new verification capture
-window was reconciled; no historical conversation import occurred. The next
-Desktop turn checks automatic final capture without reconciliation.
+window was reconciled; no historical conversation import occurred. A subsequent
+Desktop turn automatically captured both commentary and its final response with
+no reconciliation and no duplicate provider-message IDs. Its curator Run also
+completed without error. There are now 73 passing local Python checks.
 
 The real subscription curator completed the verification-noise window without an
 error. A zero-Memory result is correct for this probe: it contains agent verification

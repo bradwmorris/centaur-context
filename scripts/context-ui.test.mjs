@@ -31,7 +31,7 @@ test('stages only explicitly selected sources, preserves both checkouts and reco
 });
 for (const [name, change, expected] of [
   ['wrong host', m => m.coreRevision = '0'.repeat(40), /coreRevision/],
-  ['unsupported section', m => m.section = 'sources', /only schema/],
+  ['unsupported section', m => m.section = 'objects', /only schema/],
   ['unknown field', m => m.script = 'anything', /unknown field/],
   ['reserved ID', m => m.id = 'kanban', /invalid, reserved/],
   ['missing entry', m => m.entry = 'missing.tsx', /entry must appear/],
@@ -134,4 +134,17 @@ test('rejects local-path peer dependencies and incompatible React peers', async 
   await assert.rejects(readOverlay(f.config, sha), /Only host React/);
   await edit(pkg, p => p.peerDependencies = { react: '18.0.0' });
   await assert.rejects(readOverlay(f.config, sha), /peer must exactly match/);
+});
+
+test('Sources modules stage a typed section-specific registry without modifying core', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'context-source-test-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const overlay = path.join(temp, 'overlay');
+  execFileSync(process.execPath, [path.join(root, 'scripts/create-source-ui-example.mjs'), overlay]);
+  const staged = await stageComposition({ config: path.join(overlay, 'views.config.json') });
+  t.after(() => fs.rm(staged.stage, { recursive: true, force: true }));
+  assert.deepEqual(staged.metadata.views.map(v => [v.id, v.section]), [['sources:grid', 'sources'], ['sources:board', 'sources']]);
+  const registry = await fs.readFile(path.join(staged.web, 'src/modules/externalViews.ts'), 'utf8');
+  assert.match(registry, /section: "sources"/);
+  assert.doesNotMatch(registry, /section: "tasks"/);
 });
