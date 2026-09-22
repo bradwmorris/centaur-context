@@ -781,15 +781,26 @@ fn normalize_thread_key(value: &str) -> Option<String> {
         return None;
     }
     let parts = value.split(':').map(str::trim).collect::<Vec<_>>();
-    if parts.len() != 4 || parts.iter().any(|part| part.is_empty()) {
+    if parts.iter().any(|part| part.is_empty()) {
         return None;
     }
+    // Slack's optional bot routing namespace distinguishes agent sessions, not
+    // the underlying conversation. Principal authorization remains independent.
+    let (provider, workspace, channel, thread) = match parts.as_slice() {
+        [provider, workspace, channel, thread] => (*provider, *workspace, *channel, *thread),
+        [provider, workspace, bot, channel, thread]
+            if provider.eq_ignore_ascii_case("slack")
+                && bot
+                    .strip_prefix("bot-")
+                    .is_some_and(|name| !name.is_empty()) =>
+        {
+            (*provider, *workspace, *channel, *thread)
+        }
+        _ => return None,
+    };
     Some(format!(
-        "{}:{}:{}:{}",
-        parts[0].to_ascii_lowercase(),
-        parts[1],
-        parts[2],
-        parts[3]
+        "{}:{workspace}:{channel}:{thread}",
+        provider.to_ascii_lowercase()
     ))
 }
 
