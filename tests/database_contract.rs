@@ -221,7 +221,7 @@ async fn migrated_pool() -> Option<(tokio::sync::MutexGuard<'static, ()>, PgPool
 }
 
 #[tokio::test]
-async fn canonical_schema_has_exactly_sixteen_application_tables() {
+async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;
     };
@@ -237,6 +237,7 @@ async fn canonical_schema_has_exactly_sixteen_application_tables() {
             "context_apply_requests",
             "embeddings",
             "entities",
+            "maintenance_purge_receipts",
             "memories",
             "notes",
             "object_events",
