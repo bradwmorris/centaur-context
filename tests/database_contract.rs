@@ -237,6 +237,7 @@ async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping()
             "context_apply_requests",
             "embeddings",
             "entities",
+            "maintenance_execution_fences",
             "maintenance_purge_receipts",
             "memories",
             "notes",

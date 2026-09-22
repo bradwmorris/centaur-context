@@ -400,6 +400,42 @@ async fn reconciliation_requires_current_proof_and_preserves_terminal_history_at
         StatusCode::CONFLICT
     );
     assert!(exists(&pool, chat).await);
+    // A prior reviewed purge can leave a terminal Run's consulted IDs as history.
+    // The later approved Chat detach must preserve that array, including its order.
+    let old_fixture = object(&pool, "note").await;
+    let consulted_ids = vec![retained, old_fixture];
+    sqlx::query("UPDATE runs SET consulted_object_ids=$2 WHERE id=$1")
+        .bind(run)
+        .bind(&consulted_ids)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old_req = request(vec![selection(&pool, "objects", old_fixture).await]);
+    let (status, old_preview) = purge(&unapproved, old_req.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{old_preview}");
+    assert_eq!(old_preview["data"]["manifest"]["blockers"], json!([]));
+    let (status, old_result) = purge(
+        &app(&pool, old_preview["data"]["manifest_sha256"].as_str()),
+        commit(old_req, &old_preview),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{old_result}");
+    assert!(!exists(&pool, old_fixture).await);
+    assert_eq!(
+        row(&pool, "runs", run).await["consulted_object_ids"],
+        json!(consulted_ids)
+    );
+    // An ordinary SQL update has no maintenance allowlist and must still fail.
+    let ordinary_error = sqlx::query("UPDATE runs SET chat_object_id=NULL WHERE id=$1")
+        .bind(run)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        ordinary_error.to_string().contains("consulted Object"),
+        "{ordinary_error}"
+    );
+    assert_eq!(row(&pool, "runs", run).await["chat_object_id"], json!(chat));
     req["reconciliations"] = json!([detach(&pool, run, chat).await]);
     let before = row(&pool, "runs", run).await;
     let (status, preview) = purge(&unapproved, req.clone()).await;
@@ -437,6 +473,7 @@ async fn reconciliation_requires_current_proof_and_preserves_terminal_history_at
     assert!(!exists(&pool, chat).await);
     let mut after = row(&pool, "runs", run).await;
     assert!(after["chat_object_id"].is_null());
+    assert_eq!(after["consulted_object_ids"], json!(consulted_ids));
     after["chat_object_id"] = before["chat_object_id"].clone();
     after["updated_at"] = before["updated_at"].clone();
     assert_eq!(

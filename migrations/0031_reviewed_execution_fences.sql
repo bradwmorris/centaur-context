@@ -86,3 +86,43 @@ CREATE TRIGGER runs_execution_fence BEFORE INSERT OR UPDATE ON runs FOR EACH ROW
 CREATE TRIGGER chats_execution_fence BEFORE INSERT OR UPDATE ON chats FOR EACH ROW EXECUTE FUNCTION guard_maintenance_execution_fence();
 CREATE TRIGGER chat_messages_execution_fence BEFORE INSERT OR UPDATE ON chat_messages FOR EACH ROW EXECUTE FUNCTION guard_maintenance_execution_fence();
 CREATE TRIGGER object_events_execution_fence BEFORE INSERT ON object_events FOR EACH ROW EXECUTE FUNCTION guard_maintenance_execution_fence();
+
+CREATE OR REPLACE FUNCTION validate_run_references() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE candidate uuid;
+DECLARE cursor_id uuid;
+DECLARE preserve_historical boolean := false;
+BEGIN
+    -- The owner-reviewed operation may detach a disposable Chat without erasing
+    -- historical consulted IDs whose Objects were previously reviewed and purged.
+    -- All other row fields and the entire consulted array must remain identical.
+    IF TG_OP='UPDATE' AND to_regclass('pg_temp.context_reviewed_reconciliation') IS NOT NULL THEN
+        IF NEW.chat_object_id IS NULL
+           AND (to_jsonb(NEW)-ARRAY['chat_object_id','updated_at'])=(to_jsonb(OLD)-ARRAY['chat_object_id','updated_at']) THEN
+            EXECUTE 'SELECT EXISTS(SELECT 1 FROM pg_temp.context_reviewed_reconciliation WHERE run_id=$1)'
+                INTO preserve_historical USING OLD.id;
+        END IF;
+    END IF;
+    IF NOT preserve_historical THEN
+    FOREACH candidate IN ARRAY NEW.consulted_object_ids LOOP
+        IF NOT EXISTS (SELECT 1 FROM objects WHERE id=candidate) THEN
+            RAISE EXCEPTION 'consulted Object % does not exist',candidate;
+        END IF;
+    END LOOP;
+    END IF;
+    IF NEW.parent_run_id IS NOT NULL THEN
+        cursor_id := NEW.parent_run_id;
+        LOOP
+            IF cursor_id=NEW.id THEN RAISE EXCEPTION 'Run parent cycle'; END IF;
+            SELECT parent_run_id INTO cursor_id FROM runs WHERE id=cursor_id;
+            EXIT WHEN cursor_id IS NULL;
+        END LOOP;
+    END IF;
+    IF NEW.chat_object_id IS NOT NULL AND NEW.input ? 'first_message_id' THEN
+        IF NOT NEW.input ? 'last_message_id'
+           OR NOT EXISTS (SELECT 1 FROM chat_messages WHERE chat_object_id=NEW.chat_object_id AND id=(NEW.input->>'first_message_id')::uuid)
+           OR NOT EXISTS (SELECT 1 FROM chat_messages WHERE chat_object_id=NEW.chat_object_id AND id=(NEW.input->>'last_message_id')::uuid)
+        THEN RAISE EXCEPTION 'Run message window must belong to its Chat'; END IF;
+    END IF;
+    RETURN NEW;
+END $$;
