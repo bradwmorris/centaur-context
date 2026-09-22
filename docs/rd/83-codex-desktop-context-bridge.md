@@ -2,7 +2,8 @@
 
 GitHub Issue: [#83](https://github.com/bradwmorris/centaur-context/issues/83)
 
-Status: implementation and verification in progress in PR #88; not yet activated.
+Status: core checks passed; an opt-in adopter backend is deployed. Native desktop
+hook review and final desktop acceptance remain pending in PR #88.
 The GitHub Issue contains the published design and acceptance contract.
 
 ## Outcome
@@ -98,8 +99,8 @@ The future executor uses an isolated `codex/<issue-number>-<slug>` branch after 
 ## Remaining decisions
 
 - The destination for shared-core and mixed-domain conversations remains an adopter choice. Keep them unconfigured until explicitly selected; this does not block implementation of the generic routing contract.
-- Settle the minimum supported desktop version, packaging, and full-visible-chat capture coverage from real hook evidence.
-- Resolve the narrow code-execution receipt adapter with #78. Complete-work Memory acceptance cannot be waived by weakening evidence checks.
+- Verified runtime is 0.153.4 with paginated transcripts. Capture is text-only and begins at activation; native Desktop acceptance remains pending.
+- The narrow Git receipt adapter records only observed commit changes. It deliberately cannot attest tests, merge, deployment, or general task completion.
 
 ## Execution design and security review — 2026-09-22
 
@@ -193,3 +194,29 @@ Fixture databases: centaur_context_test_codex_a and centaur_context_test_codex_b
 No live instance was written or restarted during these checks. The installer is
 still confined to a temporary Codex home. Native Desktop activation and adopter
 subscription inference remain outstanding; this is not a completion declaration.
+
+
+### Adopter rollout and remaining activation boundary
+
+Both CI jobs passed for head `af6221add5481afa1fbd7b4286f6866c9f08b91a` and
+merge candidate `0abddaae4cb2ea73abe772e4fc0371e88832e785`. Local targeted checks
+include 71 Python tests. The checked ARM64 image was adopted by one explicitly
+configured private instance. Archive checksum, OCI config/manifest linkage,
+container runtime filesystem layers and clean stock UI revision were verified.
+The private listener's authenticated contract read passed. A real dedicated
+subscription-inference check returned the expected empty Memory-only plan for
+synthetic status noise. This proves the deployed inference capability, not a
+saved real-user Memory.
+
+The bridge package, separate credentials, owned MCP entry, five hooks and bounded
+recovery service are installed outside the repository. Native trust has not been
+bypassed. The running desktop uses bundled runtime 0.153.4 (application
+26.901.51231); the separately installed 26.903.61454 bundle supplied the isolated
+runtime verification. Both emit the supported paginated format.
+
+Computer-use automation refuses control of the desktop app itself. The owner
+must review the installed hook definitions through the documented CLI `/hooks`
+flow before desktop activation. No actual production desktop capture, historical
+import, or completed deployment acceptance is claimed while that review is
+pending. Keep the issue and PR open, then verify a new desktop turn, its actual
+curation result and later retrieval before merge/final image adoption.
