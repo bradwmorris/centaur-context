@@ -202,7 +202,7 @@ async fn reconciliation_requires_current_proof_and_preserves_terminal_history_at
         Some(MaintenanceConfig {
             api_token: TOKEN.into(),
             allowed_principal: "fixture-reviewer".into(),
-            approved_request_hashes: vec![],
+            approved_request_hashes: Default::default(),
         }),
     );
     assert_eq!(
