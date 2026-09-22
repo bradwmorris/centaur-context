@@ -36,7 +36,7 @@ export async function readOverlay(configPath, revision) {
     const manifestFile = await selectedFile(base, manifestPath);
     const manifest = await json(manifestFile);
     fields(manifest, ['schemaVersion', 'id', 'label', 'hostApiVersion', 'coreRevision', 'section', 'version', 'entry', 'files', 'order'], manifestPath);
-    if (manifest.schemaVersion !== 1 || manifest.hostApiVersion !== 1 || manifest.section !== 'tasks') fail(`${manifestPath}: only schema/API 1 and section tasks are supported`);
+    if (manifest.schemaVersion !== 1 || manifest.hostApiVersion !== 1 || !['tasks', 'sources'].includes(manifest.section)) fail(`${manifestPath}: only schema/API 1 and sections tasks/sources are supported`);
     if (!/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/.test(manifest.id) || ids.has(manifest.id)) fail(`${manifestPath}: invalid, reserved or duplicate view ID`);
     ids.add(manifest.id);
     if (!/^[0-9a-f]{40}$/.test(manifest.coreRevision) || manifest.coreRevision !== revision) fail(`${manifestPath}: coreRevision must equal ${revision}`);
@@ -118,7 +118,7 @@ export async function stageComposition({ config, coreRoot = root } = {}) {
           await fs.mkdir(path.dirname(dest), { recursive: true }); await fs.writeFile(dest, file.data);
         }
         imports.push(`import View${index} from ${JSON.stringify(`../../.context-overlay/views/${index}/${view.entry.replace(/\.(tsx?|jsx?)$/, '')}`)};`);
-        registrations.push(`{ id: ${JSON.stringify(view.id)}, label: ${JSON.stringify(view.label)}, section: "tasks", icon: "◇", render: props => createElement(View${index}, props) }`);
+        registrations.push(`{ id: ${JSON.stringify(view.id)}, label: ${JSON.stringify(view.label)}, section: ${JSON.stringify(view.section)}, icon: "◇", render: props => createElement(View${index}, props) }`);
       }
       await fs.writeFile(path.join(web, 'src/modules/externalViews.ts'), `import { createElement } from "react";\nimport type { ContextUiModule } from "./moduleRegistry";\n${imports.join('\n')}\nexport const externalViews: ContextUiModule[] = [${registrations.join(',\n')}];\n`);
       const tsconfig = await json(path.join(web, 'tsconfig.app.json'));

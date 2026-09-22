@@ -1,0 +1,44 @@
+name: Sources UI container proof
+on:
+  pull_request:
+    paths:
+      - .github/workflows/sources-ui-proof.yml
+      - src/source_previews.rs
+      - examples/source-views/**
+      - scripts/create-source-ui-example.mjs
+      - scripts/source-ui-smoke.py
+      - web/src/modules/**
+      - web/src/ui/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Build independently owned Sources views and stock rollback
+        run: |
+          node scripts/create-source-ui-example.mjs "$RUNNER_TEMP/overlay"
+          node scripts/context-ui.mjs image --config "$RUNNER_TEMP/overlay/views.config.json" --tag context-sources:acceptance
+          node scripts/context-ui.mjs image --tag context-sources:stock
+          test -z "$(git status --porcelain)"
+      - name: Export reproducible review images
+        run: |
+          mkdir "$RUNNER_TEMP/proof"
+          docker save context-sources:acceptance context-sources:stock | gzip > "$RUNNER_TEMP/proof/images.tar.gz"
+          docker image inspect context-sources:acceptance context-sources:stock > "$RUNNER_TEMP/proof/images.json"
+          cp -R "$RUNNER_TEMP/overlay" "$RUNNER_TEMP/proof/overlay"
+          git rev-parse HEAD > "$RUNNER_TEMP/proof/core-revision.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sources-ui-proof
+          path: ${{ runner.temp }}/proof
+          retention-days: 7

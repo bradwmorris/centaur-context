@@ -50,3 +50,33 @@ describe("view host", () => {
     expect(reconcile([newer])).toEqual([newer]);
   });
 });
+
+describe("Sources view host", () => {
+  it("keeps Source snapshots isolated and navigates to canonical detail", async () => {
+    const { sourceViewProps } = await import("./moduleRegistry");
+    const original = { object_id: "source-one", title: "Original", provenance: { nested: { value: 1 } } } as unknown as import("../types").Source;
+    const props = sourceViewProps({ ...context(), sources: [original] });
+    (props.sources[0] as import("../types").Source).title = "Changed";
+    expect(original.title).toBe("Original");
+    expect(props.completeness).toBe("complete");
+    expect(props).not.toHaveProperty("changeStatus");
+    expect(props).not.toHaveProperty("onSourcesChange");
+    props.openSource(original.object_id);
+    expect(window.location.pathname).toContain("sources/source-one");
+    expect(sourceViewProps({ ...context(), error: "failed" }).completeness).toBe("unknown");
+  });
+  it("recovers a broken Sources view to Sources, not Tasks", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.history.replaceState({}, "", "/sources?view=sources%3Abroken");
+    render(<ContextModuleView module={{ id: "sources:broken", section: "sources", label: "Broken", icon: "", render: () => { throw new Error("broken"); } }} context={context()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Return to list" }));
+    expect(window.location.pathname).toBe("/sources"); spy.mockRestore();
+  });
+  it("explains a removed Sources view even when no Source modules remain", () => {
+    window.history.replaceState({}, "", "/sources?view=sources%3Aremoved");
+    render(<ModuleViewSwitcher section="sources" activeId={null} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Showing the list");
+    fireEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(window.location.pathname + window.location.search).toBe("/sources");
+  });
+});
