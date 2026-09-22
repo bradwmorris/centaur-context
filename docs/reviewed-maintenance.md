@@ -59,3 +59,45 @@ reconcile a possible commit receipt. CPU-only analysis runs outside the async
 request worker and never owns a database connection. New application
 tables fail closed until the fixed purge policy is extended. Disable temporary
 maintenance credentials and approval hashes after the reviewed operation.
+
+## Typed reconciliation (policy version 2)
+
+The same request accepts `reconciliations` alongside `selections`; their combined
+limit is 1,000. The list defaults to empty for existing purge requests. Each action
+requires an exact audited row hash and a nonempty `reason` (at most 2,000 characters):
+
+- `retire_placeholder`: `embedding_id`, `row_sha256`, `replacement_id`, `reason`.
+  Only untouched pending `__unconfigured__` object jobs qualify. The configured
+  current model, dimensions, input mode, format, current Object hash and a valid
+  completed replacement vector must all agree. Object and replacement must remain.
+- `detach_chat`: `run_id`, `row_sha256`, `chat_id`, `reason`. Clear only the Chat FK
+  of an unpinned terminal retained Run; the exact Chat must be selected for deletion
+  in this request. Preserve original execution payloads, timestamps and Events.
+- `cancel_interaction`: `run_id`, `row_sha256`, `chat_id`, `owner_observations`,
+  `evidence_sha256`, `reason`. Cancellation requests cannot also delete or detach.
+  Only unpinned nonterminal Slack wrappers qualify; active/pinned related work blocks.
+
+Each owner observation contains `context_run_id`, `thread_key`, RFC3339
+`observed_at`, `operation: "interrupt_active_execution"`, `identity_origin`
+(`stored_trace`, or explicitly owner-verified `runtime_sink_mapping` when no
+external key was recorded), and `response` containing `ok: true`,
+`interrupted: false`, `execution_id: null`, and the same `thread_key`. Cover every
+external key in the related execution history. Missing, unknown, interrupted,
+future or older-than-30-minute evidence rejects. `evidence_sha256` is SHA-256 of
+compact recursively key-sorted UTF-8 JSON for the full observation array, preserving
+array order and exact timestamp strings. A caller cannot self-authorize evidence:
+the separate maintenance principal and exact server-approved manifest are required.
+
+Cancellation records current termination time and durable provider/Run identity
+fences. It proves no active execution was observed and prevents further Context
+writes for that exact discarded thread; it does not claim upstream retries were
+disabled. Fences survive later purges and cannot be selected for content deletion.
+Ordinary ingestion and tool writes, new Run/Chat identities, child links and Event
+writes cannot resurrect the discarded thread.
+
+The preview adds `changes` and `proofs`; the recovery export includes before-state
+and retained replacement evidence. The receipt records actual committed after-hashes
+and timestamps. Original Chat identity and reconciliation evidence are also returned
+by Run detail as `maintenance_history`. Timestamp-independent projections bind
+approval; original execution content remains unchanged. A new ordinary purge preview
+is required after cancellation, with its own reviewed hash and recovery export.

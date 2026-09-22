@@ -99,7 +99,10 @@ pub(crate) async fn catalog(
             .bind(&name).fetch_all(&state.app.pool).await?;
         let category = if extension_owned {
             "extension_bookkeeping"
-        } else if name == "_sqlx_migrations" || name == "maintenance_purge_receipts" {
+        } else if name == "_sqlx_migrations"
+            || name == "maintenance_purge_receipts"
+            || name == "maintenance_execution_fences"
+        {
             "bookkeeping"
         } else if table {
             "application_table"
@@ -188,10 +191,434 @@ pub(crate) struct PurgeRequest {
     idempotency_key: String,
     selections: Vec<Selection>,
     #[serde(default)]
+    reconciliations: Vec<Reconciliation>,
+    #[serde(default)]
     commit: bool,
     manifest_sha256: Option<String>,
     recovery_export_sha256: Option<String>,
 }
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Reconciliation {
+    CancelInteraction {
+        run_id: uuid::Uuid,
+        row_sha256: String,
+        chat_id: uuid::Uuid,
+        owner_observations: Vec<ExecutorObservation>,
+        evidence_sha256: String,
+        reason: String,
+    },
+    RetirePlaceholder {
+        embedding_id: uuid::Uuid,
+        row_sha256: String,
+        replacement_id: uuid::Uuid,
+        reason: String,
+    },
+    DetachChat {
+        run_id: uuid::Uuid,
+        row_sha256: String,
+        chat_id: uuid::Uuid,
+        reason: String,
+    },
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExecutorObservation {
+    context_run_id: uuid::Uuid,
+    thread_key: String,
+    observed_at: String,
+    operation: String,
+    identity_origin: String,
+    response: ExecutorResponse,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExecutorResponse {
+    ok: bool,
+    interrupted: bool,
+    execution_id: Option<uuid::Uuid>,
+    thread_key: String,
+}
+fn thread_keys(value: &Value, keys: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(o) => {
+            for (k, v) in o {
+                if k == "source_thread_id" {
+                    if let Some(s) = v.as_str().filter(|s| !s.is_empty()) {
+                        keys.insert(s.into());
+                    }
+                } else {
+                    thread_keys(v, keys);
+                }
+            }
+        }
+        Value::Array(a) => {
+            for v in a {
+                thread_keys(v, keys);
+            }
+        }
+        _ => (),
+    }
+}
+fn cancellation_change(
+    rows: &Snapshot,
+    request: &PurgeRequest,
+    action: &Reconciliation,
+) -> Result<(Value, Vec<Value>), IntakeError> {
+    let Reconciliation::CancelInteraction {
+        run_id,
+        row_sha256,
+        chat_id,
+        owner_observations,
+        evidence_sha256,
+        reason,
+    } = action
+    else {
+        return Err(IntakeError::BadRequest(
+            "cancellation action required".into(),
+        ));
+    };
+    let (run_id, chat_id, hash, observations, evidence_sha256) = (
+        *run_id,
+        *chat_id,
+        row_sha256.as_str(),
+        owner_observations.as_slice(),
+        evidence_sha256.as_str(),
+    );
+    let run = exact_row(rows, "runs", run_id, Some(hash))?;
+    let chat = rows["chats"]
+        .iter()
+        .find(|r| r["object_id"] == json!(chat_id))
+        .ok_or_else(|| IntakeError::Conflict("exact provider Chat missing".into()))?;
+    if run["kind"] != "slack_interaction"
+        || !matches!(run["status"].as_str(), Some("open" | "running"))
+        || run["pinned"] != false
+        || run["chat_object_id"] != json!(chat_id)
+        || chat["provider"] != "slack"
+    {
+        return Err(IntakeError::Conflict(
+            "only unpinned nonterminal Slack interaction wrappers may be cancelled".into(),
+        ));
+    }
+    for col in ["workspace_id", "channel_id", "thread_id"] {
+        if chat[col].as_str().is_none_or(str::is_empty) || run["input"][col] != chat[col] {
+            return Err(IntakeError::Conflict(
+                "ambiguous provider Chat identity".into(),
+            ));
+        }
+    }
+    let observation_json =
+        serde_json::to_value(observations).map_err(|e| IntakeError::Internal(e.to_string()))?;
+    if observations.is_empty()
+        || observations.len() > 20
+        || digest(&observation_json) != evidence_sha256
+    {
+        return Err(IntakeError::Conflict(
+            "exact authenticated owner observation digest required".into(),
+        ));
+    }
+    let mut descendants = BTreeSet::from([run_id.to_string()]);
+    loop {
+        let before = descendants.len();
+        for r in &rows["runs"] {
+            if r["parent_run_id"]
+                .as_str()
+                .is_some_and(|id| descendants.contains(id))
+            {
+                descendants.insert(r["id"].as_str().unwrap().into());
+            }
+        }
+        if before == descendants.len() {
+            break;
+        }
+    }
+    let mut recorded_keys = BTreeSet::new();
+    for r in &rows["runs"] {
+        if r["chat_object_id"] == json!(chat_id)
+            || r["id"].as_str().is_some_and(|id| descendants.contains(id))
+        {
+            thread_keys(&r["trace"], &mut recorded_keys);
+        }
+    }
+    // A child tool trace may use the local Chat/Run UUID as its Context key;
+    // do not mistake that proven local identity for an external executor key.
+    recorded_keys.retain(|k| k != &chat_id.to_string() && !descendants.contains(k));
+    if recorded_keys.iter().any(|k| !k.starts_with("slack:")) {
+        return Err(IntakeError::Conflict(
+            "unclassified related execution identity requires owner review".into(),
+        ));
+    }
+    let mut observed_keys = BTreeSet::new();
+    for o in observations {
+        let parts: Vec<_> = o.thread_key.split(':').collect();
+        let observed_at = time::OffsetDateTime::parse(
+            &o.observed_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .map_err(|_| IntakeError::Conflict("invalid owner observation timestamp".into()))?;
+        let age = time::OffsetDateTime::now_utc() - observed_at;
+        if o.context_run_id != run_id
+            || o.operation != "interrupt_active_execution"
+            || !o.response.ok
+            || o.response.interrupted
+            || o.response.execution_id.is_some()
+            || o.response.thread_key != o.thread_key
+            || age.whole_seconds() < -30
+            || age > time::Duration::minutes(30)
+            || parts.len() != 5
+            || parts[0] != "slack"
+            || parts[1] != chat["workspace_id"].as_str().unwrap()
+            || parts[2].is_empty()
+            || parts[3] != chat["channel_id"].as_str().unwrap()
+            || parts[4] != chat["thread_id"].as_str().unwrap()
+            || (recorded_keys.is_empty() && o.identity_origin != "runtime_sink_mapping")
+            || (!recorded_keys.is_empty() && o.identity_origin != "stored_trace")
+            || !observed_keys.insert(o.thread_key.clone())
+        {
+            return Err(IntakeError::Conflict(
+                "owner receipt does not prove no active execution for exact provider thread".into(),
+            ));
+        }
+    }
+    if !recorded_keys.is_empty() && observed_keys != recorded_keys {
+        return Err(IntakeError::Conflict(
+            "owner observations must cover all recorded execution thread identities".into(),
+        ));
+    }
+    let cancellation_ids: BTreeSet<String> = request
+        .reconciliations
+        .iter()
+        .filter_map(|a| {
+            if let Reconciliation::CancelInteraction { run_id, .. } = a {
+                Some(run_id.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut related_identities =
+        vec![json!({"id":run["id"],"kind":run["kind"],"idempotency_key":run["idempotency_key"]})];
+    let mut proofs = vec![proof_row("chats", chat)];
+    for r in &rows["runs"] {
+        if r["id"] == json!(run_id) {
+            continue;
+        }
+        if r["chat_object_id"] == json!(chat_id)
+            || r["id"].as_str().is_some_and(|id| descendants.contains(id))
+        {
+            if r["pinned"] != false
+                || (!r["id"]
+                    .as_str()
+                    .is_some_and(|id| cancellation_ids.contains(id))
+                    && !crate::runs::is_terminal(&r["kind"], &r["status"], &r["completed_at"]))
+            {
+                return Err(IntakeError::Conflict(
+                    "active or pinned related execution blocks cancellation".into(),
+                ));
+            }
+            proofs.push(proof_row("runs", r));
+            related_identities.push(
+                json!({"id":r["id"],"kind":r["kind"],"idempotency_key":r["idempotency_key"]}),
+            );
+        }
+    }
+    Ok((
+        json!({"action":"cancel_interaction","table":"runs","key":key("runs",run),"before_sha256":digest(run),"reason":reason,"changes":{"status":"cancelled","completed_at":"$commit_time"},"fence":{"run_id":run_id,"run_kind":run["kind"],"idempotency_key":run["idempotency_key"],"chat_object_id":chat_id,"provider":"slack","workspace_id":chat["workspace_id"],"channel_id":chat["channel_id"],"thread_id":chat["thread_id"],"related_run_identities":related_identities},"owner_observations":observation_json,"evidence_sha256":evidence_sha256}),
+        proofs,
+    ))
+}
+
+#[derive(Default)]
+struct ReconciliationPlan {
+    deletes: Vec<Selection>,
+    changes: Vec<Value>,
+    proofs: Vec<Value>,
+    recovery: Vec<Value>,
+}
+fn proof_row(table: &str, row: &Value) -> Value {
+    json!({"table":table,"key":key(table,row),"row_sha256":digest(row)})
+}
+fn exact_row<'a>(
+    rows: &'a Snapshot,
+    table: &str,
+    id: uuid::Uuid,
+    hash: Option<&str>,
+) -> Result<&'a Value, IntakeError> {
+    let row = rows[table]
+        .iter()
+        .find(|r| r["id"] == json!(id))
+        .ok_or_else(|| IntakeError::Conflict(format!("required {table} row missing")))?;
+    if hash.is_some_and(|h| digest(row) != h) {
+        return Err(IntakeError::Conflict(
+            "reconciliation row hash is stale".into(),
+        ));
+    }
+    Ok(row)
+}
+async fn reconciliation_plan(
+    tx: &mut Transaction<'_, Postgres>,
+    rows: &Snapshot,
+    request: &PurgeRequest,
+    client: Option<&crate::embeddings::EmbeddingClient>,
+) -> Result<ReconciliationPlan, IntakeError> {
+    let mut plan = ReconciliationPlan::default();
+    if request
+        .reconciliations
+        .iter()
+        .any(|a| matches!(a, Reconciliation::CancelInteraction { .. }))
+        && (!request.selections.is_empty()
+            || request
+                .reconciliations
+                .iter()
+                .any(|a| !matches!(a, Reconciliation::CancelInteraction { .. })))
+    {
+        return Err(IntakeError::BadRequest(
+            "cancellation requires a separate reviewed request before purge".into(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let replacements: Vec<uuid::Uuid> = request
+        .reconciliations
+        .iter()
+        .filter_map(|a| match a {
+            Reconciliation::RetirePlaceholder { replacement_id, .. } => Some(*replacement_id),
+            _ => None,
+        })
+        .collect();
+    let current: Vec<(uuid::Uuid,String,Option<i32>)> = sqlx::query_as("SELECT e.id,object_embedding_source_hash($2,o.kind,o.title,o.description),vector_dims(e.embedding) FROM embeddings e JOIN objects o ON o.id=e.object_id WHERE e.id=ANY($1)")
+        .bind(&replacements).bind(crate::embeddings::OBJECT_EMBEDDING_FORMAT).fetch_all(&mut **tx).await?;
+    for action in &request.reconciliations {
+        let (table, row, reason) = match action {
+            Reconciliation::CancelInteraction {
+                run_id,
+                row_sha256,
+                reason,
+                ..
+            } => {
+                let (change, proofs) = cancellation_change(rows, request, action)?;
+                let run = exact_row(rows, "runs", *run_id, Some(row_sha256))?;
+                plan.changes.push(change);
+                plan.proofs.extend(proofs);
+                plan.recovery
+                    .push(json!({"table":"runs","key":key("runs",run),"row":run}));
+                ("runs", run, reason)
+            }
+            Reconciliation::RetirePlaceholder {
+                embedding_id,
+                row_sha256,
+                replacement_id,
+                reason,
+            } => {
+                let placeholder = exact_row(rows, "embeddings", *embedding_id, Some(row_sha256))?;
+                let replacement = exact_row(rows, "embeddings", *replacement_id, None)?;
+                let object_id: uuid::Uuid =
+                    serde_json::from_value(placeholder["object_id"].clone())
+                        .map_err(|e| IntakeError::Internal(e.to_string()))?;
+                let object = exact_row(rows, "objects", object_id, None)?;
+                let client = client.ok_or_else(|| {
+                    IntakeError::Conflict("configured embedding provider required".into())
+                })?;
+                let metadata = current
+                    .iter()
+                    .find(|r| r.0 == *replacement_id)
+                    .ok_or_else(|| IntakeError::Conflict("replacement proof missing".into()))?;
+                if placeholder["model"] != "__unconfigured__"
+                    || !placeholder["artifact_id"].is_null()
+                    || placeholder["status"] != "pending"
+                    || placeholder["attempts"] != 0
+                    || placeholder["dimensions"] != 1
+                    || !placeholder["embedding"].is_null()
+                    || replacement["object_id"] != placeholder["object_id"]
+                    || !replacement["artifact_id"].is_null()
+                    || replacement["status"] != "completed"
+                    || replacement["model"] != client.model()
+                    || replacement["dimensions"] != client.dimensions()
+                    || replacement["input_mode"] != client.document_mode()
+                    || replacement["format_version"] != crate::embeddings::OBJECT_EMBEDDING_FORMAT
+                    || replacement["source_hash"] != metadata.1
+                    || metadata.2 != Some(client.dimensions())
+                {
+                    return Err(IntakeError::Conflict(
+                        "placeholder lacks a valid current configured replacement".into(),
+                    ));
+                }
+                for (t, r) in [("objects", object), ("embeddings", replacement)] {
+                    let mut proof = proof_row(t, r);
+                    proof["must_retain"] = json!(true);
+                    plan.proofs.push(proof);
+                }
+                plan.proofs.push(json!({"embedding_configuration":{"model":client.model(),"dimensions":client.dimensions(),"input_mode":client.document_mode(),"format_version":crate::embeddings::OBJECT_EMBEDDING_FORMAT},"current_source_hash":metadata.1}));
+                for (t, r) in [("objects", object), ("embeddings", replacement)] {
+                    plan.recovery
+                        .push(json!({"table":t,"key":key(t,r),"row":r}));
+                }
+                plan.deletes.push(Selection {
+                    table: "embeddings".into(),
+                    key: key("embeddings", placeholder),
+                    row_sha256: row_sha256.clone(),
+                    reason: reason.clone(),
+                });
+                ("embeddings", placeholder, reason)
+            }
+            Reconciliation::DetachChat {
+                run_id,
+                row_sha256,
+                chat_id,
+                reason,
+            } => {
+                let run = exact_row(rows, "runs", *run_id, Some(row_sha256))?;
+                let chat = exact_row(rows, "objects", *chat_id, None)?;
+                if run["chat_object_id"] != json!(chat_id)
+                    || chat["kind"] != "chat"
+                    || run["pinned"] != false
+                    || !crate::runs::is_terminal(&run["kind"], &run["status"], &run["completed_at"])
+                {
+                    return Err(IntakeError::Conflict(
+                        "detach requires an unpinned terminal Run and its exact Chat".into(),
+                    ));
+                }
+                if !request
+                    .selections
+                    .iter()
+                    .any(|s| s.table == "objects" && s.key == json!({"id":chat_id}))
+                    || request
+                        .selections
+                        .iter()
+                        .any(|s| s.table == "runs" && s.key == json!({"id":run_id}))
+                {
+                    return Err(IntakeError::Conflict(
+                        "detach requires discarded Chat and retained Run".into(),
+                    ));
+                }
+                let mut after = run.clone();
+                after["chat_object_id"] = Value::Null;
+                after
+                    .as_object_mut()
+                    .expect("Run object")
+                    .remove("updated_at");
+                plan.changes.push(json!({"action":"detach_chat","table":"runs","key":key("runs",run),"before_sha256":digest(run),"after_sha256_excluding_updated_at":digest(&after),"removed_chat_object_id":chat_id,"reason":reason,"changes":{"chat_object_id":null}}));
+                plan.proofs.push(proof_row("objects", chat));
+                plan.recovery
+                    .push(json!({"table":"runs","key":key("runs",run),"row":run}));
+                ("runs", run, reason)
+            }
+        };
+        if reason.trim().is_empty()
+            || reason.len() > 2000
+            || !seen.insert((table.to_owned(), key(table, row).to_string()))
+        {
+            return Err(IntakeError::BadRequest(
+                "reconciliation needs a unique row and explicit bounded reason".into(),
+            ));
+        }
+    }
+    plan.proofs.sort_by_key(Value::to_string);
+    plan.proofs.dedup();
+    plan.recovery.sort_by_key(Value::to_string);
+    plan.recovery.dedup();
+    Ok(plan)
+}
+
 type Snapshot = BTreeMap<String, Vec<Value>>;
 type Selected = BTreeMap<(String, String), String>;
 
@@ -220,6 +647,7 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
         !TABLES.contains(&n.as_str())
             && n != "_sqlx_migrations"
             && n != "maintenance_purge_receipts"
+            && n != "maintenance_execution_fences"
     }) {
         return Err(IntakeError::Conflict(
             "application schema changed: purge policy requires review".into(),
@@ -262,20 +690,31 @@ fn contains_id(value: &Value, ids: &BTreeSet<String>) -> bool {
 async fn preview(
     tx: &mut Transaction<'_, Postgres>,
     request: &PurgeRequest,
+    client: Option<&crate::embeddings::EmbeddingClient>,
 ) -> Result<Value, IntakeError> {
     let rows = snapshot(tx).await?;
+    let plan = reconciliation_plan(tx, &rows, request, client).await?;
     // Every live FK is checked from the actual schema, including composite keys.
     let fks: Vec<(String,String,Vec<String>,Vec<String>)> = sqlx::query_as("SELECT src.relname,dst.relname,array_agg(sa.attname ORDER BY k.ord)::text[],array_agg(da.attname ORDER BY k.ord)::text[] FROM pg_constraint c JOIN pg_class src ON src.oid=c.conrelid JOIN pg_namespace n ON n.oid=src.relnamespace JOIN pg_class dst ON dst.oid=c.confrelid CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY k(s,d,ord) JOIN pg_attribute sa ON sa.attrelid=src.oid AND sa.attnum=k.s JOIN pg_attribute da ON da.attrelid=dst.oid AND da.attnum=k.d WHERE c.contype='f' AND n.nspname='public' GROUP BY c.oid,src.relname,dst.relname ORDER BY src.relname,dst.relname,c.oid").fetch_all(&mut **tx).await?;
     let request = request.clone();
-    tokio::task::spawn_blocking(move || preview_rows(rows, &request, fks))
+    tokio::task::spawn_blocking(move || preview_rows_with_plan(rows, &request, fks, plan))
         .await
         .map_err(|e| IntakeError::Internal(e.to_string()))?
 }
 type ForeignKey = (String, String, Vec<String>, Vec<String>);
+#[cfg(test)]
 fn preview_rows(
     rows: Snapshot,
     request: &PurgeRequest,
     fks: Vec<ForeignKey>,
+) -> Result<Value, IntakeError> {
+    preview_rows_with_plan(rows, request, fks, ReconciliationPlan::default())
+}
+fn preview_rows_with_plan(
+    rows: Snapshot,
+    request: &PurgeRequest,
+    fks: Vec<ForeignKey>,
+    plan: ReconciliationPlan,
 ) -> Result<Value, IntakeError> {
     let mut set = Selected::new();
     for s in &request.selections {
@@ -296,6 +735,17 @@ fn preview_rows(
         }
         if !add(&mut set, &s.table, row, &s.reason) {
             return Err(IntakeError::BadRequest("duplicate selection".into()));
+        }
+    }
+    for s in &plan.deletes {
+        let row = rows[&s.table]
+            .iter()
+            .find(|r| key(&s.table, r) == s.key)
+            .expect("validated reconciliation");
+        if !add(&mut set, &s.table, row, &s.reason) {
+            return Err(IntakeError::BadRequest(
+                "duplicate reconciled deletion".into(),
+            ));
         }
     }
     loop {
@@ -353,6 +803,16 @@ fn preview_rows(
         }
     }
     let mut blockers = Vec::new();
+    for proof in &plan.proofs {
+        if proof["must_retain"] != true {
+            continue;
+        }
+        if let Some(table) = proof["table"].as_str()
+            && set.contains_key(&(table.into(), proof["key"].to_string()))
+        {
+            blockers.push(json!({"table":table,"key":proof["key"],"reason":"reconciliation proof must remain retained"}));
+        }
+    }
     for (src, dst, sc, dc) in fks {
         if !rows.contains_key(&src)
             && rows
@@ -367,7 +827,21 @@ fn preview_rows(
             if removed_destinations.is_empty() {
                 continue;
             }
-            for sr in srs.iter().filter(|r| !selected(&set, &src, r)) {
+            for original in srs.iter().filter(|r| !selected(&set, &src, r)) {
+                let projected = plan
+                    .changes
+                    .iter()
+                    .find(|c| {
+                        c["action"] == "detach_chat"
+                            && c["table"] == src
+                            && c["key"] == key(&src, original)
+                    })
+                    .map(|_| {
+                        let mut r = original.clone();
+                        r["chat_object_id"] = Value::Null;
+                        r
+                    });
+                let sr = projected.as_ref().unwrap_or(original);
                 if removed_destinations.iter().any(|dr| {
                     sc.iter()
                         .zip(&dc)
@@ -392,9 +866,8 @@ fn preview_rows(
     for chat in &rows["chats"] {
         if !selected(&set, "chats", chat) {
             for column in [
-                "last_ingested_message_id",
-                "last_queued_message_id",
-                "last_curated_message_id",
+                "curation_queued_through_message_id",
+                "curated_through_message_id",
             ] {
                 if selected_id(&set, "chat_messages", &chat[column]) {
                     blockers.push(json!({"table":"chats","key":key("chats",chat),"reason":format!("retained live Chat cursor {column} references selected message")}));
@@ -425,18 +898,9 @@ fn preview_rows(
     for (table, rs) in &rows {
         for row in rs {
             let mentions_selected = contains_id(row, &ids);
-            // A successful Memory preview is finished work with retained history,
-            // not an active operation. Require both its kind and completion time.
-            let completed_memory_preview = row["kind"] == "memory_dream"
-                && row["status"] == "preview"
-                && row["completed_at"].is_string();
             if table == "runs"
                 && mentions_selected
-                && !completed_memory_preview
-                && !matches!(
-                    row["status"].as_str(),
-                    Some("completed" | "failed" | "reversed" | "delivered" | "suppressed")
-                )
+                && !crate::runs::is_terminal(&row["kind"], &row["status"], &row["completed_at"])
             {
                 blockers.push(json!({"table":table,"key":key(table,row),"row_sha256":digest(row),"reason":"nonterminal Run references selected fixtures; wait for execution to finish"}));
             }
@@ -448,8 +912,11 @@ fn preview_rows(
     historical.sort_by_key(Value::to_string);
     blockers.sort_by_key(Value::to_string);
     blockers.dedup();
+    export.extend(plan.recovery);
+    export.sort_by_key(Value::to_string);
+    export.dedup();
     let export = json!(export);
-    let result = json!({"policy_version":1,"rows":manifest,"counts":counts,"blockers":blockers,"retained_references":historical,"recovery_export_sha256":digest(&export)});
+    let result = json!({"policy_version":2,"changes":plan.changes,"proofs":plan.proofs,"rows":manifest,"counts":counts,"blockers":blockers,"retained_references":historical,"recovery_export_sha256":digest(&export)});
     Ok(json!({"manifest_sha256":digest(&result),"manifest":result,"recovery_export":export}))
 }
 
@@ -468,8 +935,8 @@ async fn execute_purge(
 ) -> Result<Json<Value>, IntakeError> {
     if request.idempotency_key.trim().is_empty()
         || request.idempotency_key.len() > 300
-        || request.selections.is_empty()
-        || request.selections.len() > 1000
+        || request.selections.len() + request.reconciliations.len() == 0
+        || request.selections.len() + request.reconciliations.len() > 1000
     {
         return Err(IntakeError::BadRequest(
             "require idempotency key and 1..1000 exact selections".into(),
@@ -493,6 +960,10 @@ async fn execute_purge(
                 "exact purge manifest has not been approved".into(),
             ));
         }
+        // Ingestion checks hold SHARE until commit; this closes the observation/write race.
+        sqlx::query("LOCK TABLE maintenance_execution_fences IN EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await?;
         // Serialize receipts and exclude all application writers while checking closure.
         sqlx::query("LOCK TABLE maintenance_purge_receipts IN SHARE ROW EXCLUSIVE MODE")
             .execute(&mut *tx)
@@ -518,7 +989,7 @@ async fn execute_purge(
             .execute(&mut *tx)
             .await?;
     }
-    let result = preview(&mut tx, &request).await?;
+    let result = preview(&mut tx, &request, state.app.embeddings.as_ref()).await?;
     if !request.commit {
         tx.rollback().await?;
         return Ok(Json(json!({"data":result})));
@@ -539,15 +1010,50 @@ async fn execute_purge(
             "retained live dependencies block purge".into(),
         ));
     }
+    sqlx::query(
+        "CREATE TEMP TABLE context_reviewed_reconciliation(run_id uuid PRIMARY KEY) ON COMMIT DROP",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let mut applied_changes = Vec::new();
+    for change in result["manifest"]["changes"].as_array().expect("changes") {
+        sqlx::query("INSERT INTO pg_temp.context_reviewed_reconciliation VALUES($1::text::uuid)")
+            .bind(change["key"]["id"].as_str())
+            .execute(&mut *tx)
+            .await?;
+        let sql = if change["action"] == "cancel_interaction" {
+            let f = &change["fence"];
+            sqlx::query("INSERT INTO maintenance_execution_fences(run_id,run_kind,idempotency_key,chat_object_id,provider,workspace_id,channel_id,thread_id,owner_evidence,principal_id,related_run_identities) VALUES($1::text::uuid,'slack_interaction',$2,$3::text::uuid,'slack',$4,$5,$6,$7,$8,$9)")
+                .bind(f["run_id"].as_str()).bind(f["idempotency_key"].as_str()).bind(f["chat_object_id"].as_str()).bind(f["workspace_id"].as_str()).bind(f["channel_id"].as_str()).bind(f["thread_id"].as_str()).bind(&change["owner_observations"]).bind(&actor.actor_id).bind(&f["related_run_identities"]).execute(&mut *tx).await?;
+            "UPDATE runs SET status='cancelled',completed_at=now(),updated_at=now() WHERE id=$1::text::uuid RETURNING to_jsonb(runs)"
+        } else {
+            "UPDATE runs SET chat_object_id=NULL,updated_at=now() WHERE id=$1::text::uuid RETURNING to_jsonb(runs)"
+        };
+        let actual: Value = sqlx::query_scalar(sql)
+            .bind(change["key"]["id"].as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+        let mut recorded = change.clone();
+        recorded["after_sha256"] = json!(digest(&actual));
+        recorded["committed_at"] = actual["updated_at"].clone();
+        applied_changes.push(recorded);
+    }
     sqlx::query("CREATE TEMP TABLE context_reviewed_purge(table_name text NOT NULL,row_id uuid NOT NULL,PRIMARY KEY(table_name,row_id)) ON COMMIT DROP").execute(&mut *tx).await?;
     let manifest = result["manifest"]["rows"]
         .as_array()
         .expect("manifest rows");
     for row in manifest {
-        if matches!(row["table"].as_str(), Some("artifacts" | "object_events")) {
+        if matches!(
+            row["table"].as_str(),
+            Some("artifacts" | "object_events" | "chats")
+        ) {
             sqlx::query("INSERT INTO pg_temp.context_reviewed_purge VALUES($1,$2::text::uuid)")
                 .bind(row["table"].as_str())
-                .bind(row["key"]["id"].as_str())
+                .bind(
+                    row["key"]["id"]
+                        .as_str()
+                        .or_else(|| row["key"]["object_id"].as_str()),
+                )
                 .execute(&mut *tx)
                 .await?;
         }
@@ -608,7 +1114,7 @@ async fn execute_purge(
     sqlx::query("SET CONSTRAINTS ALL IMMEDIATE")
         .execute(&mut *tx)
         .await?;
-    let receipt = json!({"manifest_sha256":result["manifest_sha256"],"counts":result["manifest"]["counts"],"rows":manifest.iter().map(|r|json!({"table":r["table"],"key":r["key"],"row_sha256":r["row_sha256"]})).collect::<Vec<_>>(),"retained_reference_count":result["manifest"]["retained_references"].as_array().map(Vec::len),"recovery_export_sha256":result["manifest"]["recovery_export_sha256"]});
+    let receipt = json!({"changes":applied_changes,"proofs":result["manifest"]["proofs"],"actor_id":actor.actor_id,"recorded_at":time::OffsetDateTime::now_utc().to_string(),"manifest_sha256":result["manifest_sha256"],"counts":result["manifest"]["counts"],"rows":manifest.iter().map(|r|json!({"table":r["table"],"key":r["key"],"row_sha256":r["row_sha256"]})).collect::<Vec<_>>(),"retained_reference_count":result["manifest"]["retained_references"].as_array().map(Vec::len),"recovery_export_sha256":result["manifest"]["recovery_export_sha256"]});
     sqlx::query("INSERT INTO maintenance_purge_receipts(principal_id,idempotency_key,request_sha256,manifest_sha256,receipt) VALUES($1,$2,$3,$4,$5)").bind(&actor.actor_id).bind(&request.idempotency_key).bind(request_hash).bind(request.manifest_sha256).bind(&receipt).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":receipt,"replayed":false})))
@@ -654,6 +1160,7 @@ mod performance_tests {
         let request = PurgeRequest {
             idempotency_key: "synthetic-performance".into(),
             selections,
+            reconciliations: vec![],
             commit: false,
             manifest_sha256: None,
             recovery_export_sha256: None,
