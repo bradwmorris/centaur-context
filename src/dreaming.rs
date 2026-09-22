@@ -496,13 +496,15 @@ async fn add_edge(
         return Err(invalid("self edge"));
     }
     crate::domain::required_text(description.into(), "connection description", 600)?;
-    let active: bool = sqlx::query_scalar(
-        "SELECT count(*)=2 FROM objects WHERE id=ANY($1) AND archived_at IS NULL",
+    // Hold both endpoints through commit so concurrent archival cannot leave
+    // a newly created active relation pointing at an archived target.
+    let active: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM objects WHERE id=ANY($1) AND archived_at IS NULL ORDER BY id FOR SHARE",
     )
     .bind(vec![source, target])
-    .fetch_one(&mut **tx)
+    .fetch_all(&mut **tx)
     .await?;
-    if !active {
+    if active.len() != 2 {
         return Err(db::DbError::Conflict);
     }
     let existing:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE source_object_id=$1 AND target_object_id=$2 AND kind=$3 AND archived_at IS NULL)")
