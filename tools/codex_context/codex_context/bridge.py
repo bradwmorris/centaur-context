@@ -194,7 +194,8 @@ def extract_messages(settings: Settings, path: Path, session: str, cursor: int, 
             data = record.get("payload", {})
             if record.get("type") == "event_msg" and data.get("type") == "item_completed":
                 item = data.get("item", {})
-                if data.get("thread_id") == session and item.get("type") in ("UserMessage", "AgentMessage"):
+                visible = item.get("type") == "UserMessage" or (item.get("type") == "AgentMessage" and item.get("phase") in (None,"commentary","final"))
+                if data.get("thread_id") == session and visible:
                     pieces = item.get("content", [])
                     if not isinstance(pieces, list):
                         raise ValueError("Unsupported visible-message format")
@@ -384,7 +385,7 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
         lock.close()
 
 
-def status(settings: Settings) -> dict:
+def status(settings: Settings, session_id: str | None = None) -> dict:
     with database(settings) as db:
         sessions = []
         for row in db.execute("SELECT id,repository,target,coverage,error,chat_id,updated FROM sessions ORDER BY updated DESC"):
@@ -395,7 +396,15 @@ def status(settings: Settings) -> dict:
             last = db.execute("SELECT response FROM receipts WHERE session_id=? ORDER BY completed DESC LIMIT 1",(row["id"],)).fetchone()
             item["last_receipt"] = json.loads(last[0]) if last else None
             sessions.append(item)
-        return {"sessions":sessions,"pending_bytes":db.execute("SELECT COALESCE(sum(length(CAST(payload AS BLOB))),0) FROM batches").fetchone()[0]}
+        result = {"sessions":sessions,"pending_bytes":db.execute("SELECT COALESCE(sum(length(CAST(payload AS BLOB))),0) FROM batches").fetchone()[0]}
+        if session_id:
+            row = db.execute("SELECT * FROM sessions WHERE id=?",(identifier(session_id),)).fetchone()
+            if row is None:raise ValueError("Unknown registered session")
+            try:result["remote_curation"] = SessionClient(settings,row)._request("GET","/api/v2/codex/session")
+            except RuntimeError:result["remote_curation"] = {"status":"unavailable","note":"Cannot verify remote Chat or Memory curation; inspect connectivity and retry."}
+        else:
+            result["remote_curation"] = {"status":"not_checked","note":"Use status --session SESSION_UUID to inspect the latest actual curation Run."}
+        return result
 
 
 def tool_schema() -> list[dict]:
@@ -469,6 +478,7 @@ def main():
     parser.add_argument("command",choices=["hook","flush","status","mcp","install","uninstall"])
     parser.add_argument("--codex-home",type=Path,default=Path.home()/".codex")
     parser.add_argument("--launchd",action="store_true")
+    parser.add_argument("--session",type=identifier)
     args=parser.parse_args()
     try:
         settings=Settings(args.config)
@@ -490,8 +500,8 @@ def main():
             # Actual delivery runs in a separate process, preserving response latency.
             subprocess.Popen([sys.executable,"-m","codex_context.bridge","--config",str(settings.path),"flush"],
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-        elif args.command=="flush": print(canonical(flush(settings)))
-        else: print(json.dumps(status(settings),indent=2))
+        elif args.command=="flush": print(canonical(flush(settings,args.session)))
+        else: print(json.dumps(status(settings,args.session),indent=2))
     except (ValueError,RuntimeError,OSError,KeyError) as error:
         print(type(error).__name__+": "+str(error),file=sys.stderr)
         raise SystemExit(1)

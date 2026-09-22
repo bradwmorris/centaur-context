@@ -100,7 +100,9 @@ locally and starts a separate delivery process; delivery cannot block the answer
 Periodic flush visits only already registered sessions, not unrelated history.
 
 Use `status` to inspect target, coverage, queued batches, errors, Chat ID and last
-curation receipt. Queued means not yet delivered; curation enabled does not mean a
+curation receipt. Use `status --session SESSION_UUID` to read the actual latest
+curation Run, including failures, from the bound server. Queued means not yet
+delivered; curation enabled does not mean a
 Memory was produced. The session status API exposes the latest curation Run.
 Unimportant interactions may correctly produce no Memory.
 

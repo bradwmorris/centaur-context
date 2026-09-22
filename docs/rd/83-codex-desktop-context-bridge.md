@@ -174,7 +174,9 @@ installed bridge package (not direct calls to mocked capture handlers):
   rollout check and is not claimed from that fixture.
 - A fresh runtime session retrieved that Memory with the actual MCP client, then
   read its Connections and Events. An explicit Note write succeeded through MCP;
-  repeating the same operation key reported replay without another Note.
+  repeating the same operation key reported replay without another Note. An
+  explicit Task with a fixture owner and deadline was also created/read through
+  MCP with its automatic Chat provenance connection.
 - A second disposable Context instance had separate credentials, canonical human
   and repository alias. It could not read the first instance's Chat/Memory and
   rejected its repository alias. Stopping/restarting only the second fixture

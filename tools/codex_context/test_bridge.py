@@ -237,3 +237,10 @@ def test_uninstall_does_not_claim_success_when_owned_hook_was_changed(setup,tmp_
     p=home/'hooks.json';hooks=json.loads(p.read_text());hooks['hooks']['Stop'][0]['hooks'][0]['command']='edited-command';p.write_text(json.dumps(hooks))
     with pytest.raises(ValueError,match='hook was changed'):install(s,home,remove=True)
     assert 'centaur_context' in (home/'config.toml').read_text()
+
+
+def test_agent_analysis_phase_is_not_visible_capture(setup):
+    s,repo,sid,path=setup;b.capture(s,event(repo,sid,path));turn=str(uuid.uuid4())
+    append(path,{'type':'event_msg','payload':{'type':'item_completed','thread_id':sid,'turn_id':turn,'item':{'type':'AgentMessage','id':'hidden','phase':'analysis','content':[{'type':'Text','text':'Excluded internal text'}]}}})
+    b.capture(s,event(repo,sid,path))
+    assert not any(x['messages'] for x in pending(s))
