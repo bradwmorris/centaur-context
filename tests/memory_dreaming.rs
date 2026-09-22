@@ -7,12 +7,29 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
+static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
     assert!(url.contains("centaur_context_test"));
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .unwrap();
+    let name = format!("centaur_context_test_memory_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+    let options = url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .database(&name);
     let pool = PgPoolOptions::new()
         .max_connections(8)
-        .connect(&url)
+        .connect_with(options)
         .await
         .unwrap();
     db::migrate(&pool).await.unwrap();
@@ -23,7 +40,13 @@ async fn fixture(pool: &PgPool, kind: &str, provenance: Value) -> Uuid {
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,$2,'Research event','Alex discussed a useful research event, recorded with evidence.','system','context-curator','system','context-curator',$3)").bind(id).bind(kind).bind(provenance).execute(&mut *tx).await.unwrap();
     if kind == "memory" {
-        sqlx::query("INSERT INTO memories(object_id,primary_event,happened_at) VALUES($1,true,'2026-09-20T00:00:00Z')").bind(id).execute(&mut *tx).await.unwrap();
+        sqlx::query(
+            "INSERT INTO memories(object_id,happened_at) VALUES($1,'2026-09-20T00:00:00Z')",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     }
     if kind == "source" {
         sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES($1,'article')")
@@ -66,6 +89,7 @@ fn rewrite(id: Uuid) -> Change {
 
 #[tokio::test]
 async fn memory_maintenance_preserves_boundaries_revisions_and_recovery() {
+    let _guard = LOCK.lock().await;
     let Some(pool) = pool().await else { return };
     let evidence =
         json!({"supporting_message_ids":[Uuid::new_v4()],"chat_object_id":Uuid::new_v4()});
@@ -204,6 +228,7 @@ async fn memory_maintenance_preserves_boundaries_revisions_and_recovery() {
 
 #[tokio::test]
 async fn capture_reads_only_committed_creation_and_replays_without_duplicates() {
+    let _guard = LOCK.lock().await;
     let Some(pool) = pool().await else { return };
     memory::capture_outcomes(&pool).await.unwrap();
     let target = fixture(
@@ -244,4 +269,116 @@ async fn capture_reads_only_committed_creation_and_replays_without_duplicates() 
     memory::capture_outcomes(&pool).await.unwrap();
     let active:i64=sqlx::query_scalar("SELECT count(*) FROM objects WHERE provenance->>'source_event_id'=$1 AND archived_at IS NULL").bind(event.to_string()).fetch_one(&pool).await.unwrap();
     assert_eq!(active, 0);
+}
+
+#[tokio::test]
+async fn unchanged_batches_are_checkpointed_without_another_model_call() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let id = fixture(
+        &pool,
+        "memory",
+        json!({"supporting_message_ids":[Uuid::new_v4()]}),
+    )
+    .await;
+    // Drain only this disposable test corpus with no changes. No model needed.
+    for _ in 0..10 {
+        let input = dreaming::read_batch(&pool).await.unwrap();
+        if input.memories.is_empty() {
+            break;
+        }
+        dreaming::apply_plan(&pool, run(&pool).await, &input, &Plan { changes: vec![] })
+            .await
+            .unwrap();
+    }
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: "http://127.0.0.1:1/never-call".into(),
+        api_token: "synthetic-test-token".into(),
+        model: "synthetic-model".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(1),
+    };
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Later edits become eligible; prior review cannot hide a new revision.
+    sqlx::query("UPDATE objects SET revision=revision+1,updated_at=now() WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .iter()
+            .any(|m| m["id"] == id.to_string())
+    );
+}
+
+#[tokio::test]
+async fn preview_runs_real_validation_then_rolls_back_and_does_not_repeat() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let id = fixture(
+        &pool,
+        "memory",
+        json!({"supporting_message_ids":[Uuid::new_v4()]}),
+    )
+    .await;
+    let before = snapshot(&pool, id).await;
+    let response = serde_json::to_string(&Plan {
+        changes: vec![rewrite(id)],
+    })
+    .unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let router=axum::Router::new().route("/",axum::routing::post(move || {
+        let response=response.clone();let counter=counter.clone();async move {
+            counter.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            axum::Json(json!({"choices":[{"message":{"content":response}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic-test-token".into(),
+        model: "synthetic-model".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(snapshot(&pool, id).await, before);
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    server.abort();
 }

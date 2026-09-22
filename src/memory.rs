@@ -61,15 +61,15 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
         // or an inferred initiating human from a mixed conversation.
         let identities: Vec<(Uuid, String)> = sqlx::query_as(
             "SELECT DISTINCT o.id,o.title FROM objects o JOIN users u ON u.object_id=o.id \
-             LEFT JOIN external_identities e ON e.user_object_id=o.id \
+             LEFT JOIN LATERAL jsonb_array_elements(u.identities) e ON true \
              WHERE o.archived_at IS NULL AND (o.id::text=$1 OR \
-               (e.provider='centaur' AND e.provider_user_id=$1)) LIMIT 2",
+               (e->>'provider'='centaur' AND e->>'provider_user_id'=$1)) LIMIT 2",
         )
         .bind(actor_id)
         .fetch_all(&mut *tx)
         .await?;
         let actor_name = if identities.len() == 1 {
-            identities[0].1.clone()
+            identities[0].1.chars().take(100).collect::<String>()
         } else if actor_type == "human" {
             "A user".into()
         } else if actor_id == "codex" {
@@ -86,8 +86,11 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
             "source_run_id":event["run_id"],"actor_type":actor_type,"actor_id":actor_id});
         sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'memory',$2,$3,'system',$4,'system',$4,$5)")
             .bind(memory_id).bind(memory_title).bind(description).bind(CAPTURE_ACTOR).bind(provenance).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO memories(object_id,primary_event,happened_at) VALUES($1,true,$2::text::timestamptz)")
-            .bind(memory_id).bind(event["created_at"].as_str().unwrap_or_default()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,$2::text::timestamptz)")
+            .bind(memory_id)
+            .bind(event["created_at"].as_str().unwrap_or_default())
+            .execute(&mut *tx)
+            .await?;
         journal(&mut tx, run_id, 1, "object", memory_id, None, 1).await?;
         let mut links = vec![(
             target,

@@ -941,6 +941,12 @@ fn validate_human_grounded_objects(
                 "curator-created Memories must be supported only by human-authored messages".into(),
             ));
         }
+        if event_capture_enabled() && is_object_creation_report(&item.description) {
+            return Err(CuratorError::Invalid(
+                "committed Object creation is captured from its event ledger, not chat prose"
+                    .into(),
+            ));
+        }
         if evidence
             .iter()
             .all(|message| is_memory_noise(&message.content))
@@ -965,6 +971,25 @@ fn validate_human_grounded_objects(
 
 /// Conservative exclusion of explicit operational/test traffic; ordinary mentions
 /// of testing in real research are not enough to discard a human statement.
+fn event_capture_enabled() -> bool {
+    std::env::var("MEMORY_CAPTURE_ENABLED").is_ok_and(|value| value == "true")
+}
+
+fn is_object_creation_report(description: &str) -> bool {
+    let words = description
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    ["added", "created", "saved", "imported"]
+        .iter()
+        .any(|word| words.contains(*word))
+        && ["source", "sources", "note", "notes", "task", "tasks"]
+            .iter()
+            .any(|word| words.contains(*word))
+        && !is_request_framed_memory(description)
+}
+
 fn is_memory_noise(content: &str) -> bool {
     let text = content.trim().to_lowercase();
     [
@@ -1034,6 +1059,7 @@ fn drop_disallowed_worker_creates(
         .iter()
         .filter(|item| {
             item.kind != "memory"
+                || (event_capture_enabled() && is_object_creation_report(&item.description))
                 || item.supporting_message_ids.is_empty()
                 || item
                     .supporting_message_ids
@@ -1926,6 +1952,13 @@ Create zero or more Memories only for a meaningful event, explicit decision, sta
 Never create an Entity, Source, Note, Task, Chat, User, Theme, or any other non-Memory Object. Never update or delete any Object, including a Memory. Never update or delete a Connection. A human request proves only that the request was made: without a trusted workflow-result message, describe what the human asked for and never claim the workflow succeeded, completed, created, updated, or connected anything.
 
 Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description is normally ONE plain sentence of about 15–35 words, at most two short sentences when essential. There is no minimum length. Name the actor, truthful action and concrete subject. Use the actual event time in happened_at; avoid relative time such as just or today. Use a truthful verb such as asked instead of adding caveats about what was not established. Keep IDs and evidence in provenance and Connections, not narrative boilerplate. Link only direct participants and affected objects, never incidental mentions or guessed themes. A request and a completed action are different events. Do not re-create an event already supported by the same message IDs in an existing Memory. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
+    let system = if event_capture_enabled() {
+        format!(
+            "{system}\nActual Source, Note and Task creation outcomes are captured separately from committed Object Events. Do not duplicate those outcomes from chat prose, even if a human reports them. You may selectively record a meaningful request, decision or discussion instead."
+        )
+    } else {
+        system.to_owned()
+    };
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -1949,7 +1982,7 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
         config,
         run.id,
         Some(run.chat_object_id),
-        system,
+        &system,
         input,
         reconciliation_plan_schema(),
         idempotency_id,

@@ -87,14 +87,14 @@ pub async fn read_batch(pool: &PgPool) -> Result<Batch, db::DbError> {
     let ids:Vec<Uuid>=sqlx::query_scalar(
         "SELECT o.id FROM objects o WHERE o.kind='memory' AND o.archived_at IS NULL AND NOT o.protected \
          AND o.created_by_type='system' AND o.created_by_id IN ('context-curator','context-memory-capture') \
-         AND o.updated_by_type <> 'human' AND NOT COALESCE((o.provenance->>'memory_locked')='true',false) \
+         AND o.updated_by_type='system' AND o.updated_by_id IN ('context-curator','context-memory-capture','context-memory-dream') AND NOT COALESCE((o.provenance->>'memory_locked')='true',false) \
          AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.kind='memory_dream' AND r.status='completed' \
            AND r.result @> jsonb_build_object('reviewed',jsonb_build_object(o.id::text,o.revision))) \
          ORDER BY o.updated_at,o.id LIMIT $1")
         .bind(BATCH).fetch_all(&mut *tx).await?;
     let mut ids = ids;
     if !ids.is_empty() {
-        let neighbors: Vec<Uuid> = sqlx::query_scalar("SELECT o.id FROM objects o JOIN memories m ON m.object_id=o.id WHERE o.kind='memory' AND o.archived_at IS NULL AND NOT o.protected AND o.created_by_type='system' AND o.created_by_id IN ('context-curator','context-memory-capture') AND o.updated_by_type<>'human' AND NOT COALESCE((o.provenance->>'memory_locked')='true',false) AND NOT (o.id=ANY($1)) AND EXISTS(SELECT 1 FROM objects seed JOIN memories sm ON sm.object_id=seed.id WHERE seed.id=ANY($1) AND m.happened_at=sm.happened_at AND ((o.provenance->>'source_event_id'=seed.provenance->>'source_event_id') OR (o.provenance->'supporting_message_ids'=seed.provenance->'supporting_message_ids' AND o.provenance->'chat_object_id'=seed.provenance->'chat_object_id'))) ORDER BY o.id LIMIT 25")
+        let neighbors: Vec<Uuid> = sqlx::query_scalar("SELECT o.id FROM objects o JOIN memories m ON m.object_id=o.id WHERE o.kind='memory' AND o.archived_at IS NULL AND NOT o.protected AND o.created_by_type='system' AND o.created_by_id IN ('context-curator','context-memory-capture') AND o.updated_by_type='system' AND o.updated_by_id IN ('context-curator','context-memory-capture','context-memory-dream') AND NOT COALESCE((o.provenance->>'memory_locked')='true',false) AND NOT (o.id=ANY($1)) AND EXISTS(SELECT 1 FROM objects seed JOIN memories sm ON sm.object_id=seed.id WHERE seed.id=ANY($1) AND m.happened_at=sm.happened_at AND ((o.provenance->>'source_event_id'=seed.provenance->>'source_event_id') OR (o.provenance->'supporting_message_ids'=seed.provenance->'supporting_message_ids' AND o.provenance->'chat_object_id'=seed.provenance->'chat_object_id'))) ORDER BY o.id LIMIT 25")
             .bind(&ids).fetch_all(&mut *tx).await?;
         ids.extend(neighbors);
     }
@@ -151,7 +151,11 @@ fn eligible(v: &Value) -> bool {
             v["created_by_id"].as_str(),
             Some("context-curator" | "context-memory-capture")
         )
-        && v["updated_by_type"] != "human"
+        && v["updated_by_type"] == "system"
+        && matches!(
+            v["updated_by_id"].as_str(),
+            Some("context-curator" | "context-memory-capture" | "context-memory-dream")
+        )
         && v["provenance"]["memory_locked"] != true
 }
 fn evidence_keys(v: &Value) -> HashSet<String> {
@@ -244,6 +248,16 @@ pub async fn apply_plan(
     run: Uuid,
     batch: &Batch,
     plan: &Plan,
+) -> Result<(), db::DbError> {
+    apply_plan_mode(pool, run, batch, plan, false).await
+}
+
+async fn apply_plan_mode(
+    pool: &PgPool,
+    run: Uuid,
+    batch: &Batch,
+    plan: &Plan,
+    preview: bool,
 ) -> Result<(), db::DbError> {
     if plan.changes.len() > MAX_CHANGES {
         return Err(invalid("too many dream changes"));
@@ -421,7 +435,11 @@ pub async fn apply_plan(
     }
     sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now(),updated_at=now() WHERE id=$1")
         .bind(run).bind(json!({"reviewed":reviewed,"plan":plan,"change_count":seq-1})).execute(&mut *tx).await?;
-    tx.commit().await?;
+    if preview {
+        tx.rollback().await?;
+    } else {
+        tx.commit().await?;
+    }
     Ok(())
 }
 
@@ -577,6 +595,17 @@ pub async fn run_worker(
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         timer.tick().await;
+        // Restarting the process must not bypass the hourly inference budget.
+        let recently_attempted = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='memory_dream' AND input->>'preview'=$1 AND created_at > now()-make_interval(secs=>$2))")
+            .bind(if mode=="preview" {"true"} else {"false"}).bind(interval.as_secs() as f64).fetch_one(&pool).await;
+        match recently_attempted {
+            Ok(true) => continue,
+            Err(error) => {
+                tracing::warn!(%error,"cannot read durable dream schedule");
+                continue;
+            }
+            Ok(false) => {}
+        }
         if let Err(error) = pass(&pool, &client, &config, mode == "preview").await {
             tracing::warn!(%error,"memory dream pass failed; retry on next scheduled wake");
         }
@@ -671,6 +700,7 @@ pub async fn pass(
         .map_err(|e| invalid(&e.to_string()))?;
         let plan: Plan = serde_json::from_value(value).map_err(|e| invalid(&e.to_string()))?;
         if preview {
+            apply_plan_mode(pool, run, &batch, &plan, true).await?;
             sqlx::query(
                 "UPDATE runs SET status='preview',result=$2,completed_at=now() WHERE id=$1",
             )
@@ -736,6 +766,11 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
                 return Err(invalid("undo cannot alter non-Memory Objects"));
             }
             if before.is_null() {
+                let has_edges: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1))")
+                    .bind(id).fetch_one(&mut *tx).await?;
+                if has_edges {
+                    return Err(db::DbError::Conflict);
+                }
                 sqlx::query("UPDATE objects SET archived_at=now(),revision=revision+1,updated_by_type='system',updated_by_id=$2,updated_at=now() WHERE id=$1 AND revision=$3")
                     .bind(id).bind(ACTOR).bind(current["revision"].as_i64()).execute(&mut *tx).await?;
             } else {
@@ -743,6 +778,17 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
                     .bind(id).bind(before["title"].as_str()).bind(before["description"].as_str()).bind(&before["provenance"]).bind(before["archived_at"].as_str()).bind(ACTOR).bind(current["revision"].as_i64()).execute(&mut *tx).await?;
             }
         } else if kind == "connection" {
+            if !before.is_null() && before["archived_at"].is_null() {
+                let endpoints = vec![
+                    uuid(&current, "source_object_id")?,
+                    uuid(&current, "target_object_id")?,
+                ];
+                let active: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM objects WHERE id=ANY($1) AND archived_at IS NULL ORDER BY id FOR SHARE")
+                    .bind(endpoints).fetch_all(&mut *tx).await?;
+                if active.len() != 2 {
+                    return Err(db::DbError::Conflict);
+                }
+            }
             sqlx::query("UPDATE connections SET archived_at=CASE WHEN $2 THEN now() ELSE $3::text::timestamptz END,revision=revision+1,updated_by_type='system',updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$5")
                 .bind(id).bind(before.is_null()).bind(before["archived_at"].as_str()).bind(ACTOR).bind(current["revision"].as_i64()).execute(&mut *tx).await?;
         } else {
