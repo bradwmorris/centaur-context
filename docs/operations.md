@@ -140,6 +140,11 @@ cannot authenticate to the separate import routes.
   Object description, revision, update attribution and timestamp. Ordinary
   `/api/v2/apply` rejects this operation, and `update_object` keeps its existing
   active, interactively writable kind restrictions.
+  The maintenance-only `promote_source_artifact` operation requires `source_id`,
+  `expected_revision`, `artifact_id` and `expected_sha256`. It may select only an
+  existing complete, nonempty, semantic-indexing-eligible Artifact belonging to
+  that active Source. It changes the current Artifact pointer plus Object
+  revision and update attribution; it never creates or changes Artifact content.
 
 Start with `validate_only: true`. The transaction rolls back and returns previews
 with prior state and `approval_sha256`. Review the exact request and its preview,

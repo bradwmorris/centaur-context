@@ -55,6 +55,12 @@ pub enum ApplyOperation {
         expected_revision: i64,
         description: String,
     },
+    PromoteSourceArtifact {
+        source_id: Uuid,
+        expected_revision: i64,
+        artifact_id: Uuid,
+        expected_sha256: String,
+    },
     ArchiveObject {
         object_id: Uuid,
         expected_revision: i64,
@@ -241,6 +247,10 @@ async fn apply_with_authority(
             let target = match operation {
                 ApplyOperation::UpdateObject { object_id, .. }
                 | ApplyOperation::UpdateDescription { object_id, .. }
+                | ApplyOperation::PromoteSourceArtifact {
+                    source_id: object_id,
+                    ..
+                }
                 | ApplyOperation::ArchiveObject { object_id, .. }
                 | ApplyOperation::AppendArtifact {
                     object: ObjectReference::Id { object_id },
@@ -381,13 +391,16 @@ fn validate_authority_operations(
     authority: WriteAuthority,
 ) -> Result<(), DbError> {
     if authority == WriteAuthority::Ordinary
-        && request
-            .operations
-            .iter()
-            .any(|operation| matches!(operation, ApplyOperation::UpdateDescription { .. }))
+        && request.operations.iter().any(|operation| {
+            matches!(
+                operation,
+                ApplyOperation::UpdateDescription { .. }
+                    | ApplyOperation::PromoteSourceArtifact { .. }
+            )
+        })
     {
         return Err(DbError::Invalid(
-            "update_description is available only through reviewed maintenance".into(),
+            "operation is available only through reviewed maintenance".into(),
         ));
     }
     Ok(())
@@ -556,6 +569,39 @@ async fn execute_operation(
             )
             .await?;
             Ok(json!({"operation":"update_description","data":value}))
+        }
+        ApplyOperation::PromoteSourceArtifact {
+            source_id,
+            expected_revision,
+            artifact_id,
+            expected_sha256,
+        } => {
+            let value = promote_source_artifact(
+                tx,
+                actor,
+                *source_id,
+                *expected_revision,
+                *artifact_id,
+                expected_sha256,
+                authority,
+            )
+            .await?;
+            record_event_with_before(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "object",
+                *source_id,
+                *source_id,
+                "updated",
+                Some(*expected_revision),
+                *expected_revision + 1,
+                before,
+            )
+            .await?;
+            Ok(json!({"operation":"promote_source_artifact","data":value}))
         }
         ApplyOperation::ArchiveObject {
             object_id,
@@ -1129,6 +1175,95 @@ async fn update_description(
     .execute(&mut **tx)
     .await?;
     db::target_snapshot(tx, "object", id).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn promote_source_artifact(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    source_id: Uuid,
+    expected_revision: i64,
+    artifact_id: Uuid,
+    expected_sha256: &str,
+    authority: WriteAuthority,
+) -> Result<Value, DbError> {
+    if authority != WriteAuthority::ReviewedMaintenance {
+        return Err(DbError::Invalid(
+            "promote_source_artifact is available only through reviewed maintenance".into(),
+        ));
+    }
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(DbError::Invalid(
+            "expected_sha256 must be 64 lowercase hexadecimal characters".into(),
+        ));
+    }
+    let current = lock_writable_object(tx, source_id, authority).await?;
+    if current.kind != "source" {
+        return Err(DbError::Invalid(
+            "promote_source_artifact requires a Source Object".into(),
+        ));
+    }
+    if current.revision != expected_revision {
+        return Err(DbError::Conflict);
+    }
+    let artifact: (Uuid, String, String, Option<String>, bool) = sqlx::query_as(
+        r#"SELECT object_id,sha256,capture_outcome,content,semantic_indexing_enabled
+           FROM artifacts WHERE id=$1"#,
+    )
+    .bind(artifact_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(DbError::NotFound)?;
+    if artifact.0 != source_id {
+        return Err(DbError::Invalid(
+            "Artifact does not belong to the selected Source".into(),
+        ));
+    }
+    let Some(content) = artifact
+        .3
+        .as_deref()
+        .filter(|content| !content.trim().is_empty())
+    else {
+        return Err(DbError::Invalid(
+            "promoted Artifact must contain complete nonempty captured text".into(),
+        ));
+    };
+    let content_sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+    if artifact.1 != expected_sha256 || content_sha256 != expected_sha256 {
+        return Err(DbError::Invalid(
+            "expected_sha256 does not match the stored Artifact content".into(),
+        ));
+    }
+    if artifact.2 != "complete" {
+        return Err(DbError::Invalid(
+            "promoted Artifact must contain complete nonempty captured text".into(),
+        ));
+    }
+    if !artifact.4 {
+        return Err(DbError::Invalid(
+            "promoted Artifact must be eligible for semantic indexing".into(),
+        ));
+    }
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(source_id)
+        .bind(artifact_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        r#"UPDATE objects SET revision=revision+1,updated_by_type=$3,
+           updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2"#,
+    )
+    .bind(source_id)
+    .bind(expected_revision)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .execute(&mut **tx)
+    .await?;
+    db::target_snapshot(tx, "object", source_id).await
 }
 
 async fn update_subtype(

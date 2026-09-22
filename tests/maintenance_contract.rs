@@ -12,6 +12,7 @@ use centaur_context::{
 };
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -155,6 +156,305 @@ async fn seed(pool: &PgPool, kind: &str) -> Uuid {
     }
     tx.commit().await.unwrap();
     id
+}
+
+async fn artifact(
+    pool: &PgPool,
+    object_id: Uuid,
+    content: &str,
+    capture_outcome: &str,
+    semantic_indexing_enabled: bool,
+) -> (Uuid, String) {
+    let id = Uuid::new_v4();
+    let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let capture_reason = (capture_outcome != "complete").then_some("Synthetic incomplete capture");
+    sqlx::query(
+        r#"INSERT INTO artifacts
+           (id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,
+            capture_reason,semantic_indexing_enabled,metadata)
+           VALUES ($1,$2,'article_text',$3,'text/plain',$4,$5,$6,$7,$8,
+                   '{"purpose":"promotion_contract"}')"#,
+    )
+    .bind(id)
+    .bind(object_id)
+    .bind(content)
+    .bind(&sha256)
+    .bind(content.len() as i64)
+    .bind(capture_outcome)
+    .bind(capture_reason)
+    .bind(semantic_indexing_enabled)
+    .execute(pool)
+    .await
+    .unwrap();
+    (id, sha256)
+}
+
+#[tokio::test]
+async fn exact_reviewed_source_artifact_promotion_is_narrow_audited_and_replay_safe() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    let source = seed(&pool, "source").await;
+    let (old_artifact, _) =
+        artifact(&pool, source, "Prior complete capture.", "complete", true).await;
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(source)
+        .bind(old_artifact)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (candidate, candidate_sha) = artifact(
+        &pool,
+        source,
+        "Reviewed complete replacement capture.",
+        "complete",
+        true,
+    )
+    .await;
+    let body = batch(json!([{
+        "operation":"promote_source_artifact",
+        "source_id":source,
+        "expected_revision":1,
+        "artifact_id":candidate,
+        "expected_sha256":candidate_sha
+    }]));
+
+    let ordinary = agent_router(state(&pool), "ordinary-token-32-characters-long".into());
+    assert_eq!(
+        call(
+            &ordinary,
+            "POST",
+            "/api/v2/apply",
+            "ordinary-token-32-characters-long",
+            "ordinary-agent",
+            body.clone(),
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let unapproved = app(&pool, &[]);
+    assert_eq!(
+        call(
+            &unapproved,
+            "POST",
+            "/api/v2/maintenance/apply",
+            TOKEN,
+            "maintenance-test",
+            body.clone(),
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
+    let reviewed = app(&pool, std::slice::from_ref(&body));
+    let mut preview_body = body.clone();
+    preview_body["validate_only"] = json!(true);
+    let (status, preview) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        preview_body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["data"]["results"][0]["before"]["subtype"]["current_artifact_id"],
+        old_artifact.to_string()
+    );
+    assert_eq!(
+        preview["data"]["results"][0]["data"]["subtype"]["current_artifact_id"],
+        candidate.to_string()
+    );
+    assert_eq!(db::get_object(&pool, source).await.unwrap().revision, 1);
+
+    let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM object_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let runs_before: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (status, committed) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{committed}");
+    assert_eq!(committed["approval_sha256"], preview["approval_sha256"]);
+    assert_eq!(
+        committed["data"]["results"][0]["before"],
+        preview["data"]["results"][0]["before"]
+    );
+    let current: Uuid =
+        sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
+            .bind(source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(current, candidate);
+    let object = db::get_object(&pool, source).await.unwrap();
+    assert_eq!(object.revision, 2);
+    assert!(object.protected);
+    assert_eq!(object.created_by_id, "original-creator");
+    assert_eq!(object.updated_by_id, "maintenance-test");
+    let preserved: (String, Value) =
+        sqlx::query_as("SELECT content,metadata FROM artifacts WHERE id=$1")
+            .bind(old_artifact)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(preserved.0, "Prior complete capture.");
+    assert_eq!(preserved.1["purpose"], "promotion_contract");
+    assert!(
+        db::artifact_embedding_sources(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .any(|item| item.artifact_id == candidate)
+    );
+    let event_id = Uuid::parse_str(committed["data"]["event_ids"][0].as_str().unwrap()).unwrap();
+    let (event_before, event_after): (Value, Value) =
+        sqlx::query_as("SELECT before_state,after_state FROM object_events WHERE id=$1")
+            .bind(event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(event_before, committed["data"]["results"][0]["before"]);
+    assert_eq!(event_after, committed["data"]["results"][0]["data"]);
+
+    let (_, replay) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        body,
+    )
+    .await;
+    assert_eq!(replay["data"]["replayed"], true);
+    assert_eq!(replay["data"]["run_id"], committed["data"]["run_id"]);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM object_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        events_before + 1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM runs")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        runs_before + 1
+    );
+}
+
+#[tokio::test]
+async fn source_artifact_promotion_rejects_stale_mismatched_ineligible_and_archived_targets() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    let source = seed(&pool, "source").await;
+    let other_source = seed(&pool, "source").await;
+    let note = seed(&pool, "note").await;
+    let (candidate, candidate_sha) =
+        artifact(&pool, source, "Eligible text.", "complete", true).await;
+    let (foreign, foreign_sha) =
+        artifact(&pool, other_source, "Foreign text.", "complete", true).await;
+    let (incomplete, incomplete_sha) =
+        artifact(&pool, source, "Partial text.", "incomplete", true).await;
+    let (disabled, disabled_sha) =
+        artifact(&pool, source, "Lexical-only text.", "complete", false).await;
+    let cases = [
+        (
+            source,
+            9,
+            candidate,
+            candidate_sha.clone(),
+            StatusCode::CONFLICT,
+        ),
+        (
+            source,
+            1,
+            candidate,
+            "0".repeat(64),
+            StatusCode::BAD_REQUEST,
+        ),
+        (source, 1, foreign, foreign_sha, StatusCode::BAD_REQUEST),
+        (
+            source,
+            1,
+            incomplete,
+            incomplete_sha,
+            StatusCode::BAD_REQUEST,
+        ),
+        (source, 1, disabled, disabled_sha, StatusCode::BAD_REQUEST),
+        (
+            note,
+            1,
+            candidate,
+            candidate_sha.clone(),
+            StatusCode::BAD_REQUEST,
+        ),
+    ];
+    for (target, revision, artifact_id, sha256, expected_status) in cases {
+        let request = batch(json!([{
+            "operation":"promote_source_artifact","source_id":target,
+            "expected_revision":revision,"artifact_id":artifact_id,"expected_sha256":sha256
+        }]));
+        let reviewed = app(&pool, std::slice::from_ref(&request));
+        let (status, response) = call(
+            &reviewed,
+            "POST",
+            "/api/v2/maintenance/apply",
+            TOKEN,
+            "maintenance-test",
+            request,
+        )
+        .await;
+        assert_eq!(status, expected_status, "{response}");
+    }
+    sqlx::query("UPDATE objects SET archived_at=now() WHERE id=$1")
+        .bind(source)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let archived = batch(json!([{
+        "operation":"promote_source_artifact","source_id":source,"expected_revision":1,
+        "artifact_id":candidate,"expected_sha256":candidate_sha
+    }]));
+    let archived_app = app(&pool, std::slice::from_ref(&archived));
+    assert_eq!(
+        call(
+            &archived_app,
+            "POST",
+            "/api/v2/maintenance/apply",
+            TOKEN,
+            "maintenance-test",
+            archived
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let current: Option<Uuid> =
+        sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
+            .bind(source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(current.is_none());
 }
 
 #[tokio::test]
