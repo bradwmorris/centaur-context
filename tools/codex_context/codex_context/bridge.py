@@ -203,7 +203,7 @@ def extract_messages(settings: Settings, path: Path, session: str, cursor: int, 
             data = record.get("payload", {})
             if record.get("type") == "event_msg" and data.get("type") == "item_completed":
                 item = data.get("item", {})
-                visible = item.get("type") == "UserMessage" or (item.get("type") == "AgentMessage" and item.get("phase") in (None,"commentary","final"))
+                visible = item.get("type") == "UserMessage" or (item.get("type") == "AgentMessage" and item.get("phase") in (None,"commentary","final","final_answer"))
                 if data.get("thread_id") == session and visible:
                     pieces = item.get("content", [])
                     if not isinstance(pieces, list):

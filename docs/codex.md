@@ -94,8 +94,11 @@ up existing configuration and preserves other entries. Use the same command with
 
 For manual installation, register `centaur-codex-context --config /private/config.json mcp` as one STDIO MCP
 server. Configure the same executable's `hook` command for `SessionStart`,
-`UserPromptSubmit`, `Stop` and `Interrupt`. Review/trust the exact hook definitions
-through Codex before activation; installing a hook does not establish trust.
+`UserPromptSubmit`, `Stop`, `Interrupt` and `SessionEnd`. Review/trust the exact hook definitions
+through the native CLI `/hooks` flow before activation; installing a hook does not
+establish trust. New or freshly loaded desktop sessions use the new configuration;
+already loaded tasks can retain their earlier tool catalogue. Do not interrupt
+active work just to refresh it.
 Register a user-owned periodic task to call `flush` every 30 seconds. A hook spools
 locally and starts a separate delivery process; delivery cannot block the answer.
 Periodic flush visits only already registered sessions, not unrelated history.

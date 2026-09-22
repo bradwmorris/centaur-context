@@ -2,8 +2,8 @@
 
 GitHub Issue: [#83](https://github.com/bradwmorris/centaur-context/issues/83)
 
-Status: core checks passed; an opt-in adopter backend is deployed. Native desktop
-hook review and final desktop acceptance remain pending in PR #88.
+Status: native hook trust and actual Desktop capture/MCP readback verified.
+The final desktop-format fix is receiving the full checks in PR #88.
 The GitHub Issue contains the published design and acceptance contract.
 
 ## Outcome
@@ -99,7 +99,7 @@ The future executor uses an isolated `codex/<issue-number>-<slug>` branch after 
 ## Remaining decisions
 
 - The destination for shared-core and mixed-domain conversations remains an adopter choice. Keep them unconfigured until explicitly selected; this does not block implementation of the generic routing contract.
-- Verified runtime is 0.153.4 with paginated transcripts. Capture is text-only and begins at activation; native Desktop acceptance remains pending.
+- Verified runtime is 0.153.4 with paginated transcripts. Capture is text-only and begins at activation; actual Desktop resumed-session capture is verified.
 - The narrow Git receipt adapter records only observed commit changes. It deliberately cannot attest tests, merge, deployment, or general task completion.
 
 ## Execution design and security review — 2026-09-22
@@ -214,9 +214,28 @@ bypassed. The running desktop uses bundled runtime 0.153.4 (application
 26.901.51231); the separately installed 26.903.61454 bundle supplied the isolated
 runtime verification. Both emit the supported paginated format.
 
-Computer-use automation refuses control of the desktop app itself. The owner
-must review the installed hook definitions through the documented CLI `/hooks`
-flow before desktop activation. No actual production desktop capture, historical
-import, or completed deployment acceptance is claimed while that review is
-pending. Keep the issue and PR open, then verify a new desktop turn, its actual
-curation result and later retrieval before merge/final image adoption.
+The desktop UI cannot be automated in this environment, but the documented CLI
+`/hooks` review works through its native terminal interface. The exact five owned
+commands were reviewed and trusted there, without a bypass flag or trust-file
+editing. All five reported Active=1 and Review=0. The initial requirement for
+manual owner interaction was therefore unnecessary and has been resolved.
+
+A CLI-created verification session was then resumed by the actual running Desktop.
+That fresh resume loaded exactly the three MCP tools; native context_search/read
+found its canonical Chat and automatically captured commentary. An already loaded
+Desktop task retained its previous tool catalogue. Use a new or freshly loaded
+session after installation rather than restarting ongoing work blindly.
+
+This actual Desktop probe revealed `AgentMessage.phase=final_answer`, whereas the
+isolated CLI probe used `final`. The adapter now accepts both public final phases
+and still excludes analysis. A regression test covers commentary + final_answer
+without analysis. Only the one known missed reply in the new verification capture
+window was reconciled; no historical conversation import occurred. The next
+Desktop turn checks automatic final capture without reconciliation.
+
+The real subscription curator completed the verification-noise window without an
+error. A zero-Memory result is correct for this probe: it contains agent verification
+and no new human decision. Positive human-decision Memory, explicit Note/Task,
+next-session and standard Centaur retrieval remain demonstrated by the isolated
+fixtures above; those fixture model outputs are not misrepresented as production
+user decisions.

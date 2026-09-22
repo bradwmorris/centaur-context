@@ -261,3 +261,13 @@ def test_global_hook_skips_unmapped_work_but_reports_lost_existing_route(setup,t
     monkeypatch.setattr(b.sys,'stdin',io.StringIO(json.dumps(event(outside,sid,path))))
     b.main();assert 'needs attention' in json.loads(capsys.readouterr().out)['systemMessage']
     with b.database(s) as db:assert 'unconfigured' in db.execute('SELECT error FROM sessions WHERE id=?',(sid,)).fetchone()[0]
+
+
+def test_desktop_final_answer_phase_is_captured_without_analysis(setup):
+    s,repo,sid,path=setup;b.capture(s,event(repo,sid,path));turn=str(uuid.uuid4())
+    for phase in ['commentary','analysis','final_answer']:
+        append(path,{'type':'event_msg','payload':{'type':'item_completed','thread_id':sid,'turn_id':turn,'item':{'type':'AgentMessage','id':phase,'phase':phase,'content':[{'type':'Text','text':phase+' message'}]}}})
+    append(path,{'type':'event_msg','payload':{'type':'task_complete','turn_id':turn}})
+    b.capture(s,event(repo,sid,path,'Stop',turn))
+    assert [m['content'] for x in pending(s) for m in x['messages']]==['commentary message','final_answer message']
+    assert pending(s)[-1]['finished_turn_id']==turn
