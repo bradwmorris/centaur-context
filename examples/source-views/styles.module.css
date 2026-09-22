@@ -1,0 +1,26 @@
+.collection { padding: 20px 24px 32px; min-width: 0; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.toolbar h2 { margin: 0 0 5px; font-size: 22px; font-weight: 600; letter-spacing: -.025em; }
+.toolbar p { margin: 0; color: var(--text-muted); font-size: 13px; }
+.toolbar button { border: 1px solid var(--border); background: var(--panel-raised); padding: 9px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px,100%), 1fr)); gap: 20px; }
+.card { min-width: 0; border: 1px solid var(--border); background: var(--panel-raised); border-radius: 12px; overflow: hidden; transition: border-color .15s; }
+.card:hover { border-color: var(--text-subtle); }
+.open { width: 100%; height: 100%; display: block; text-align: left; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.preview { aspect-ratio: 16 / 9; background: var(--hover); overflow: hidden; border-bottom: 1px solid var(--border-soft); }
+.preview img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.fallback { height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 8px; color: var(--text-subtle); font-size: 12px; }
+.fallback > span:first-child { font-size: 30px; }
+.content { padding: 16px; }
+.kind { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: #adbdf3; }
+.content h3 { margin: 8px 0; font-size: 16px; line-height: 1.4; font-weight: 580; overflow-wrap: anywhere; }
+.description { color: var(--text-secondary); font-size: 13px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.byline { color: var(--text-muted); font-size: 11px; margin: 16px 0 0; }
+.board { display: flex; align-items: flex-start; gap: 18px; overflow-x: auto; padding-bottom: 16px; }
+.column { flex: 0 0 285px; min-width: 0; }
+.column > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.column > header h3 { margin: 0; font-size: 13px; text-transform: capitalize; }
+.column > header span { background: var(--hover); color: var(--text-muted); border-radius: 5px; padding: 2px 7px; font-size: 12px; }
+.column > div { display: grid; gap: 16px; }
+.empty { border: 1px dashed var(--border); border-radius: 12px; padding: 40px; text-align: center; color: var(--text-muted); }
+@media (max-width: 600px) { .collection { padding: 16px 10px; } .toolbar { align-items: flex-start; flex-direction: column; } }

@@ -1,15 +1,16 @@
 import { Component, useMemo, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { api } from "../api";
 import { detailPath } from "../routing";
-import type { TaskViewProps } from "../ui";
+import type { SourceViewProps, TaskViewProps } from "../ui";
 import { externalViews } from "./externalViews";
 import type { Section } from "../routing";
 import { navigate, sectionPath } from "../routing";
-import type { ObjectVisual, Task } from "../types";
+import type { ObjectVisual, Source, Task } from "../types";
 import { TaskBoard } from "./taskBoard/TaskBoard";
 
 export interface ModuleContext {
   tasks: Task[];
+  sources?: Source[];
   visuals: Map<string, ObjectVisual>;
   loading: boolean;
   error?: string | null;
@@ -17,13 +18,11 @@ export interface ModuleContext {
   onReload: () => Promise<void>;
 }
 
-export interface ContextUiModule {
-  id: string;
-  section: Section;
-  label: string;
-  icon: string;
-  render(context: TaskViewProps): ReactNode;
-}
+interface ModuleIdentity { id: string; label: string; icon: string; }
+export type ContextUiModule = ModuleIdentity & (
+  | { section: "tasks"; render(context: TaskViewProps): ReactNode }
+  | { section: "sources"; render(context: SourceViewProps): ReactNode }
+);
 
 const modules: ContextUiModule[] = [
   { id: "kanban", section: "tasks", label: "Board", icon: "▦", render: (context) => <TaskBoard {...context} /> },
@@ -37,7 +36,7 @@ export function resolveActiveModule(section: Section, search: string): ContextUi
 
 export function ModuleViewSwitcher({ section, activeId }: { section: Section; activeId: string | null }) {
   const sectionModules = modules.filter((module) => module.section === section);
-  if (sectionModules.length === 0) return null;
+  if (sectionModules.length === 0 && !new URLSearchParams(window.location.search).has("view")) return null;
   const requested = new URLSearchParams(window.location.search).get("view");
   return <div className="module-switcher" role="group" aria-label={`${section} views`}>
     {requested && !activeId ? <span role="status">This view is unavailable. Showing the list.</span> : null}
@@ -69,19 +68,30 @@ export function taskViewProps(context: ModuleContext): TaskViewProps {
   };
 }
 
-class ViewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class ViewBoundary extends Component<{ children: ReactNode; section: Section }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
-    return this.state.failed ? <div role="alert">This view could not be displayed. <button type="button" onClick={() => navigate("/tasks")}>Return to list</button></div> : this.props.children;
+    return this.state.failed ? <div role="alert">This view could not be displayed. <button type="button" onClick={() => navigate(sectionPath(this.props.section))}>Return to list</button></div> : this.props.children;
   }
 }
 
-function RenderView({ module, context }: { module: ContextUiModule; context: TaskViewProps }) {
-  return <>{module.render(context)}</>;
+export function sourceViewProps(context: ModuleContext): SourceViewProps {
+  return {
+    sources: structuredClone(context.sources ?? []), visuals: structuredClone(context.visuals),
+    loading: context.loading, error: context.error ?? null,
+    completeness: context.loading ? "loading" : context.error ? "unknown" : "complete",
+    reload: context.onReload,
+    openSource: id => navigate(detailPath("sources", id)),
+  };
+}
+
+function RenderView({ module, context }: { module: ContextUiModule; context: ModuleContext }) {
+  const taskProps = useMemo(() => module.section === "tasks" ? taskViewProps(context) : null, [module.section, context]);
+  const sourceProps = useMemo(() => module.section === "sources" ? sourceViewProps(context) : null, [module.section, context]);
+  return <>{module.section === "tasks" ? module.render(taskProps!) : module.render(sourceProps!)}</>;
 }
 
 export function ContextModuleView({ module, context }: { module: ContextUiModule; context: ModuleContext }) {
-  const props = useMemo(() => taskViewProps(context), [context.tasks, context.visuals, context.loading, context.error, context.onTasksChange, context.onReload]);
-  return <ViewBoundary key={module.id}><RenderView module={module} context={props} /></ViewBoundary>;
+  return <ViewBoundary key={module.id} section={module.section}><RenderView module={module} context={context} /></ViewBoundary>;
 }

@@ -52,11 +52,16 @@ struct IdentityAssetsDir(PathBuf);
 
 pub fn human_router(state: AppState, static_dir: PathBuf, identity_assets_dir: PathBuf) -> Router {
     let index = static_dir.join("index.html");
+    let previews = crate::source_previews::router(
+        state.pool.clone(),
+        std::env::var("SOURCE_THUMBNAILS_ENABLED").as_deref() == Ok("true"),
+    );
     Router::new()
         .route(
             "/api/v2/identity-assets/{sha256}/{filename}",
             get(identity_asset),
         )
+        .merge(previews)
         .merge(service_router(state))
         .route("/api/{*path}", any(api_not_found))
         .fallback_service(ServeDir::new(static_dir).fallback(ServeFile::new(index)))
