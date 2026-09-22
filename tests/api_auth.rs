@@ -431,7 +431,7 @@ async fn human_api_declares_v2_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.3.0");
     assert_eq!(metadata["api_version"], "v2");
     assert_eq!(metadata["ontology_version"], "v3");
-    assert_eq!(metadata["database_schema_version"], 29);
+    assert_eq!(metadata["database_schema_version"], 30);
     assert_eq!(metadata["tool_version"], "1.1.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router

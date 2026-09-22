@@ -995,7 +995,7 @@ async fn get_or_create_user(
     Ok(id)
 }
 
-async fn ensure_participant_connection(
+pub(crate) async fn ensure_participant_connection(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
     run_id: Uuid,
@@ -1083,7 +1083,7 @@ async fn insert_message(
     Ok(Some(id))
 }
 
-async fn queue_next_window(
+pub(crate) async fn queue_next_window(
     tx: &mut Transaction<'_, Postgres>,
     _actor: &ActorContext,
     run_id: Uuid,
@@ -1100,7 +1100,8 @@ async fn queue_next_window(
                  (SELECT previous.ingestion_sequence FROM chat_messages previous
                   JOIN chats c ON c.curation_queued_through_message_id=previous.id
                   WHERE c.object_id=$1), 0)
-           ORDER BY m.ingestion_sequence"#,
+           ORDER BY m.ingestion_sequence
+           LIMIT (SELECT CASE WHEN provider='codex' THEN 100 ELSE NULL END FROM chats WHERE object_id=$1)"#,
     )
     .bind(chat_object_id)
     .fetch_all(&mut **tx)
