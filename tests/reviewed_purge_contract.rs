@@ -455,11 +455,14 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
     );
     // A preview label without completion still blocks; a completed Memory
     // preview is retained journal history and does not hold fixtures forever.
-    sqlx::query("UPDATE runs SET kind='memory_dream',status='preview' WHERE id=$1")
+    sqlx::query("UPDATE runs SET status='completed',completed_at=now() WHERE id=$1")
         .bind(active_run)
         .execute(&pool)
         .await
         .unwrap();
+    let preview_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'memory_dream','preview','system','context-memory-dream',$2,$3)")
+        .bind(preview_run).bind(Uuid::new_v4().to_string()).bind(json!({"memory_ids":[active_fixture]})).execute(&pool).await.unwrap();
     let req = request(vec![selection(&pool, "objects", active_fixture).await]);
     let (_, unfinished) = call(
         &unapproved,
@@ -477,12 +480,12 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
             .any(|r| r["reason"].as_str().unwrap_or("").contains("nonterminal"))
     );
     sqlx::query("UPDATE runs SET completed_at=now() WHERE id=$1")
-        .bind(active_run)
+        .bind(preview_run)
         .execute(&pool)
         .await
         .unwrap();
     let before: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM runs r WHERE id=$1")
-        .bind(active_run)
+        .bind(preview_run)
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -515,7 +518,7 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
         StatusCode::OK
     );
     let after: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM runs r WHERE id=$1")
-        .bind(active_run)
+        .bind(preview_run)
         .fetch_one(&pool)
         .await
         .unwrap();
