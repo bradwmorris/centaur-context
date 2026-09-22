@@ -58,6 +58,10 @@ def git_directory(path: Path) -> str:
     return str(Path(result.stdout.strip()).resolve())
 
 
+class UnmappedRepository(ValueError):
+    """A new session is outside this explicitly opt-in installation."""
+
+
 class Settings:
     def __init__(self, path: Path):
         self.path = path.resolve()
@@ -93,7 +97,10 @@ class Settings:
                 raise ValueError("Use HTTPS or an explicit loopback HTTP tunnel")
 
     def route(self, cwd: str, session: str) -> tuple[str, str]:
-        common = git_directory(Path(cwd))
+        try:
+            common = git_directory(Path(cwd))
+        except subprocess.CalledProcessError as error:
+            raise UnmappedRepository("Capture is unconfigured for this directory") from error
         selected = self.data.get("session_bindings", {}).get(session)
         candidates = []
         for alias, repo in self.repositories.items():
@@ -103,6 +110,8 @@ class Settings:
             if selected not in candidates:
                 raise ValueError("Explicit session binding does not match its repository")
             candidates = [selected]
+        if not candidates:
+            raise UnmappedRepository("Capture is unconfigured for this repository")
         if len(candidates) != 1:
             raise ValueError("Capture is unconfigured: select exactly one Context destination")
         alias = candidates[0]
@@ -491,6 +500,13 @@ def main():
             try:
                 result=capture(settings,event)
             except (ValueError,RuntimeError,OSError,KeyError,subprocess.SubprocessError) as error:
+                # A global hook must leave unrelated projects alone. A previously
+                # bound session losing its route is still an actionable error.
+                if isinstance(error,UnmappedRepository):
+                    with database(settings) as db:
+                        known=db.execute("SELECT 1 FROM sessions WHERE id=?",(event.get("session_id"),)).fetchone()
+                    if not known:
+                        print("{}");return
                 # Capture errors must be visible without preventing a Codex response.
                 with database(settings) as db,db:
                     if event.get("session_id"):

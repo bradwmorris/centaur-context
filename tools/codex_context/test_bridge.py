@@ -249,3 +249,15 @@ def test_agent_analysis_phase_is_not_visible_capture(setup):
     append(path,{'type':'event_msg','payload':{'type':'item_completed','thread_id':sid,'turn_id':turn,'item':{'type':'AgentMessage','id':'hidden','phase':'analysis','content':[{'type':'Text','text':'Excluded internal text'}]}}})
     b.capture(s,event(repo,sid,path))
     assert not any(x['messages'] for x in pending(s))
+
+
+def test_global_hook_skips_unmapped_work_but_reports_lost_existing_route(setup,tmp_path,monkeypatch,capsys):
+    s,repo,sid,path=setup;outside=tmp_path/'unrelated';outside.mkdir()
+    monkeypatch.setattr(b.sys,'argv',['bridge','--config',str(s.path),'hook'])
+    monkeypatch.setattr(b.sys,'stdin',io.StringIO(json.dumps(event(outside,sid,path))))
+    b.main();assert json.loads(capsys.readouterr().out)=={}
+    with b.database(s) as db:assert db.execute('SELECT count(*) FROM sessions').fetchone()[0]==0
+    b.capture(s,event(repo,sid,path))
+    monkeypatch.setattr(b.sys,'stdin',io.StringIO(json.dumps(event(outside,sid,path))))
+    b.main();assert 'needs attention' in json.loads(capsys.readouterr().out)['systemMessage']
+    with b.database(s) as db:assert 'unconfigured' in db.execute('SELECT error FROM sessions WHERE id=?',(sid,)).fetchone()[0]

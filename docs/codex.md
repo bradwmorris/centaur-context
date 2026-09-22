@@ -28,7 +28,8 @@ Core owns the reusable API/client integration. Private overlays own repository
 routing, endpoints, credentials, canonical human identity, transport and inference
 settings. Two installations use separate credentials and databases. Shared-core
 or mixed-domain work requires an explicit destination; there is no broadcast or
-semantic guessing. A session's destination is immutable once capture starts.
+semantic guessing. A session's destination is immutable once capture starts. Global hooks quietly skip
+new unmapped projects; loss of an existing session's route reports an error.
 
 ## Server configuration
 
