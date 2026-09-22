@@ -143,7 +143,7 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
         .unwrap();
     sqlx::query("INSERT INTO embeddings(object_id,model,dimensions,source_hash,format_version,input_mode,status) VALUES($1,'synthetic',1,$2,'synthetic','shared','pending')").bind(fixture).bind("a".repeat(64)).execute(&pool).await.unwrap();
     let run = Uuid::new_v4();
-    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'human_mutation','completed','human','fixture',$2,$3)").bind(run).bind(Uuid::new_v4().to_string()).bind(json!({"historical_fixture":fixture})).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'human_mutation','completed','human','fixture',$2,$3)").bind(run).bind(Uuid::new_v4().to_string()).bind(json!({"historical_fixture":format!("前缀café{fixture}suffix")})).execute(&pool).await.unwrap();
     for (n, id) in [(1, fixture), (2, retained)] {
         sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) VALUES($1,$2,$3,'object',$4,'created','human','fixture',1,'{}',false,now())").bind(Uuid::new_v4()).bind(run).bind(n).bind(id).execute(&pool).await.unwrap();
     }
