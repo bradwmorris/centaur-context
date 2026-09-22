@@ -2302,6 +2302,16 @@ async fn undo_curator_run(
     Extension(actor): Extension<ActorContext>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM runs WHERE id=$1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(db::DbError::from)?;
+    if matches!(kind.as_deref(), Some("memory_dream" | "memory_capture")) {
+        return Ok(Json(
+            json!({"data":crate::dreaming::undo(&state.pool,id).await?}),
+        ));
+    }
     let result = crate::curator::undo_as(&state.pool, id, &actor)
         .await
         .map_err(map_curator_error)?;

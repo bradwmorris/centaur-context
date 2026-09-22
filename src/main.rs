@@ -187,6 +187,12 @@ async fn main() -> Result<()> {
     };
     let curator_pool = state.pool.clone();
     let curator_embeddings = state.embeddings.clone();
+    let dream_worker = centaur_context::dreaming::run_worker(
+        state.pool.clone(),
+        config.curator_model.clone(),
+        config.memory_dream_mode.clone(),
+        config.memory_dream_interval,
+    );
     let curator_model = config.curator_model.clone();
     let curator_text_search_config = config.text_search_config;
     let curator_worker = async move {
@@ -290,6 +296,11 @@ async fn main() -> Result<()> {
         }
     };
 
+    let memory_capture_worker = centaur_context::memory::run_capture_worker(
+        state.pool.clone(),
+        config.memory_capture_enabled,
+    );
+
     tokio::select! {
         result = axum::serve(human_listener, human) => result.context("human server stopped")?,
         result = axum::serve(agent_listener, agent) => result.context("agent server stopped")?,
@@ -303,6 +314,8 @@ async fn main() -> Result<()> {
         result = external_action_server => result?,
         _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
         _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
+        _ = memory_capture_worker => unreachable!("memory capture worker runs until shutdown"),
+        _ = dream_worker => unreachable!("dream worker runs until shutdown"),
         _ = curator_worker => unreachable!("curator worker runs until shutdown"),
         _ = shutdown_signal() => info!("shutdown signal received"),
     }
