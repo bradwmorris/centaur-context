@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 async fn test_pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;
-    assert!(url.contains("centaur_context_test") || url.contains("centaur_os_test"));
+    assert!(url.contains("centaur_context_test"));
     Some(
         PgPoolOptions::new()
             .max_connections(5)
