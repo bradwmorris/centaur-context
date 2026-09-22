@@ -793,56 +793,6 @@ pub async fn pass(
 #[derive(Hash, Eq, PartialEq)]
 struct ValueKey(String);
 
-#[cfg(test)]
-mod input_tests {
-    use super::*;
-
-    #[test]
-    fn model_input_preserves_grounding_without_database_or_note_payloads() {
-        let message = json!({"id":"message","sender":"Alex","content":"Alex chose weekly reviews.","truncated":false});
-        let batch = Batch {
-            memories: vec![
-                json!({"id":"memory","title":"Weekly reviews","description":"Alex chose weekly reviews.",
-                "revision":7,"protected":false,"subtype":{"happened_at":"2026-09-22T00:00:00Z"},
-                "provenance":{"supporting_message_ids":["message"],"chat_object_id":"chat","unused_receipt":"x".repeat(10_000)}}),
-            ],
-            connections: vec![
-                json!({"id":"edge","source_object_id":"memory","target_object_id":"chat","kind":"derived_from","description":"Original discussion.","revision":3}),
-            ],
-            evidence: vec![
-                message.clone(),
-                json!({"id":"event","type":"committed_event","actor_id":"actor","actor_type":"human","at":"2026-09-22T00:00:00Z",
-                "object":{"id":"note","kind":"note","title":"Review decision","description":"A recorded decision.","subtype":{"content":"private note body".repeat(1000)}}}),
-            ],
-            targets: vec![
-                json!({"id":"chat","kind":"chat","title":"Research review","description":"Original discussion."}),
-                json!({"id":"unrelated","title":"Outside the reduced batch"}),
-            ],
-        };
-        let input = model_input(&batch);
-        assert_eq!(input["evidence"][0], message);
-        assert_eq!(
-            input["memories"][0]["provenance"]["supporting_message_ids"],
-            json!(["message"])
-        );
-        assert_eq!(input["memories"][0]["happened_at"], "2026-09-22T00:00:00Z");
-        assert_eq!(input["connections"][0]["target_object_id"], "chat");
-        assert_eq!(input["targets"].as_array().unwrap().len(), 1);
-        assert_eq!(input["evidence"][1]["object"]["title"], "Review decision");
-        assert!(!input.to_string().contains("private note body"));
-        assert!(input.to_string().len() < 2000);
-        // The commit validator still receives the original complete snapshot.
-        assert_eq!(batch.memories[0]["revision"], 7);
-        assert_eq!(
-            batch.memories[0]["provenance"]["unused_receipt"]
-                .as_str()
-                .unwrap()
-                .len(),
-            10_000
-        );
-    }
-}
-
 /// Exact-run recovery, exposed only through the existing owner HTTP surface.
 /// Any subsequent user/worker revision makes the whole undo fail atomically.
 pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
@@ -927,4 +877,54 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
         .await?;
     tx.commit().await?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn model_input_preserves_grounding_without_database_or_note_payloads() {
+        let message = json!({"id":"message","sender":"Alex","content":"Alex chose weekly reviews.","truncated":false});
+        let batch = Batch {
+            memories: vec![
+                json!({"id":"memory","title":"Weekly reviews","description":"Alex chose weekly reviews.",
+                "revision":7,"protected":false,"subtype":{"happened_at":"2026-09-22T00:00:00Z"},
+                "provenance":{"supporting_message_ids":["message"],"chat_object_id":"chat","unused_receipt":"x".repeat(10_000)}}),
+            ],
+            connections: vec![
+                json!({"id":"edge","source_object_id":"memory","target_object_id":"chat","kind":"derived_from","description":"Original discussion.","revision":3}),
+            ],
+            evidence: vec![
+                message.clone(),
+                json!({"id":"event","type":"committed_event","actor_id":"actor","actor_type":"human","at":"2026-09-22T00:00:00Z",
+                "object":{"id":"note","kind":"note","title":"Review decision","description":"A recorded decision.","subtype":{"content":"private note body".repeat(1000)}}}),
+            ],
+            targets: vec![
+                json!({"id":"chat","kind":"chat","title":"Research review","description":"Original discussion."}),
+                json!({"id":"unrelated","title":"Outside the reduced batch"}),
+            ],
+        };
+        let input = model_input(&batch);
+        assert_eq!(input["evidence"][0], message);
+        assert_eq!(
+            input["memories"][0]["provenance"]["supporting_message_ids"],
+            json!(["message"])
+        );
+        assert_eq!(input["memories"][0]["happened_at"], "2026-09-22T00:00:00Z");
+        assert_eq!(input["connections"][0]["target_object_id"], "chat");
+        assert_eq!(input["targets"].as_array().unwrap().len(), 1);
+        assert_eq!(input["evidence"][1]["object"]["title"], "Review decision");
+        assert!(!input.to_string().contains("private note body"));
+        assert!(input.to_string().len() < 2000);
+        // The commit validator still receives the original complete snapshot.
+        assert_eq!(batch.memories[0]["revision"], 7);
+        assert_eq!(
+            batch.memories[0]["provenance"]["unused_receipt"]
+                .as_str()
+                .unwrap()
+                .len(),
+            10_000
+        );
+    }
 }
