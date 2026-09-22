@@ -3,6 +3,7 @@ WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+RUN if [ -f .context-overlay/package-lock.json ]; then npm ci --prefix .context-overlay --ignore-scripts --no-audit --no-fund; fi
 RUN npm run build
 
 FROM rust:1.91.0-bookworm@sha256:e187887ec511b3d93e45c0231d2f0fd59f1347526c58aa86343aa83c74f3e1a9 AS rust-build

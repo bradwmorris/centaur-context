@@ -1,0 +1,4 @@
+.summary { padding: 1rem; }
+.summary ul { padding: 0; list-style: none; }
+.summary li { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding: .75rem 0; border-bottom: 1px solid currentColor; }
+.summary button { font: inherit; cursor: pointer; }
