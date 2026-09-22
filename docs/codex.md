@@ -39,8 +39,8 @@ active `CODEX_HUMAN_USER_ID`, exact `CODEX_REPOSITORIES` aliases, and optionally
 may bind its private interface and use an existing authenticated local tunnel.
 Do not expose this listener publicly.
 
-`CODEX_CURATE=true` requires configured Curator model transport and `codex` in
-`CURATOR_ALLOWED_PROVIDERS`. Provider selection defaults to `slack,codex`; a
+`CODEX_CURATE=true` requires configured Curator model transport. When
+`CURATOR_ALLOWED_PROVIDERS` is set, it must include `codex`. An unset provider selection preserves existing behavior; a
 personal installation can select only `codex` without starting Slack curation.
 Memory dreaming and generic event capture keep their own independent controls.
 A deployment without curation remains Chat-only and reports that explicitly.
@@ -86,7 +86,12 @@ software with the same user's full filesystem privileges. HTTP proxy environment
 variables and redirects cannot redirect these requests. Non-loopback endpoints
 require HTTPS.
 
-Register `centaur-codex-context --config /private/config.json mcp` as one STDIO MCP
+Use `centaur-codex-context --config /private/config.json install --launchd` on
+macOS to install the owned MCP entry, hooks and 30-second recovery job. It backs
+up existing configuration and preserves other entries. Use the same command with
+`uninstall --launchd` to remove only owned entries, retaining unsent data.
+
+For manual installation, register `centaur-codex-context --config /private/config.json mcp` as one STDIO MCP
 server. Configure the same executable's `hook` command for `SessionStart`,
 `UserPromptSubmit`, `Stop` and `Interrupt`. Review/trust the exact hook definitions
 through Codex before activation; installing a hook does not establish trust.
@@ -122,3 +127,23 @@ whose name contains `centaur_context_test`. Before closing the issue, demonstrat
 actual desktop capture, concise Memory retrieval by a later session/agent,
 explicit Note/Task creation, two-instance isolation and outage/retry recovery.
 See the RD for remaining outcome-verification and rollout evidence.
+
+
+## Verified Git observations
+
+The trusted adapter snapshots HEAD at the start of a user turn and checks the
+same allowlisted worktree at Stop. At most ten fresh first-parent commits with
+bounded raw objects are accepted. The server recomputes object hashes and parent
+links, then records one concise Memory of the observed worktree change. It never
+claims who authored it, that tests passed, or that a PR merged or deployed.
+Assistant prose and pasted logs cannot supply this evidence. Hashes validate
+object contents, while repository observation relies on the reviewed host adapter.
+Concurrent writers on the same checkout cannot be attributed to a particular agent.
+
+The receipt uses a distinct system actor and a namespaced `memory_capture` Run,
+with standard Object Events and a `derived_from` Chat Connection. Only commit IDs
+and a proof digest are retained; raw author/email/signature data is discarded.
+Existing Memory dreaming excludes this actor until it has its own evidence adapter.
+The ordinary human-message curator validator remains unchanged. CODEX_CURATE
+also gates Git outcome Memories. Missing baselines, rebases, older imported commits,
+non-UTF8/oversized objects and interruptions do not become verified Git outcomes.

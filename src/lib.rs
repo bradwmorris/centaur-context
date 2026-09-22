@@ -1,5 +1,6 @@
 pub mod api;
 pub mod codex;
+mod codex_outcomes;
 pub mod config;
 pub mod contract;
 pub mod curator;

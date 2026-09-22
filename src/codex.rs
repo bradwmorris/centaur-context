@@ -119,6 +119,8 @@ pub struct CaptureBatch {
     pub title: String,
     pub messages: Vec<CapturedMessage>,
     pub finished_turn_id: Option<Uuid>,
+    #[serde(default)]
+    pub git_receipts: Vec<crate::codex_outcomes::GitReceipt>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -141,12 +143,15 @@ async fn capture(
     Extension(session): Extension<Session>,
     Json(input): Json<CaptureBatch>,
 ) -> Result<Json<Value>, ApiError> {
-    if input.version != 1 || input.messages.len() > 100 {
+    if input.version != 1 || input.messages.len() > 100 || input.git_receipts.len() > 1 {
         return Err(invalid(
             "Capture version must be 1 and batches contain at most 100 messages",
         ));
     }
     crate::domain::required_text(input.title.clone(), "title", 300)?;
+    for receipt in &input.git_receipts {
+        crate::codex_outcomes::verify(receipt)?;
+    }
     let mut ids = HashSet::new();
     for message in &input.messages {
         crate::domain::required_text(message.id.clone(), "message.id", 180)?;
@@ -250,7 +255,24 @@ async fn capture(
     } else {
         None
     };
-    let result = json!({"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curation_enabled":session.config.curate});
+    let mut outcome_memories = Vec::new();
+    if session.config.curate {
+        for receipt in &input.git_receipts {
+            if let Some(id) = crate::codex_outcomes::capture(
+                &mut tx,
+                &actor,
+                session.config.host_id,
+                &session.repository,
+                chat_id,
+                receipt,
+            )
+            .await?
+            {
+                outcome_memories.push(id);
+            }
+        }
+    }
+    let result = json!({"outcome_memory_ids":outcome_memories,"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curation_enabled":session.config.curate});
     sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now() WHERE id=$1")
         .bind(run_id)
         .bind(&result)
@@ -322,7 +344,7 @@ async fn ensure_agent(
     Ok(id)
 }
 
-async fn journal(
+pub(crate) async fn journal(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
     run: Uuid,

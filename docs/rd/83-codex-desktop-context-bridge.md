@@ -2,7 +2,7 @@
 
 GitHub Issue: [#83](https://github.com/bradwmorris/centaur-context/issues/83)
 
-Status: create-issue planning complete; implementation has not started.
+Status: implementation and verification in progress in PR #88; not yet activated.
 The GitHub Issue contains the published design and acceptance contract.
 
 ## Outcome
@@ -142,3 +142,21 @@ Review conclusion: the above boundary supports implementation without new public
 network exposure or agent database access. Test identity/replay/routing, outcome
 verification, privacy filtering, recovery and actual desktop delivery before
 activation and closure. Remaining choices and evidence belong in this RD.
+
+
+### Runtime and receipt verification update
+
+The bundled 0.153.4 runtime executed reviewed hooks through its native trust
+flow in an isolated Codex home. A real synthetic turn emitted SessionStart,
+UserPromptSubmit and Stop with matching UUIDs and transcript paths. The resulting
+paginated transcript contained only the expected visible message item shapes and
+completed-turn marker. This establishes actual lifecycle behavior; final Desktop
+activation against Context is still required.
+
+Code outcome coverage is intentionally factual: an observed worktree gained new
+Git commits with verified object hashes and first-parent continuity from a trusted
+pre-turn checkpoint. It does not prove authorship, tests, merge, deployment or task
+completion. Receipts use a distinct codex-capture actor, standard reversible Events,
+and the existing memory_capture Run kind. They stay outside current Memory dreaming
+admission. The server retains references and proof digests rather than raw author
+or signature data. No new interactive Memory-write capability is exposed.

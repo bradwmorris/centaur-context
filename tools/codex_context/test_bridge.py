@@ -128,6 +128,7 @@ def test_failed_delivery_retains_batch_and_success_acks_exact_batch(setup,monkey
 def test_mcp_uses_runtime_session_metadata_and_only_three_tools(setup,monkeypatch):
     s,repo,sid,path=setup
     calls=[]
+    monkeypatch.setattr(b.SessionClient,"context_contract",lambda self:b.contract.document())
     monkeypatch.setattr(b,'flush',lambda *a,**k:{'delivered':0})
     with pytest.raises(ValueError,match='no trusted'):b.mcp_call(s,{'name':'context_search','arguments':{'query':'x'},'_meta':{'threadId':sid}})
     b.capture(s,event(repo,sid,path))
@@ -143,6 +144,7 @@ def test_mcp_uses_runtime_session_metadata_and_only_three_tools(setup,monkeypatc
 def test_tool_writes_wait_for_chat_and_provenance_is_not_model_selectable(setup,monkeypatch):
     s,repo,sid,path=setup;b.capture(s,event(repo,sid,path))
     monkeypatch.setattr(b,'flush',lambda *a,**k:{'delivered':0})
+    monkeypatch.setattr(b.SessionClient,"context_contract",lambda self:b.contract.document())
     params={'name':'context_apply','arguments':{},'_meta':{'threadId':sid}}
     with pytest.raises(ValueError,match='pending'):b.mcp_call(s,params)
     with b.database(s) as db,db:db.execute('UPDATE sessions SET chat_id=?',(str(uuid.uuid4()),))
@@ -155,3 +157,57 @@ def test_no_redirects_or_public_plaintext_endpoints(setup):
     with pytest.raises(ValueError,match='redirect'):b.NoRedirect().redirect_request(None,None,None,None,None,None)
     d=s.data;d['targets']['organization']['url']='http://example.invalid';s.path.write_text(json.dumps(d))
     with pytest.raises(ValueError,match='HTTPS'):b.Settings(s.path)
+
+
+def test_delivery_success_cannot_hide_broken_transcript(setup,monkeypatch):
+    s,repo,sid,path=setup;b.capture(s,event(repo,sid,path))
+    path.write_text('{}\n')
+    monkeypatch.setattr(b.SessionClient,'_request',lambda *a,**k:{'chat_object_id':str(uuid.uuid4())})
+    assert b.flush(s)['delivered']==1
+    assert 'Unsupported' in b.status(s)['sessions'][0]['error']
+
+
+def test_oversized_unterminated_line_is_visible(setup,monkeypatch):
+    s,repo,sid,path=setup;b.capture(s,event(repo,sid,path))
+    with path.open('a') as f:f.write('x'*500)
+    monkeypatch.setattr(b,'MAX_LINE_BYTES',300)
+    with pytest.raises(ValueError,match='Oversized'):b.capture(s,event(repo,sid,path))
+
+
+def test_git_receipt_observes_actual_commit_once_without_trusting_assistant(setup):
+    s,repo,sid,path=setup;turn=str(uuid.uuid4())
+    def commit(subject):
+        subprocess.run(['git','-C',str(repo),'-c','user.name=Example','-c','user.email=example@example.invalid','commit','--allow-empty','-qm',subject],check=True)
+    commit('Baseline');b.capture(s,event(repo,sid,path))
+    b.capture(s,event(repo,sid,path,'UserPromptSubmit',turn))
+    item(path,sid,turn,'AgentMessage','claim','I deployed everything and all tests passed.')
+    b.capture(s,event(repo,sid,path,'Stop',turn))
+    assert not any(x.get('git_receipts') for x in pending(s))
+    commit('Add the verified bridge')
+    b.capture(s,event(repo,sid,path,'Stop',turn));b.capture(s,event(repo,sid,path,'Stop',turn))
+    receipts=[x['git_receipts'][0] for x in pending(s) if x.get('git_receipts')]
+    assert len(receipts)==1 and 'Add the verified bridge' in receipts[0]['commits'][0]['raw']
+    assert 'deployed' not in str(receipts)
+
+
+def test_install_and_remove_preserves_unrelated_config_and_hooks(setup,tmp_path):
+    from codex_context.install import install
+    s,*_=setup;home=tmp_path/'codex';home.mkdir()
+    original='model="example"\n[mcp_servers.existing]\ncommand="existing"\n'
+    (home/'config.toml').write_text(original)
+    other={'hooks':[{'type':'command','command':'unrelated'}]}
+    (home/'hooks.json').write_text(json.dumps({'description':'keep me','hooks':{'Stop':[other]}}))
+    install(s,home);install(s,home)
+    hooks=json.loads((home/'hooks.json').read_text())
+    assert len(hooks['hooks']['Stop'])==2 and hooks['hooks']['Stop'][0]==other
+    assert '[mcp_servers.existing]' in (home/'config.toml').read_text()
+    install(s,home,remove=True)
+    assert (home/'config.toml').read_text().strip()==original.strip()
+    assert json.loads((home/'hooks.json').read_text())['hooks']['Stop']==[other]
+
+
+def test_install_refuses_to_overwrite_edited_owned_config(setup,tmp_path):
+    from codex_context.install import install
+    s,*_=setup;home=tmp_path/'codex';install(s,home)
+    p=home/'config.toml';p.write_text(p.read_text().replace('tool_timeout_sec=30','tool_timeout_sec=90'))
+    with pytest.raises(ValueError,match='edited'):install(s,home,remove=True)
