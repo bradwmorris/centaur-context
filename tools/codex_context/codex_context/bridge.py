@@ -120,7 +120,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
  id TEXT PRIMARY KEY, repository TEXT NOT NULL, target TEXT NOT NULL,
  transcript TEXT, cursor INTEGER NOT NULL DEFAULT 0, transcript_identity TEXT,
- cwd TEXT NOT NULL, pending_finish TEXT,
+ cwd TEXT NOT NULL,
  title TEXT NOT NULL, coverage TEXT NOT NULL, error TEXT, chat_id TEXT,
  updated REAL NOT NULL, started REAL NOT NULL
 );
@@ -188,10 +188,10 @@ def extract_messages(settings: Settings, path: Path, session: str, cursor: int, 
         while total < MAX_TRANSCRIPT_READ:
             before = stream.tell()
             line = stream.readline(MAX_LINE_BYTES + 1)
-            if not line or not line.endswith(b"\n"):
-                break  # A partial write remains pending, never advance over it.
             if len(line) > MAX_LINE_BYTES:
                 raise ValueError("Oversized transcript item; capture cursor preserved")
+            if not line or not line.endswith(b"\n"):
+                break  # A partial write remains pending, never advance over it.
             total += len(line)
             record = json.loads(line)
             data = record.get("payload", {})
@@ -360,7 +360,7 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                     response = client._request("POST","/api/v2/codex/capture",json=json.loads(batch["payload"]))
                     with db:
                         db.execute("INSERT OR REPLACE INTO receipts VALUES(?,?,?,?)",(batch["id"],session["id"],canonical(response),time.time()))
-                        db.execute("UPDATE sessions SET chat_id=?,error=NULL,updated=? WHERE id=?",(response["chat_object_id"],time.time(),session["id"]))
+                        db.execute("UPDATE sessions SET chat_id=?,updated=? WHERE id=?",(response["chat_object_id"],time.time(),session["id"]))
                         db.execute("DELETE FROM batches WHERE id=?",(batch["id"],))
                     delivered += 1
                 except (RuntimeError,ValueError,KeyError,OSError) as error:
@@ -369,7 +369,6 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                     with db:
                         db.execute("UPDATE batches SET attempts=?,next_attempt=?,error=? WHERE id=?",
                             (attempts,time.time()+min(300,2**min(attempts,8)),safe,batch["id"]))
-                        db.execute("UPDATE sessions SET error=?,updated=? WHERE id=?",(safe,time.time(),session["id"]))
             with db:
                 db.execute("DELETE FROM receipts WHERE completed<?",(time.time()-30*86400,))
         return {"delivered":delivered}
@@ -383,6 +382,8 @@ def status(settings: Settings) -> dict:
         for row in db.execute("SELECT id,repository,target,coverage,error,chat_id,updated FROM sessions ORDER BY updated DESC"):
             item = dict(row)
             item["pending_batches"] = db.execute("SELECT count(*) FROM batches WHERE session_id=?",(row["id"],)).fetchone()[0]
+            failed = db.execute("SELECT error FROM batches WHERE session_id=? AND error IS NOT NULL ORDER BY rowid LIMIT 1",(row["id"],)).fetchone()
+            item["delivery_error"] = failed[0] if failed else None
             last = db.execute("SELECT response FROM receipts WHERE session_id=? ORDER BY completed DESC LIMIT 1",(row["id"],)).fetchone()
             item["last_receipt"] = json.loads(last[0]) if last else None
             sessions.append(item)

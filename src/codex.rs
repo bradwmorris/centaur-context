@@ -62,6 +62,22 @@ async fn authenticate(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    let session = authenticate_request(&config, &request)?;
+    request.extensions_mut().insert(ActorContext {
+        actor_type: "centaur_agent",
+        actor_id: format!("codex:{}", config.host_id),
+        centaur_thread_key: Some(format!(
+            "codex:{}:{}:{}",
+            config.host_id, session.repository, session.id
+        )),
+        centaur_execution_id: None,
+        is_agent: true,
+    });
+    request.extensions_mut().insert(session);
+    Ok(next.run(request).await)
+}
+
+fn authenticate_request(config: &Arc<CodexConfig>, request: &Request) -> Result<Session, ApiError> {
     let supplied = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -88,19 +104,11 @@ async fn authenticate(
             "Repository is not bound to this Context instance".into(),
         ));
     }
-    request.extensions_mut().insert(ActorContext {
-        actor_type: "centaur_agent",
-        actor_id: format!("codex:{}", config.host_id),
-        centaur_thread_key: Some(format!("codex:{}:{repository}:{id}", config.host_id)),
-        centaur_execution_id: None,
-        is_agent: true,
-    });
-    request.extensions_mut().insert(Session {
+    Ok(Session {
         id,
         repository,
-        config,
-    });
-    Ok(next.run(request).await)
+        config: config.clone(),
+    })
 }
 
 #[derive(Debug, Deserialize, Serialize)]

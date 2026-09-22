@@ -194,21 +194,26 @@ impl Config {
         let embedding = embedding_config()?;
         let curator_model = curator_model_config()?;
         let curator_providers = env::var("CURATOR_ALLOWED_PROVIDERS")
-            .unwrap_or_else(|_| "slack,codex".into())
-            .split(',')
-            .map(str::trim)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if curator_providers.is_empty()
-            || curator_providers
-                .iter()
-                .any(|v| !matches!(v.as_str(), "slack" | "codex"))
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if curator_providers
+            .iter()
+            .any(|v| !matches!(v.as_str(), "slack" | "codex"))
         {
             bail!("CURATOR_ALLOWED_PROVIDERS must contain slack and/or codex");
         }
         let codex = codex_config()?;
         if codex.as_ref().is_some_and(|c| c.curate)
-            && (curator_model.is_none() || !curator_providers.iter().any(|v| v == "codex"))
+            && (curator_model.is_none()
+                || (!curator_providers.is_empty()
+                    && !curator_providers.iter().any(|v| v == "codex")))
         {
             bail!("CODEX_CURATE requires a Curator model with codex in CURATOR_ALLOWED_PROVIDERS");
         }

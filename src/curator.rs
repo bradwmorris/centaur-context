@@ -1764,7 +1764,7 @@ async fn claim_run(
         r#"WITH candidate AS (
                SELECT id FROM runs
                WHERE kind='curator' AND COALESCE((result->>'attempts')::integer,0) < 3
-                 AND EXISTS (SELECT 1 FROM chats WHERE object_id=runs.chat_object_id AND provider=ANY($4))
+                 AND (cardinality($4::text[])=0 OR EXISTS (SELECT 1 FROM chats WHERE object_id=runs.chat_object_id AND provider=ANY($4)))
                  AND (
                    (status IN ('queued','failed') AND available_at <= now())
                    OR (status='running' AND started_at < now() - interval '10 minutes')
