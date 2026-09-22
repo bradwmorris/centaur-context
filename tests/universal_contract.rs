@@ -626,3 +626,105 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let owner = support::task_owner(&pool).await;
+    let chat = Uuid::new_v4();
+    let thread = Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'chat','Synthetic Slack conversation','Disposable identity verification conversation.','system','test','system','test')")
+        .bind(chat).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO chats(object_id,provider,workspace_id,channel_id,thread_id,surface_kind) VALUES($1,'slack','T-SYNTHETIC','C-SYNTHETIC',$2,'channel')")
+        .bind(chat).bind(&thread).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let token = "k".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let keys = [
+        (
+            format!("slack:T-SYNTHETIC:C-SYNTHETIC:{thread}"),
+            StatusCode::OK,
+        ),
+        (
+            format!("Slack:T-SYNTHETIC:bot-researcher:C-SYNTHETIC:{thread}"),
+            StatusCode::OK,
+        ),
+        (
+            format!("slack:T-SYNTHETIC:bot-networking:C-SYNTHETIC:{thread}"),
+            StatusCode::OK,
+        ),
+        (
+            format!("slack:OTHER:bot-researcher:C-SYNTHETIC:{thread}"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("slack:T-SYNTHETIC:bot-researcher:OTHER:{thread}"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "slack:T-SYNTHETIC:bot-researcher:C-SYNTHETIC:other".into(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            format!("slack:T-SYNTHETIC:bot-:C-SYNTHETIC:{thread}"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("slack:T-SYNTHETIC:unexpected:C-SYNTHETIC:{thread}"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("other:T-SYNTHETIC:bot-researcher:C-SYNTHETIC:{thread}"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("slack:T-SYNTHETIC::C-SYNTHETIC:{thread}"),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("slack:T-SYNTHETIC:bot-researcher:C-SYNTHETIC:{thread}:extra"),
+            StatusCode::BAD_REQUEST,
+        ),
+    ];
+    for (key, expected) in keys {
+        let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"task","kind":"task","title":"Synthetic chat-linked task","description":"Task for verifying the authenticated conversation boundary.","fields":{"owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Verify task creation in the matching conversation."}}]});
+        let mut req = request("POST", "/api/v2/apply", &token, body);
+        req.headers_mut()
+            .insert("x-centaur-thread-key", key.parse().unwrap());
+        let response = app.clone().oneshot(req).await.unwrap();
+        let status = response.status();
+        let result = json_body(response).await;
+        assert_eq!(status, expected, "write {key}: {result}");
+        if status == StatusCode::OK {
+            assert_eq!(
+                result["data"]["results"][0]["data"]["created_by_id"],
+                "agent-universal-test"
+            );
+        }
+        let mut req = request(
+            "GET",
+            &format!("/api/v2/context?q=synthetic&chat_object_id={chat}"),
+            &token,
+            json!({}),
+        );
+        req.headers_mut()
+            .insert("x-centaur-thread-key", key.parse().unwrap());
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "retrieval {key}: {}",
+            json_body(response).await
+        );
+    }
+}
