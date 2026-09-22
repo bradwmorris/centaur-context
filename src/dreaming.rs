@@ -80,6 +80,68 @@ pub struct Batch {
     pub targets: Vec<Value>,
 }
 
+/// The model needs event facts, not database bookkeeping. Keep the full snapshots
+/// in Batch for authorization/revision checks; send only the grounding fields.
+fn model_input(batch: &Batch) -> Value {
+    let memories: Vec<Value> = batch
+        .memories
+        .iter()
+        .map(|m| {
+            json!({
+                "id":m["id"], "title":m["title"], "description":m["description"],
+                "happened_at":m["subtype"]["happened_at"],
+                "provenance": {
+                    "source_event_id":m["provenance"]["source_event_id"],
+                    "supporting_message_ids":m["provenance"]["supporting_message_ids"],
+                    "chat_object_id":m["provenance"]["chat_object_id"]
+                }
+            })
+        })
+        .collect();
+    let connections: Vec<Value> = batch
+        .connections
+        .iter()
+        .map(|c| {
+            json!({
+                "id":c["id"], "source_object_id":c["source_object_id"],
+                "target_object_id":c["target_object_id"], "kind":c["kind"],
+                "description":c["description"]
+            })
+        })
+        .collect();
+    let target_ids: HashSet<&str> = batch
+        .connections
+        .iter()
+        .flat_map(|c| {
+            [
+                c["source_object_id"].as_str(),
+                c["target_object_id"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+        })
+        .collect();
+    let targets: Vec<Value> = batch.targets.iter()
+        .filter(|t| t["id"].as_str().is_some_and(|id| target_ids.contains(id)))
+        .map(|t| json!({"id":t["id"],"kind":t["kind"],"title":t["title"],"description":t["description"]}))
+        .collect();
+    let evidence: Vec<Value> = batch
+        .evidence
+        .iter()
+        .map(|e| {
+            if e["type"] == "committed_event" {
+                json!({"id":e["id"],"type":e["type"],"actor_id":e["actor_id"],
+                "actor_type":e["actor_type"],"at":e["at"],
+                "object":{"id":e["object"]["id"],"kind":e["object"]["kind"],
+                    "title":e["object"]["title"],"description":e["object"]["description"]}})
+            } else {
+                e.clone()
+            }
+        })
+        .collect();
+    json!({"memories":memories,"connections":connections,"evidence":evidence,"targets":targets})
+}
+
 /// Revision checkpoints live in the existing run ledger, not a second queue.
 /// NOT EXISTS cannot miss late commits the way a timestamp watermark can.
 pub async fn read_batch(pool: &PgPool) -> Result<Batch, db::DbError> {
@@ -629,12 +691,17 @@ pub async fn pass(
     if !claimed {
         return Ok(None);
     }
+    // Owning the only worker lease proves any prior running attempt was
+    // interrupted. Preserve its input/history, but do not leave a false active
+    // dependency behind after a process crash or lost database connection.
+    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
+        .execute(pool).await?;
     let mut batch = read_batch(pool).await?;
     if batch.memories.is_empty() {
         return Ok(None);
     }
     // Deterministically shrink the unit of work rather than truncate evidence.
-    while serde_json::to_vec(&batch)
+    while serde_json::to_vec(&model_input(&batch))
         .map_err(|e| invalid(&e.to_string()))?
         .len()
         > INPUT_BYTES
@@ -661,7 +728,7 @@ pub async fn pass(
             })
         });
     }
-    let input = serde_json::to_string(&batch).map_err(|e| invalid(&e.to_string()))?;
+    let input = serde_json::to_string(&model_input(&batch)).map_err(|e| invalid(&e.to_string()))?;
     let run = Uuid::new_v4();
     let revisions: serde_json::Map<String, Value> = batch
         .memories
@@ -815,4 +882,54 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
         .await?;
     tx.commit().await?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn model_input_preserves_grounding_without_database_or_note_payloads() {
+        let message = json!({"id":"message","sender":"Alex","content":"Alex chose weekly reviews.","truncated":false});
+        let batch = Batch {
+            memories: vec![
+                json!({"id":"memory","title":"Weekly reviews","description":"Alex chose weekly reviews.",
+                "revision":7,"protected":false,"subtype":{"happened_at":"2026-09-22T00:00:00Z"},
+                "provenance":{"supporting_message_ids":["message"],"chat_object_id":"chat","unused_receipt":"x".repeat(10_000)}}),
+            ],
+            connections: vec![
+                json!({"id":"edge","source_object_id":"memory","target_object_id":"chat","kind":"derived_from","description":"Original discussion.","revision":3}),
+            ],
+            evidence: vec![
+                message.clone(),
+                json!({"id":"event","type":"committed_event","actor_id":"actor","actor_type":"human","at":"2026-09-22T00:00:00Z",
+                "object":{"id":"note","kind":"note","title":"Review decision","description":"A recorded decision.","subtype":{"content":"private note body".repeat(1000)}}}),
+            ],
+            targets: vec![
+                json!({"id":"chat","kind":"chat","title":"Research review","description":"Original discussion."}),
+                json!({"id":"unrelated","title":"Outside the reduced batch"}),
+            ],
+        };
+        let input = model_input(&batch);
+        assert_eq!(input["evidence"][0], message);
+        assert_eq!(
+            input["memories"][0]["provenance"]["supporting_message_ids"],
+            json!(["message"])
+        );
+        assert_eq!(input["memories"][0]["happened_at"], "2026-09-22T00:00:00Z");
+        assert_eq!(input["connections"][0]["target_object_id"], "chat");
+        assert_eq!(input["targets"].as_array().unwrap().len(), 1);
+        assert_eq!(input["evidence"][1]["object"]["title"], "Review decision");
+        assert!(!input.to_string().contains("private note body"));
+        assert!(input.to_string().len() < 2000);
+        // The commit validator still receives the original complete snapshot.
+        assert_eq!(batch.memories[0]["revision"], 7);
+        assert_eq!(
+            batch.memories[0]["provenance"]["unused_receipt"]
+                .as_str()
+                .unwrap()
+                .len(),
+            10_000
+        );
+    }
 }

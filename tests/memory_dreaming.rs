@@ -307,12 +307,37 @@ async fn unchanged_batches_are_checkpointed_without_another_model_call() {
         poll_interval: std::time::Duration::from_secs(1),
         request_timeout: std::time::Duration::from_secs(1),
     };
+    let interrupted = run(&pool).await;
+    let mut active_lease = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(7818002)")
+        .execute(&mut *active_lease)
+        .await
+        .unwrap();
     assert!(
         dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
             .await
             .unwrap()
             .is_none()
     );
+    let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(interrupted)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "running");
+    active_lease.rollback().await.unwrap();
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(interrupted)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "failed");
     // Later edits become eligible; prior review cannot hide a new revision.
     sqlx::query("UPDATE objects SET revision=revision+1,updated_at=now() WHERE id=$1")
         .bind(id)

@@ -36,3 +36,6 @@ reviewer owns the exact live manifest and retains the export before executing it
 
 ### Indexed deletion follow-up
 Actual commit exposed quadratic full-row JSON matching on large immutable Event history. Delete reviewed rows through typed primary-key joins only (UUID IDs, subtype object IDs, and the exact two-column request key). Keep transaction locks, manifest approval, immutable-row allowlist and row-count guards unchanged. Verify a complete synthetic HTTP preview/commit over 15,000 large Events, retaining 14,791 unrelated Events.
+
+### Internal Chat cursor cycle
+Selected Chat rows point to their owned messages through two restrictive cursor foreign keys, while messages point back to Chats. After exact manifest validation and dependency checks, clear only selected Chats' two cursor fields inside the purge transaction. Their original values remain in the recovery export; any later failure restores all cursor fields and dependent rows. Never update retained Chats. Source current-Artifact links are removed by deleting selected Source subtypes before Artifacts; Artifact supersession and Run parent links are removed in their respective single-table statements. Integration coverage exercises populated Chat cursors, Artifact supersession/current pointer and parent Runs, including an injected late rollback and unchanged retained Chat cursors.
