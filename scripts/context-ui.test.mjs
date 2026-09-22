@@ -126,3 +126,12 @@ test('rejects lockfile traversal and mismatched package identity before installa
   await edit(lock, l => { delete l.packages['../outside/node_modules/bad']; l.version = 'file:../outside'; });
   await assert.rejects(readOverlay(f.config, sha), /identity drift/);
 });
+
+
+test('rejects local-path peer dependencies and incompatible React peers', async t => {
+  const f = await fixture(t); const pkg = path.join(f.overlay, 'package.json');
+  await edit(pkg, p => p.peerDependencies = { outside: 'file:../private' });
+  await assert.rejects(readOverlay(f.config, sha), /Only host React/);
+  await edit(pkg, p => p.peerDependencies = { react: '18.0.0' });
+  await assert.rejects(readOverlay(f.config, sha), /peer must exactly match/);
+});

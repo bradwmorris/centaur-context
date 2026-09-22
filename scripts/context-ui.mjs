@@ -64,6 +64,7 @@ export async function readOverlay(configPath, revision) {
   if (lock.lockfileVersion !== 3 || !lock.packages?.['']) fail('Overlay requires npm lockfileVersion 3');
   if (JSON.stringify(Object.entries(pkg.dependencies ?? {}).sort()) !== JSON.stringify(Object.entries(lock.packages[''].dependencies ?? {}).sort())) fail('Overlay package/lock dependency drift');
   for (const spec of Object.values(pkg.dependencies ?? {})) if (typeof spec !== 'string' || /^(file:|link:|workspace:|git|https?:|\.|\/)/.test(spec)) fail('Only locked registry dependency specifications are supported');
+  for (const name of Object.keys(pkg.peerDependencies ?? {})) if (!['react', 'react-dom'].includes(name)) fail('Only host React and React DOM peers are supported; declare other packages as locked dependencies');
   const host = await json(path.join(root, 'web/package.json'));
   for (const name of ['react', 'react-dom']) {
     if (pkg.dependencies?.[name]) fail(`${name} must be a host peer, not an overlay dependency`);

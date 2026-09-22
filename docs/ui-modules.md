@@ -78,7 +78,8 @@ consistent and registry artifacts must have integrity hashes. V1 supports locked
 npm registry packages only, not local/git/workspace dependencies, overlay scripts,
 dev/optional dependencies or packages requiring install scripts. The install uses
 `npm ci --ignore-scripts`. React and React DOM are provided by the host; if declared
-as peers, their versions must exactly match the host. Runtime aliases, including
+as peers, their versions must exactly match the host. Other peers are unsupported;
+declare those packages as locked dependencies. Runtime aliases, including
 JSX imports, ensure one host React runtime.
 
 The host lock and overlay lock remain separate. Staging includes only listed view
