@@ -421,6 +421,47 @@ mod tests {
         assert!(!fresh(&e, true));
         e.fetched = Instant::now() - FAILURE_TTL;
         assert!(!fresh(&e, false));
+        e.image = Some(Image {
+            bytes: vec![],
+            mime: "image/png",
+        });
+        e.fetched = Instant::now() - Duration::from_secs(3599);
+        assert!(fresh(&e, false));
+        e.fetched = Instant::now() - SUCCESS_TTL;
+        assert!(!fresh(&e, false));
+        e.fetched = Instant::now();
+        assert!(fresh(&e, true));
+    }
+
+    #[tokio::test]
+    async fn stalled_response_body_obeys_request_timeout() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                assert!(request.len() < 4096);
+                request.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n1")
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(limited_body(response, 8).await.is_err());
+        serve.abort();
     }
 
     #[tokio::test]

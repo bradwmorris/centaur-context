@@ -56,3 +56,46 @@ isolated live smoke test. Production enablement remains a separate owner review.
 
 Heavy compilation and container builds run remotely. Use a dedicated
 `centaur_context_test_*` database and resource-limited local demo containers.
+
+## Isolated acceptance evidence (2026-09-22)
+
+Remote image proof run `35703828196` built composed and stock ARM64 images from
+clean revision `d0dfe9a` with an external generated overlay pinned to that exact
+revision. CI run `35703828193` passed the full CONTRIBUTING checks, including
+Rust/database tests, dependency audit, web tests, composition and Python checks.
+Subsequent test-only changes add success-cache expiry and stalled-body coverage.
+
+The real composed container ran against a disposable
+`centaur_context_test_92_acceptance` database with CPU/memory limits. Browser and
+HTTP checks verified:
+
+- Both independent Sources views, List switching, direct links, reload,
+  back/forward, shared search/sort and keyboard opening canonical Source detail.
+- 106 unique canonical Sources across API pages of 100 and 6; both external
+  layouts rendered all 106 without duplicates. Extra test records were archived.
+- YouTube `jNQXAC9IVRw`: actual JPEG, 480×360, 15,921 bytes. The GitHub Blog
+  service-ownership article: publisher-declared PNG, 1200×630, 159,940 bytes.
+- Missing/private URLs displayed stable fallbacks. Offline collection refresh
+  reported the fetch error and incomplete results. Grid fit a 390px viewport
+  without horizontal page overflow; Kanban scrolls its own columns.
+- Repeated preview/forced-refresh requests left Source data and immutable Events
+  identical. Changing a fixture URL from absent to public to private changed
+  preview availability immediately without serving the previous URL's image.
+- A stock image using the same database showed the unchanged Sources list and
+  an explicit fallback for removed view URLs. Tasks Board still loaded; its
+  implementation files are unchanged by this PR.
+
+The live test caught and fixed an overly broad reserved-IP rule: public
+192.0.66.0/24 publisher hosting is allowed, while 192.0.0.0/24 and 192.0.2.0/24
+remain blocked. A regression assertion covers this distinction.
+
+Private evidence is retained outside the repository under
+`~/.codex/private-evidence/context92-acceptance` (browser transcript, screenshots,
+API assertions and exported images/overlay). No private workspace data was used.
+The review URLs use isolated loopback ports 59292 (composed) and 59293 (stock).
+
+This proves the neutral review overlay, not adoption into an unspecified private
+repository. Source-kind grouping and the private adopter target still require
+owner resolution before merge/adoption. Production outbound previews remain off
+unless an operator explicitly enables them. Publisher availability, unsupported
+image formats and IPv6-only sites can still produce a fallback.

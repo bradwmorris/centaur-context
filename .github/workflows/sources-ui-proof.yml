@@ -6,7 +6,6 @@ on:
       - src/source_previews.rs
       - examples/source-views/**
       - scripts/create-source-ui-example.mjs
-      - scripts/source-ui-smoke.py
       - web/src/modules/**
       - web/src/ui/**
   workflow_dispatch:

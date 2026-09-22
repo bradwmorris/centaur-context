@@ -1,4 +1,4 @@
-/** Version 1 of the trusted, compile-time Task view interface. */
+/** Version 1 of the trusted, compile-time collection view interfaces. */
 import type { ObjectVisual, Source, Task, TaskStatus } from "../types";
 export type { ObjectVisual, Source, SourceKind, Task, TaskStatus } from "../types";
 export { TaskAssignee, TaskIssueLink, TaskReadiness } from "../TaskIdentity";
