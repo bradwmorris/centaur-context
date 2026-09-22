@@ -453,6 +453,77 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
             .iter()
             .any(|r| r["reason"].as_str().unwrap_or("").contains("nonterminal"))
     );
+    // A preview label without completion still blocks; a completed Memory
+    // preview is retained journal history and does not hold fixtures forever.
+    sqlx::query("UPDATE runs SET status='completed',completed_at=now() WHERE id=$1")
+        .bind(active_run)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let preview_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'memory_dream','preview','system','context-memory-dream',$2,$3)")
+        .bind(preview_run).bind(Uuid::new_v4().to_string()).bind(json!({"memory_ids":[active_fixture]})).execute(&pool).await.unwrap();
+    let req = request(vec![selection(&pool, "objects", active_fixture).await]);
+    let (_, unfinished) = call(
+        &unapproved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        req.clone(),
+    )
+    .await;
+    assert!(
+        unfinished["data"]["manifest"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["reason"].as_str().unwrap_or("").contains("nonterminal"))
+    );
+    sqlx::query("UPDATE runs SET completed_at=now() WHERE id=$1")
+        .bind(preview_run)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM runs r WHERE id=$1")
+        .bind(preview_run)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (_, finished) = call(
+        &unapproved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        req.clone(),
+    )
+    .await;
+    assert!(
+        !finished["data"]["manifest"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["reason"].as_str().unwrap_or("").contains("nonterminal"))
+    );
+    let approved = app(&pool, finished["data"]["manifest_sha256"].as_str());
+    assert_eq!(
+        call(
+            &approved,
+            "POST",
+            "/api/v2/maintenance/purge",
+            TOKEN,
+            commit(req, &finished)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let after: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM runs r WHERE id=$1")
+        .bind(preview_run)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+    assert!(!exists(&pool, active_fixture).await);
     // A late database rejection rolls back earlier subtype deletion and emits no receipt.
     let rollback_fixture = object(&pool, "note").await;
     sqlx::query(&format!("CREATE FUNCTION fixture77_reject_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.id='{}'::uuid THEN RAISE EXCEPTION 'synthetic late failure'; END IF; RETURN OLD; END $$",rollback_fixture)).execute(&pool).await.unwrap();
