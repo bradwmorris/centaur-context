@@ -146,6 +146,57 @@ pub(crate) async fn insert_event_for_run(
     Ok(event_id)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn insert_event_for_run_with_before(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Uuid,
+    sequence: i64,
+    actor: &ActorContext,
+    entity_type: &str,
+    entity_id: Uuid,
+    object_id: Uuid,
+    action: &str,
+    idempotency_key: Option<&str>,
+    from_revision: Option<i64>,
+    to_revision: i64,
+    before_state: Option<Value>,
+) -> Result<Uuid, DbError> {
+    let target_type = if entity_type == "connection" {
+        "connection"
+    } else {
+        "object"
+    };
+    let target_id = if target_type == "connection" {
+        entity_id
+    } else {
+        object_id
+    };
+    let after_state = target_snapshot(tx, target_type, target_id).await?;
+    let event_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO object_events
+           (id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,
+            idempotency_key,from_revision,to_revision,before_state,after_state,reversible,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,true,now())"#,
+    )
+    .bind(event_id)
+    .bind(run_id)
+    .bind(sequence)
+    .bind(target_type)
+    .bind(target_id)
+    .bind(action)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .bind(idempotency_key)
+    .bind(from_revision)
+    .bind(to_revision)
+    .bind(before_state)
+    .bind(after_state)
+    .execute(&mut **tx)
+    .await?;
+    Ok(event_id)
+}
+
 pub(crate) async fn target_snapshot(
     tx: &mut Transaction<'_, Postgres>,
     target_type: &str,

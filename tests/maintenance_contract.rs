@@ -110,10 +110,221 @@ async fn seed(pool: &PgPool, kind: &str) -> Uuid {
                 .await
                 .unwrap();
         }
+        "task" => {
+            let owner = Uuid::new_v4();
+            sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'user','Synthetic owner','The synthetic owner assigned to a maintenance test Task.',true,'system','original-creator','system','original-creator')")
+                .bind(owner).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO users(object_id,user_kind) VALUES($1,'human')")
+                .bind(owner)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO tasks(object_id,status,owner_object_id,due_at,brief_markdown) VALUES($1,'todo',$2,'2099-01-01T00:00:00Z','Verify the description-only maintenance test preserves Task state.')")
+                .bind(id).bind(owner).execute(&mut *tx).await.unwrap();
+        }
+        "chat" => {
+            sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        "entity" => {
+            sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'concept')")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        "memory" => {
+            sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,now())")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        "theme" => {
+            sqlx::query("INSERT INTO themes(object_id,slug) VALUES($1,$2)")
+                .bind(id)
+                .bind(format!("maintenance-{id}"))
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
         _ => unreachable!(),
     }
     tx.commit().await.unwrap();
     id
+}
+
+#[tokio::test]
+async fn description_maintenance_covers_every_kind_and_archived_rows_without_state_drift() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    let kinds = [
+        "task", "chat", "user", "entity", "memory", "source", "note", "theme",
+    ];
+    let mut ids = Vec::new();
+    for (index, kind) in kinds.iter().enumerate() {
+        let id = seed(&pool, kind).await;
+        if index % 2 == 1 {
+            sqlx::query("UPDATE objects SET archived_at=now() WHERE id=$1")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        ids.push(id);
+    }
+    let operations = Value::Array(
+        ids.iter()
+            .enumerate()
+            .map(|(index, id)| {
+                json!({
+                    "operation":"update_description",
+                    "object_id":id,
+                    "expected_revision":1,
+                    "description":format!("Reviewed synthetic description for the {} Object.", kinds[index])
+                })
+            })
+            .collect(),
+    );
+    let body = batch(operations);
+    let reviewed = app(&pool, std::slice::from_ref(&body));
+
+    let ordinary = agent_router(state(&pool), "ordinary-token-32-characters-long".into());
+    assert_eq!(
+        call(
+            &ordinary,
+            "POST",
+            "/api/v2/apply",
+            "ordinary-token-32-characters-long",
+            "ordinary-agent",
+            body.clone(),
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let mut preview_body = body.clone();
+    preview_body["validate_only"] = json!(true);
+    let (status, preview) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        preview_body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["data"]["results"].as_array().unwrap().len(),
+        kinds.len()
+    );
+    for (index, result) in preview["data"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(result["before"]["kind"], kinds[index]);
+        assert_eq!(result["before"]["revision"], 1);
+        assert_eq!(result["before"]["created_by_id"], "original-creator");
+        assert_eq!(result["before"]["protected"], true);
+        assert_eq!(result["data"]["subtype"], result["before"]["subtype"]);
+        assert_eq!(result["data"]["artifacts"], result["before"]["artifacts"]);
+    }
+
+    let (status, committed) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{committed}");
+    assert_eq!(committed["approval_sha256"], preview["approval_sha256"]);
+    assert_eq!(
+        committed["data"]["event_ids"].as_array().unwrap().len(),
+        kinds.len()
+    );
+    for (index, result) in committed["data"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(
+            result["before"],
+            preview["data"]["results"][index]["before"]
+        );
+        assert_eq!(result["data"]["subtype"], result["before"]["subtype"]);
+        assert_eq!(result["data"]["kind"], result["before"]["kind"]);
+        assert_eq!(result["data"]["title"], result["before"]["title"]);
+        assert_eq!(result["data"]["protected"], result["before"]["protected"]);
+        assert_eq!(
+            result["data"]["created_by_type"],
+            result["before"]["created_by_type"]
+        );
+        assert_eq!(
+            result["data"]["created_by_id"],
+            result["before"]["created_by_id"]
+        );
+        assert_eq!(result["data"]["provenance"], result["before"]["provenance"]);
+        assert_eq!(
+            result["data"]["archived_at"],
+            result["before"]["archived_at"]
+        );
+        assert_eq!(result["data"]["revision"], 2);
+        assert_eq!(result["data"]["updated_by_id"], "maintenance-test");
+    }
+    let memory_event_id =
+        Uuid::parse_str(committed["data"]["event_ids"][4].as_str().unwrap()).unwrap();
+    let (event_before, event_after): (Value, Value) =
+        sqlx::query_as("SELECT before_state,after_state FROM object_events WHERE id=$1")
+            .bind(memory_event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(event_before, committed["data"]["results"][4]["before"]);
+    assert_eq!(event_after, committed["data"]["results"][4]["data"]);
+    let (_, replay) = call(
+        &reviewed,
+        "POST",
+        "/api/v2/maintenance/apply",
+        TOKEN,
+        "maintenance-test",
+        body,
+    )
+    .await;
+    assert_eq!(replay["data"]["replayed"], true);
+    assert_eq!(replay["data"]["run_id"], committed["data"]["run_id"]);
+
+    let stale = batch(json!([
+        {"operation":"update_description","object_id":ids[0],"expected_revision":2,"description":"This must roll back."},
+        {"operation":"update_description","object_id":ids[1],"expected_revision":1,"description":"This stale revision must fail."}
+    ]));
+    let stale_app = app(&pool, std::slice::from_ref(&stale));
+    assert_eq!(
+        call(
+            &stale_app,
+            "POST",
+            "/api/v2/maintenance/apply",
+            TOKEN,
+            "maintenance-test",
+            stale,
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(db::get_object(&pool, ids[0]).await.unwrap().revision, 2);
 }
 
 #[tokio::test]

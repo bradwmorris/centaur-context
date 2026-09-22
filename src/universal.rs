@@ -50,6 +50,11 @@ pub enum ApplyOperation {
         #[serde(default)]
         changes: Map<String, Value>,
     },
+    UpdateDescription {
+        object_id: Uuid,
+        expected_revision: i64,
+        description: String,
+    },
     ArchiveObject {
         object_id: Uuid,
         expected_revision: i64,
@@ -152,6 +157,7 @@ async fn apply_with_authority(
     authority: WriteAuthority,
 ) -> Result<ApplyResponse, DbError> {
     validate_request(&request)?;
+    validate_authority_operations(&request, authority)?;
     let request_hash = request_hash(&request)?;
     let mut tx = pool.begin().await?;
 
@@ -234,6 +240,7 @@ async fn apply_with_authority(
         let before = if authority == WriteAuthority::ReviewedMaintenance {
             let target = match operation {
                 ApplyOperation::UpdateObject { object_id, .. }
+                | ApplyOperation::UpdateDescription { object_id, .. }
                 | ApplyOperation::ArchiveObject { object_id, .. }
                 | ApplyOperation::AppendArtifact {
                     object: ObjectReference::Id { object_id },
@@ -265,6 +272,7 @@ async fn apply_with_authority(
             actor,
             operation,
             &local_ids,
+            before.as_ref(),
             (!request.validate_only).then_some(run_id),
             &mut sequence,
             &mut event_ids,
@@ -368,6 +376,23 @@ fn validate_request(request: &ApplyRequest) -> Result<(), DbError> {
     Ok(())
 }
 
+fn validate_authority_operations(
+    request: &ApplyRequest,
+    authority: WriteAuthority,
+) -> Result<(), DbError> {
+    if authority == WriteAuthority::Ordinary
+        && request
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, ApplyOperation::UpdateDescription { .. }))
+    {
+        return Err(DbError::Invalid(
+            "update_description is available only through reviewed maintenance".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn assign_local_ids(operations: &[ApplyOperation]) -> Result<BTreeMap<String, Uuid>, DbError> {
     let mut ids = BTreeMap::new();
     for operation in operations {
@@ -438,6 +463,7 @@ async fn execute_operation(
     actor: &ActorContext,
     operation: &ApplyOperation,
     local_ids: &BTreeMap<String, Uuid>,
+    before: Option<&Value>,
     run_id: Option<Uuid>,
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
@@ -499,6 +525,37 @@ async fn execute_operation(
             )
             .await?;
             Ok(json!({"operation":"update_object","data":value}))
+        }
+        ApplyOperation::UpdateDescription {
+            object_id,
+            expected_revision,
+            description,
+        } => {
+            let value = update_description(
+                tx,
+                actor,
+                *object_id,
+                *expected_revision,
+                description,
+                authority,
+            )
+            .await?;
+            record_event_with_before(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "object",
+                *object_id,
+                *object_id,
+                "updated",
+                Some(*expected_revision),
+                *expected_revision + 1,
+                before,
+            )
+            .await?;
+            Ok(json!({"operation":"update_description","data":value}))
         }
         ApplyOperation::ArchiveObject {
             object_id,
@@ -652,6 +709,43 @@ async fn execute_operation(
             Ok(json!({"operation":"append_artifact","data":value}))
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_event_with_before(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: Option<Uuid>,
+    sequence: &mut i64,
+    event_ids: &mut Vec<Uuid>,
+    actor: &ActorContext,
+    entity_type: &str,
+    entity_id: Uuid,
+    object_id: Uuid,
+    action: &str,
+    from_revision: Option<i64>,
+    to_revision: i64,
+    before_state: Option<&Value>,
+) -> Result<(), DbError> {
+    if let Some(run_id) = run_id {
+        let id = db::insert_event_for_run_with_before(
+            tx,
+            run_id,
+            *sequence,
+            actor,
+            entity_type,
+            entity_id,
+            object_id,
+            action,
+            None,
+            from_revision,
+            to_revision,
+            before_state.cloned(),
+        )
+        .await?;
+        event_ids.push(id);
+        *sequence += 1;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -991,6 +1085,49 @@ async fn update_object(
     .execute(&mut **tx)
     .await?;
     update_subtype(tx, id, &current.kind, changes).await?;
+    db::target_snapshot(tx, "object", id).await
+}
+
+async fn update_description(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    id: Uuid,
+    expected_revision: i64,
+    description: &str,
+    authority: WriteAuthority,
+) -> Result<Value, DbError> {
+    if authority != WriteAuthority::ReviewedMaintenance {
+        return Err(DbError::Invalid(
+            "update_description is available only through reviewed maintenance".into(),
+        ));
+    }
+    let current: Object = sqlx::query_as(
+        r#"SELECT id,kind,title,description,protected,
+           CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
+           revision,created_by_type,created_by_id,updated_by_type,updated_by_id,
+           provenance,created_at,updated_at,archived_at
+           FROM objects WHERE id=$1 FOR UPDATE"#,
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(DbError::NotFound)?;
+    if current.revision != expected_revision {
+        return Err(DbError::Conflict);
+    }
+    let description = object_description(&current.title, description.to_owned())?;
+    sqlx::query(
+        r#"UPDATE objects SET description=$3,revision=revision+1,
+           updated_by_type=$4,updated_by_id=$5,updated_at=now()
+           WHERE id=$1 AND revision=$2"#,
+    )
+    .bind(id)
+    .bind(expected_revision)
+    .bind(description)
+    .bind(actor.actor_type)
+    .bind(&actor.actor_id)
+    .execute(&mut **tx)
+    .await?;
     db::target_snapshot(tx, "object", id).await
 }
 
