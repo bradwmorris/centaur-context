@@ -589,6 +589,158 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
         .0,
         StatusCode::BAD_REQUEST
     );
+    // Populated Chat/message cycles, Artifact supersession, and parent Runs must
+    // purge atomically. Retained Chats keep their own processing cursors exactly.
+    let cycle_chat = object(&pool, "chat").await;
+    let cycle_message = Uuid::new_v4();
+    sqlx::query("INSERT INTO chat_messages(id,chat_object_id,provider_message_id,sender_user_object_id,content,source_created_at) VALUES($1,$2,$3,$4,'Synthetic cycle fixture',now())")
+        .bind(cycle_message).bind(cycle_chat).bind(cycle_message.to_string()).bind(user).execute(&pool).await.unwrap();
+    for (chat_id, message_id) in [(cycle_chat, cycle_message), (chat, message)] {
+        sqlx::query("UPDATE chats SET curation_queued_through_message_id=$2,curated_through_message_id=$2 WHERE object_id=$1")
+            .bind(chat_id).bind(message_id).execute(&pool).await.unwrap();
+    }
+    let cycle_source = object(&pool, "source").await;
+    let older = Uuid::new_v4();
+    let newer = Uuid::new_v4();
+    for (id, supersedes) in [(older, None), (newer, Some(older))] {
+        sqlx::query("INSERT INTO artifacts(id,object_id,kind,content,sha256,size_bytes,capture_outcome,supersedes_artifact_id) VALUES($1,$2,'text','fixture',$3,7,'complete',$4)")
+            .bind(id).bind(cycle_source).bind(format!("{:x}",Sha256::digest("fixture"))).bind(supersedes).execute(&pool).await.unwrap();
+    }
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(cycle_source)
+        .bind(newer)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let parent = Uuid::new_v4();
+    let child = Uuid::new_v4();
+    for (id, parent_id) in [(parent, None), (child, Some(parent))] {
+        sqlx::query("INSERT INTO runs(id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,chat_object_id,input) VALUES($1,$2,'human_mutation','completed','human','fixture',$3,$4,'{}')")
+            .bind(id).bind(parent_id).bind(id.to_string()).bind(cycle_chat).execute(&pool).await.unwrap();
+    }
+    let cycle_event = Uuid::new_v4();
+    sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) VALUES($1,$2,1,'object',$3,'created','human','fixture',1,'{}',false,now())")
+        .bind(cycle_event).bind(child).bind(cycle_chat).execute(&pool).await.unwrap();
+    let selected_chat_before: Value =
+        sqlx::query_scalar("SELECT to_jsonb(t) FROM chats t WHERE object_id=$1")
+            .bind(cycle_chat)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let retained_chat_before: Value =
+        sqlx::query_scalar("SELECT to_jsonb(t) FROM chats t WHERE object_id=$1")
+            .bind(chat)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let req = request(vec![
+        selection(&pool, "objects", cycle_chat).await,
+        selection(&pool, "objects", cycle_source).await,
+        selection(&pool, "runs", parent).await,
+        selection(&pool, "runs", child).await,
+    ]);
+    let (status, preview) = call(
+        &unapproved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        req.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["manifest"]["blockers"], json!([]));
+    let exported_chat = preview["data"]["recovery_export"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["table"] == "chats" && r["key"]["object_id"] == json!(cycle_chat))
+        .unwrap();
+    assert_eq!(exported_chat["row"], selected_chat_before);
+    let approved = app(&pool, preview["data"]["manifest_sha256"].as_str());
+    let committing = commit(req.clone(), &preview);
+    // Force rejection after cursor clearing, messages, Events and Artifacts delete.
+    sqlx::query(&format!("CREATE FUNCTION fixture77_cycle_reject() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.id='{}'::uuid THEN RAISE EXCEPTION 'synthetic cycle rollback'; END IF; RETURN OLD; END $$",cycle_chat)).execute(&pool).await.unwrap();
+    sqlx::query("CREATE TRIGGER fixture77_cycle_reject BEFORE DELETE ON objects FOR EACH ROW EXECUTE FUNCTION fixture77_cycle_reject()").execute(&pool).await.unwrap();
+    let (status, _) = call(
+        &approved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        committing.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let restored: Value = sqlx::query_scalar("SELECT to_jsonb(t) FROM chats t WHERE object_id=$1")
+        .bind(cycle_chat)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restored, selected_chat_before);
+    for (table, id) in [
+        ("chat_messages", cycle_message),
+        ("object_events", cycle_event),
+        ("artifacts", older),
+        ("artifacts", newer),
+        ("runs", parent),
+        ("runs", child),
+    ] {
+        let kept: bool =
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=$1)"))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(kept, "{table} {id} must roll back");
+    }
+    let receipt_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM maintenance_purge_receipts WHERE idempotency_key=$1",
+    )
+    .bind(req["idempotency_key"].as_str())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(receipt_count, 0);
+    sqlx::query("DROP TRIGGER fixture77_cycle_reject ON objects")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION fixture77_cycle_reject()")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, result) = call(
+        &approved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        committing,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert!(!exists(&pool, cycle_chat).await);
+    assert!(!exists(&pool, cycle_source).await);
+    for (table, id) in [
+        ("chat_messages", cycle_message),
+        ("object_events", cycle_event),
+        ("artifacts", older),
+        ("artifacts", newer),
+        ("runs", parent),
+        ("runs", child),
+    ] {
+        let kept: bool =
+            sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=$1)"))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!kept, "{table} {id} must be deleted");
+    }
+    let unchanged: Value = sqlx::query_scalar("SELECT to_jsonb(t) FROM chats t WHERE object_id=$1")
+        .bind(chat)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(unchanged, retained_chat_before);
     // Exercise the actual HTTP commit over large immutable history, not just
     // in-memory preview analysis. Only 209 of 15,000 4-KiB Events are fixtures.
     let large_fixture = object(&pool, "note").await;

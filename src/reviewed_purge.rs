@@ -546,6 +546,23 @@ async fn execute_purge(
                 .await?;
         }
     }
+    // Selected Chats and their owned messages form a RESTRICT-FK cycle.
+    // Break only these soon-to-be-deleted rows, after approval/staleness checks;
+    // the recovery export above retains original cursors and rollback restores them.
+    let chat_keys: Vec<Value> = manifest
+        .iter()
+        .filter(|r| r["table"] == "chats")
+        .map(|r| r["key"].clone())
+        .collect();
+    if !chat_keys.is_empty() {
+        let count = sqlx::query("UPDATE chats t SET curation_queued_through_message_id=NULL, curated_through_message_id=NULL FROM jsonb_to_recordset($1::jsonb) AS k(object_id uuid) WHERE t.object_id=k.object_id")
+            .bind(json!(chat_keys)).execute(&mut *tx).await?.rows_affected();
+        if count != chat_keys.len() as u64 {
+            return Err(IntakeError::Conflict(
+                "selected Chat count changed; transaction rolled back".into(),
+            ));
+        }
+    }
     for table in DELETE_ORDER {
         let keys: Vec<Value> = manifest
             .iter()
