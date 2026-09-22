@@ -81,10 +81,10 @@ pub(crate) struct AuditQuery {
 pub(crate) async fn catalog(
     State(state): State<MaintenanceState>,
 ) -> Result<Json<Value>, IntakeError> {
-    let names: Vec<(String, String)> = sqlx::query_as("SELECT c.relname,c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','i') ORDER BY c.relname")
+    let names: Vec<(String, String, bool)> = sqlx::query_as("SELECT c.relname,c.relkind::text,EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','i') ORDER BY c.relname")
         .fetch_all(&state.app.pool).await?;
     let mut data = Vec::new();
-    for (name, kind) in names {
+    for (name, kind, extension_owned) in names {
         let table = matches!(kind.as_str(), "r" | "p");
         let count: Option<i64> = if table {
             Some(
@@ -97,7 +97,9 @@ pub(crate) async fn catalog(
         };
         let keys: Vec<String> = sqlx::query_scalar("SELECT a.attname FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ord) JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum WHERE n.nspname='public' AND c.relname=$1 AND i.indisprimary ORDER BY k.ord")
             .bind(&name).fetch_all(&state.app.pool).await?;
-        let category = if name == "_sqlx_migrations" || name == "maintenance_purge_receipts" {
+        let category = if extension_owned {
+            "extension_bookkeeping"
+        } else if name == "_sqlx_migrations" || name == "maintenance_purge_receipts" {
             "bookkeeping"
         } else if table {
             "application_table"
@@ -210,7 +212,7 @@ fn add(set: &mut Selected, table: &str, row: &Value, reason: &str) -> bool {
 }
 async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, IntakeError> {
     let names: Vec<String> = sqlx::query_scalar(
-        "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename",
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype='e') ORDER BY c.relname",
     )
     .fetch_all(&mut **tx)
     .await?;
@@ -333,6 +335,13 @@ async fn preview(
     // Every live FK is checked from the actual schema, including composite keys.
     let fks: Vec<(String,String,Vec<String>,Vec<String>)> = sqlx::query_as("SELECT src.relname,dst.relname,array_agg(sa.attname ORDER BY k.ord)::text[],array_agg(da.attname ORDER BY k.ord)::text[] FROM pg_constraint c JOIN pg_class src ON src.oid=c.conrelid JOIN pg_namespace n ON n.oid=src.relnamespace JOIN pg_class dst ON dst.oid=c.confrelid CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY k(s,d,ord) JOIN pg_attribute sa ON sa.attrelid=src.oid AND sa.attnum=k.s JOIN pg_attribute da ON da.attrelid=dst.oid AND da.attnum=k.d WHERE c.contype='f' AND n.nspname='public' GROUP BY c.oid,src.relname,dst.relname ORDER BY src.relname,dst.relname,c.oid").fetch_all(&mut **tx).await?;
     for (src, dst, sc, dc) in fks {
+        if !rows.contains_key(&src)
+            && rows
+                .get(&dst)
+                .is_some_and(|rs| rs.iter().any(|r| selected(&set, &dst, r)))
+        {
+            blockers.push(json!({"table":src,"reason":format!("unmanaged relation has a foreign key to selected {dst}; review outside content purge")}));
+        }
         if let (Some(srs), Some(drs)) = (rows.get(&src), rows.get(&dst)) {
             for sr in srs.iter().filter(|r| !selected(&set, &src, r)) {
                 if drs.iter().filter(|r| selected(&set, &dst, r)).any(|dr| {
