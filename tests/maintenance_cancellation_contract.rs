@@ -404,6 +404,10 @@ async fn cancellation_requires_owner_proof_and_permanently_fences_execution_iden
                     .method("POST")
                     .uri("/api/v2/apply")
                     .header("authorization", format!("Bearer {TOKEN}"))
+                    .header(
+                        "idempotency-key",
+                        apply["idempotency_key"].as_str().unwrap(),
+                    )
                     .header("x-centaur-principal-id", "synthetic-retry-agent")
                     .header("x-centaur-thread-key", &fenced_thread)
                     .header("content-type", "application/json")
