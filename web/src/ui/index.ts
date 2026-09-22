@@ -5,7 +5,7 @@ export { TaskAssignee, TaskIssueLink, TaskReadiness } from "../TaskIdentity";
 export { objectPath, detailPath, navigate } from "../routing";
 
 export interface TaskViewProps {
-  tasks: readonly Task[];
+  tasks: readonly Readonly<Task>[];
   visuals: ReadonlyMap<string, ObjectVisual>;
   loading: boolean;
   error: string | null;

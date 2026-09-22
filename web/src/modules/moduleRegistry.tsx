@@ -1,4 +1,4 @@
-import { Component, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { Component, useMemo, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { api } from "../api";
 import { detailPath } from "../routing";
 import type { TaskViewProps } from "../ui";
@@ -48,7 +48,7 @@ export function ModuleViewSwitcher({ section, activeId }: { section: Section; ac
 
 export function taskViewProps(context: ModuleContext): TaskViewProps {
   return {
-    tasks: context.tasks, visuals: context.visuals, loading: context.loading,
+    tasks: structuredClone(context.tasks), visuals: structuredClone(context.visuals), loading: context.loading,
     error: context.error ?? null,
     completeness: context.loading ? "loading" : context.error ? "unknown" : "complete",
     reload: context.onReload,
@@ -82,5 +82,6 @@ function RenderView({ module, context }: { module: ContextUiModule; context: Tas
 }
 
 export function ContextModuleView({ module, context }: { module: ContextUiModule; context: ModuleContext }) {
-  return <ViewBoundary key={module.id}><RenderView module={module} context={taskViewProps(context)} /></ViewBoundary>;
+  const props = useMemo(() => taskViewProps(context), [context.tasks, context.visuals, context.loading, context.error, context.onTasksChange, context.onReload]);
+  return <ViewBoundary key={module.id}><RenderView module={module} context={props} /></ViewBoundary>;
 }

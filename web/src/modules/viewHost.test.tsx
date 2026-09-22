@@ -26,6 +26,16 @@ describe("view host", () => {
     expect(props).not.toHaveProperty("onTasksChange");
     expect(props.error).toBe("load failed");
   });
+  it("isolates view snapshots from canonical state even if a view bypasses readonly types", () => {
+    const original = { object_id: "one", revision: 1, status: "todo", provenance: { source: { label: "original" } } } as unknown as Task;
+    const ctx = { ...context(), tasks: [original] };
+    const snapshot = taskViewProps(ctx);
+    const changed = snapshot.tasks[0] as Task;
+    changed.status = "done";
+    (changed.provenance.source as unknown as { label: string }).label = "changed";
+    expect(original.status).toBe("todo");
+    expect(original.provenance.source).toEqual({ label: "original" });
+  });
   it("rejects missing blocked reasons before any write and preserves newer local revisions", async () => {
     const ctx = context(); const props = taskViewProps(ctx);
     const task = { object_id: "one", revision: 3, status: "todo" } as Task;
