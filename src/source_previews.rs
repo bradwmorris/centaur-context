@@ -198,7 +198,7 @@ fn public_ip(ip: IpAddr) -> bool {
         || (a == 100 && (64..=127).contains(&b))
         || (a == 169 && b == 254)
         || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && (b == 168 || b == 0 || (b == 88 && c == 99)))
+        || (a == 192 && (b == 168 || (b == 0 && (c == 0 || c == 2)) || (b == 88 && c == 99)))
         || (a == 198 && (b == 18 || b == 19 || (b == 51 && c == 100)))
         || (a == 203 && b == 0 && c == 113))
 }
@@ -369,6 +369,10 @@ mod tests {
         }
         assert!(public_ip(IpAddr::V4(std::net::Ipv4Addr::new(8, 8, 8, 8))));
         assert!(checked_url("https://example.com/article").is_ok());
+        // 192.0.66.0/24 is public publisher hosting, not the reserved 192.0.0.0/24.
+        assert!(public_ip(IpAddr::V4(std::net::Ipv4Addr::new(
+            192, 0, 66, 2
+        ))));
     }
     #[test]
     fn provider_ids_and_html_are_data_not_code() {
