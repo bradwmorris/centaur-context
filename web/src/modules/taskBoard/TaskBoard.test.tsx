@@ -2,7 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
 import type { Task } from "../../types";
-import { TaskBoard } from "./TaskBoard";
+import { TaskBoard as Board } from "./TaskBoard";
+import { taskViewProps, type ModuleContext } from "../moduleRegistry";
+function TaskBoard(props: ModuleContext) { return <Board {...taskViewProps(props)} />; }
 
 vi.mock("../../api", () => ({ api: { updateTask: vi.fn() } }));
 const task: Task = { object_id: "task-1", title: "Polish the board", description: "Make it feel calm and fast.", lifecycle: "active", revision: 2, provenance: {}, protected: false, status: "todo", priority: "high", owner_object_id: null, agent_suitable: true, blocked_reason: null, due_at: null, completed_at: null, github_issue_url: "https://github.com/example/project/issues/1", brief_markdown: null, created_at: "2026-09-05T00:00:00Z", updated_at: "2026-09-05T00:00:00Z" };

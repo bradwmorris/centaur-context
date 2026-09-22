@@ -245,7 +245,15 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
 }
 fn contains_id(value: &Value, ids: &BTreeSet<String>) -> bool {
     match value {
-        Value::String(s) => ids.iter().any(|id| s.contains(id)),
+        Value::String(s) => s.match_indices('-').any(|(dash, _)| {
+            dash >= 8
+                && s.as_bytes().get(dash - 8..dash + 28).is_some_and(|w| {
+                    w[13] == b'-'
+                        && w[18] == b'-'
+                        && w[23] == b'-'
+                        && std::str::from_utf8(w).is_ok_and(|candidate| ids.contains(candidate))
+                })
+        }),
         Value::Array(a) => a.iter().any(|v| contains_id(v, ids)),
         Value::Object(o) => o.values().any(|v| contains_id(v, ids)),
         _ => false,
@@ -256,6 +264,19 @@ async fn preview(
     request: &PurgeRequest,
 ) -> Result<Value, IntakeError> {
     let rows = snapshot(tx).await?;
+    // Every live FK is checked from the actual schema, including composite keys.
+    let fks: Vec<(String,String,Vec<String>,Vec<String>)> = sqlx::query_as("SELECT src.relname,dst.relname,array_agg(sa.attname ORDER BY k.ord)::text[],array_agg(da.attname ORDER BY k.ord)::text[] FROM pg_constraint c JOIN pg_class src ON src.oid=c.conrelid JOIN pg_namespace n ON n.oid=src.relnamespace JOIN pg_class dst ON dst.oid=c.confrelid CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY k(s,d,ord) JOIN pg_attribute sa ON sa.attrelid=src.oid AND sa.attnum=k.s JOIN pg_attribute da ON da.attrelid=dst.oid AND da.attnum=k.d WHERE c.contype='f' AND n.nspname='public' GROUP BY c.oid,src.relname,dst.relname ORDER BY src.relname,dst.relname,c.oid").fetch_all(&mut **tx).await?;
+    let request = request.clone();
+    tokio::task::spawn_blocking(move || preview_rows(rows, &request, fks))
+        .await
+        .map_err(|e| IntakeError::Internal(e.to_string()))?
+}
+type ForeignKey = (String, String, Vec<String>, Vec<String>);
+fn preview_rows(
+    rows: Snapshot,
+    request: &PurgeRequest,
+    fks: Vec<ForeignKey>,
+) -> Result<Value, IntakeError> {
     let mut set = Selected::new();
     for s in &request.selections {
         if !TABLES.contains(&s.table.as_str())
@@ -332,8 +353,6 @@ async fn preview(
         }
     }
     let mut blockers = Vec::new();
-    // Every live FK is checked from the actual schema, including composite keys.
-    let fks: Vec<(String,String,Vec<String>,Vec<String>)> = sqlx::query_as("SELECT src.relname,dst.relname,array_agg(sa.attname ORDER BY k.ord)::text[],array_agg(da.attname ORDER BY k.ord)::text[] FROM pg_constraint c JOIN pg_class src ON src.oid=c.conrelid JOIN pg_namespace n ON n.oid=src.relnamespace JOIN pg_class dst ON dst.oid=c.confrelid CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY k(s,d,ord) JOIN pg_attribute sa ON sa.attrelid=src.oid AND sa.attnum=k.s JOIN pg_attribute da ON da.attrelid=dst.oid AND da.attnum=k.d WHERE c.contype='f' AND n.nspname='public' GROUP BY c.oid,src.relname,dst.relname ORDER BY src.relname,dst.relname,c.oid").fetch_all(&mut **tx).await?;
     for (src, dst, sc, dc) in fks {
         if !rows.contains_key(&src)
             && rows
@@ -343,8 +362,13 @@ async fn preview(
             blockers.push(json!({"table":src,"reason":format!("unmanaged relation has a foreign key to selected {dst}; review outside content purge")}));
         }
         if let (Some(srs), Some(drs)) = (rows.get(&src), rows.get(&dst)) {
+            let removed_destinations: Vec<&Value> =
+                drs.iter().filter(|r| selected(&set, &dst, r)).collect();
+            if removed_destinations.is_empty() {
+                continue;
+            }
             for sr in srs.iter().filter(|r| !selected(&set, &src, r)) {
-                if drs.iter().filter(|r| selected(&set, &dst, r)).any(|dr| {
+                if removed_destinations.iter().any(|dr| {
                     sc.iter()
                         .zip(&dc)
                         .all(|(s, d)| !sr[s].is_null() && sr[s] == dr[d])
@@ -428,6 +452,14 @@ pub(crate) async fn purge(
     Extension(actor): Extension<ActorContext>,
     Json(request): Json<PurgeRequest>,
 ) -> Result<Json<Value>, IntakeError> {
+    tokio::time::timeout(std::time::Duration::from_secs(25), execute_purge(state, actor, request))
+        .await.map_err(|_| IntakeError::Conflict("maintenance operation exceeded 25-second budget; retry the same request key to reconcile its receipt".into()))?
+}
+async fn execute_purge(
+    state: MaintenanceState,
+    actor: ActorContext,
+    request: PurgeRequest,
+) -> Result<Json<Value>, IntakeError> {
     if request.idempotency_key.trim().is_empty()
         || request.idempotency_key.len() > 300
         || request.selections.is_empty()
@@ -440,7 +472,7 @@ pub(crate) async fn purge(
     let request_hash =
         digest(&serde_json::to_value(&request).map_err(|e| IntakeError::Internal(e.to_string()))?);
     let mut tx = state.app.pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout='30s'")
+    sqlx::query("SET LOCAL statement_timeout='10s'")
         .execute(&mut *tx)
         .await?;
     sqlx::query("SET LOCAL lock_timeout='5s'")
@@ -538,4 +570,93 @@ pub(crate) async fn purge(
     sqlx::query("INSERT INTO maintenance_purge_receipts(principal_id,idempotency_key,request_sha256,manifest_sha256,receipt) VALUES($1,$2,$3,$4,$5)").bind(&actor.actor_id).bind(&request.idempotency_key).bind(request_hash).bind(request.manifest_sha256).bind(&receipt).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":receipt,"replayed":false})))
+}
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use std::time::Instant;
+    use uuid::Uuid;
+
+    #[test]
+    fn fifteen_thousand_rows_and_large_history_fit_preview_budget() {
+        let mut rows: Snapshot = TABLES
+            .iter()
+            .map(|t| ((*t).to_owned(), Vec::new()))
+            .collect();
+        for i in 0..1000_u128 {
+            let object = Uuid::from_u128(i + 1);
+            let run = Uuid::from_u128(i + 2001);
+            rows.get_mut("objects").unwrap().push(json!({"id":object,"kind":"note","revision":1,"description":"Synthetic concise research fixture."}));
+            rows.get_mut("notes")
+                .unwrap()
+                .push(json!({"object_id":object,"content":"Exact original synthetic wording"}));
+            rows.get_mut("runs").unwrap().push(json!({"id":run,"status":"completed","input":{"object_id":object,"text":"Research history without UUIDs. ".repeat(2048)}}));
+            rows.get_mut("embeddings").unwrap().push(json!({"id":Uuid::from_u128(i+30001),"object_id":object,"artifact_id":null,"embedding":"[0.1,0.2]"}));
+            rows.get_mut("connections").unwrap().push(json!({"id":Uuid::from_u128(i+4001),"source_object_id":object,"target_object_id":Uuid::from_u128((i+1)%1000+1)}));
+            for n in 0..10_u128 {
+                rows.get_mut("object_events").unwrap().push(json!({"id":Uuid::from_u128(i*10+n+10001),"run_id":run,"target_type":"object","target_id":object,"after_state":{"object_id":object}}));
+            }
+        }
+        assert_eq!(rows.values().map(Vec::len).sum::<usize>(), 15_000);
+        let selections = rows["objects"]
+            .iter()
+            .take(50)
+            .map(|row| Selection {
+                table: "objects".into(),
+                key: key("objects", row),
+                row_sha256: digest(row),
+                reason: "Synthetic disposable performance fixture".into(),
+            })
+            .collect();
+        let request = PurgeRequest {
+            idempotency_key: "synthetic-performance".into(),
+            selections,
+            commit: false,
+            manifest_sha256: None,
+            recovery_export_sha256: None,
+        };
+        let fks = [
+            ("notes", "objects", "object_id", "id"),
+            ("object_events", "runs", "run_id", "id"),
+            ("embeddings", "objects", "object_id", "id"),
+            ("connections", "objects", "source_object_id", "id"),
+            ("connections", "objects", "target_object_id", "id"),
+        ]
+        .into_iter()
+        .map(|(s, d, sc, dc)| (s.into(), d.into(), vec![sc.into()], vec![dc.into()]))
+        .collect();
+        let started = Instant::now();
+        let preview = preview_rows(rows, &request, fks).unwrap();
+        assert_eq!(preview["manifest"]["counts"]["objects"], 50);
+        assert!(
+            preview["manifest"]["blockers"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "analysis exceeded 5 seconds: {:?}",
+            started.elapsed()
+        );
+        eprintln!(
+            "15,000-row preview with 64MB history: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn reference_scan_finds_embedded_uuid_without_repeated_payload_scans() {
+        let id = Uuid::from_u128(7).to_string();
+        let ids = BTreeSet::from([id.clone()]);
+        assert!(contains_id(
+            &json!({"text":format!("prefix{id}suffix")}),
+            &ids
+        ));
+        assert!(!contains_id(
+            &json!("A non-ASCII café with no reference."),
+            &ids
+        ));
+    }
 }
