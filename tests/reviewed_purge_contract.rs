@@ -589,4 +589,53 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
         .0,
         StatusCode::BAD_REQUEST
     );
+    // Exercise the actual HTTP commit over large immutable history, not just
+    // in-memory preview analysis. Only 209 of 15,000 4-KiB Events are fixtures.
+    let large_fixture = object(&pool, "note").await;
+    let large_retained = object(&pool, "note").await;
+    let large_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'human_mutation','completed','human','fixture',$2,'{}')")
+        .bind(large_run).bind(Uuid::new_v4().to_string()).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) SELECT gen_random_uuid(),$1,n,'object',CASE WHEN n<=209 THEN $2 ELSE $3 END,'created','human','fixture',1,jsonb_build_object('synthetic_history',repeat(md5(n::text),128)),false,now() FROM generate_series(1,15000) n")
+        .bind(large_run).bind(large_fixture).bind(large_retained).execute(&pool).await.unwrap();
+    let req = request(vec![selection(&pool, "objects", large_fixture).await]);
+    let (status, preview) = call(
+        &unapproved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        req.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["manifest"]["counts"]["object_events"], 209);
+    assert_eq!(preview["data"]["manifest"]["blockers"], json!([]));
+    let approved = app(&pool, preview["data"]["manifest_sha256"].as_str());
+    let start = std::time::Instant::now();
+    let (status, receipt) = call(
+        &approved,
+        "POST",
+        "/api/v2/maintenance/purge",
+        TOKEN,
+        commit(req, &preview),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    eprintln!("15,000 large-Event reviewed commit completed in {elapsed:?}");
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(25),
+        "HTTP commit exceeded its budget: {elapsed:?}"
+    );
+    assert!(!exists(&pool, large_fixture).await);
+    assert!(exists(&pool, large_retained).await);
+    let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM object_events WHERE run_id=$1 AND target_id=$2 AND after_state = jsonb_build_object('synthetic_history',repeat(md5(sequence::text),128))")
+        .bind(large_run).bind(large_retained).fetch_one(&pool).await.unwrap();
+    assert_eq!(kept, 14791);
+    let removed: i64 = sqlx::query_scalar("SELECT count(*) FROM object_events WHERE target_id=$1")
+        .bind(large_fixture)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(removed, 0);
 }

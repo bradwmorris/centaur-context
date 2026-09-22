@@ -33,3 +33,6 @@ reviewed. Recovery payload remains private client evidence, never committed.
 
 Live classification and deletion remain separate from implementation. The parent
 reviewer owns the exact live manifest and retains the export before executing it.
+
+### Indexed deletion follow-up
+Actual commit exposed quadratic full-row JSON matching on large immutable Event history. Delete reviewed rows through typed primary-key joins only (UUID IDs, subtype object IDs, and the exact two-column request key). Keep transaction locks, manifest approval, immutable-row allowlist and row-count guards unchanged. Verify a complete synthetic HTTP preview/commit over 15,000 large Events, retaining 14,791 unrelated Events.
