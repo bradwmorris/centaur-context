@@ -118,3 +118,11 @@ test('publishes a build into a new directory and refuses to merge into existing 
   assert.equal(await fs.readFile(path.join(dest, 'index.html'), 'utf8'), 'synthetic build');
   await assert.rejects(publishOutput(source, dest), { code: 'EEXIST' });
 });
+
+test('rejects lockfile traversal and mismatched package identity before installation', async t => {
+  const f = await fixture(t); const lock = path.join(f.overlay, 'package-lock.json');
+  await edit(lock, l => l.packages['../outside/node_modules/bad'] = { resolved: 'https://registry.npmjs.org/bad/-/bad-1.0.0.tgz', integrity: 'sha512-test' });
+  await assert.rejects(readOverlay(f.config, sha), /Unsafe lockfile package path/);
+  await edit(lock, l => { delete l.packages['../outside/node_modules/bad']; l.version = 'file:../outside'; });
+  await assert.rejects(readOverlay(f.config, sha), /identity drift/);
+});

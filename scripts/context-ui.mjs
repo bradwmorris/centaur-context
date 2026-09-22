@@ -60,6 +60,7 @@ export async function readOverlay(configPath, revision) {
   fields(pkg, ['name', 'version', 'private', 'type', 'description', 'license', 'dependencies', 'peerDependencies', 'scripts', 'workspaces', 'devDependencies', 'optionalDependencies'], 'overlay package.json');
   if (pkg.scripts && Object.keys(pkg.scripts).length) fail('Overlay package scripts are unsupported');
   if (pkg.workspaces || pkg.devDependencies && Object.keys(pkg.devDependencies).length || pkg.optionalDependencies && Object.keys(pkg.optionalDependencies).length) fail('Overlay workspaces/dev/optional dependencies are unsupported; use dependencies and host peers');
+  if (lock.name !== pkg.name || lock.version !== pkg.version) fail('Overlay package/lock identity drift');
   if (lock.lockfileVersion !== 3 || !lock.packages?.['']) fail('Overlay requires npm lockfileVersion 3');
   if (JSON.stringify(Object.entries(pkg.dependencies ?? {}).sort()) !== JSON.stringify(Object.entries(lock.packages[''].dependencies ?? {}).sort())) fail('Overlay package/lock dependency drift');
   for (const spec of Object.values(pkg.dependencies ?? {})) if (typeof spec !== 'string' || /^(file:|link:|workspace:|git|https?:|\.|\/)/.test(spec)) fail('Only locked registry dependency specifications are supported');
@@ -70,6 +71,7 @@ export async function readOverlay(configPath, revision) {
   }
   for (const [name, record] of Object.entries(lock.packages)) {
     if (!name) continue;
+    if (!name.startsWith('node_modules/') || name.includes('\\') || name.split('/').some(part => part === '..' || part === '.' || !part)) fail(`Unsafe lockfile package path: ${name}`);
     if (/(^|\/)node_modules\/(react|react-dom)$/.test(name) && record.version !== host.dependencies[name.endsWith('react-dom') ? 'react-dom' : 'react']) fail('Incompatible locked React peer');
     if (record.link || typeof record.resolved !== 'string' || !record.resolved.startsWith('https://registry.npmjs.org/') || !record.integrity) fail(`Unsupported non-registry or unlocked dependency: ${name}`);
     if (record.hasInstallScript) fail(`Dependency requires unsupported lifecycle script: ${name}`);
