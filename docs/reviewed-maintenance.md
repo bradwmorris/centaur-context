@@ -53,7 +53,9 @@ separate confirmation that it is entirely a fixture. Subtype and embedding rows
 cannot be independently selected; they follow their reviewed owner.
 
 Preview and commit are bounded to 100,000 application rows and 1,000 selections.
-Commit locks application writers with a five-second lock timeout and a 30-second
-statement timeout; a busy system may require retrying later. New application
+Commit locks application writers with a five-second lock timeout and a 10-second
+statement timeout; a busy system may require retrying later. The full operation has a 25-second budget; after a timeout retry the same key to
+reconcile a possible commit receipt. CPU-only analysis runs outside the async
+request worker and never owns a database connection. New application
 tables fail closed until the fixed purge policy is extended. Disable temporary
 maintenance credentials and approval hashes after the reviewed operation.
