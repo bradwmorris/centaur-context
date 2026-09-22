@@ -22,6 +22,8 @@ def observe(db, session, turn, cwd):
     if row is None or row['observed'] is not None or row['cwd']!=cwd:return None
     head=git(cwd,'rev-parse','--verify','HEAD').decode().strip()
     if head==row['head']:return None
+    if git(cwd,'rev-parse',row['head']+'^{tree}')==git(cwd,'rev-parse',head+'^{tree}'):
+        return None  # Empty commits/repeated bookkeeping are not meaningful code outcomes.
     # Only first-parent additions. A rebase or checkout is not a completed-work claim.
     ids=git(cwd,'rev-list','--first-parent','--max-count=11',row['head']+'..'+head).decode().splitlines()[::-1]
     if not ids or len(ids)>10:return None

@@ -151,4 +151,4 @@ objects are skipped because redacting them would invalidate the proof.
 Existing Memory dreaming excludes this actor until it has its own evidence adapter.
 The ordinary human-message curator validator remains unchanged. CODEX_CURATE
 also gates Git outcome Memories. Missing baselines, rebases, older imported commits,
-non-UTF8/oversized objects and interruptions do not become verified Git outcomes.
+empty/net-zero tree changes, non-UTF8/oversized objects and interruptions do not become verified Git outcomes.

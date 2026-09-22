@@ -183,10 +183,15 @@ def test_git_receipt_observes_actual_commit_once_without_trusting_assistant(setu
     item(path,sid,turn,'AgentMessage','claim','I deployed everything and all tests passed.')
     b.capture(s,event(repo,sid,path,'Stop',turn))
     assert not any(x.get('git_receipts') for x in pending(s))
+    commit('Empty bookkeeping')
+    b.capture(s,event(repo,sid,path,'Stop',turn))
+    assert not any(x.get('git_receipts') for x in pending(s))
+    (repo/'capture.txt').write_text('Verified bridge change\n')
+    subprocess.run(['git','-C',str(repo),'add','capture.txt'],check=True)
     commit('Add the verified bridge')
     b.capture(s,event(repo,sid,path,'Stop',turn));b.capture(s,event(repo,sid,path,'Stop',turn))
     receipts=[x['git_receipts'][0] for x in pending(s) if x.get('git_receipts')]
-    assert len(receipts)==1 and 'Add the verified bridge' in receipts[0]['commits'][0]['raw']
+    assert len(receipts)==1 and 'Add the verified bridge' in receipts[0]['commits'][-1]['raw']
     assert 'deployed' not in str(receipts)
 
 

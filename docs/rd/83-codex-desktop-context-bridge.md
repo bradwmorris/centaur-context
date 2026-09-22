@@ -177,6 +177,8 @@ installed bridge package (not direct calls to mocked capture handlers):
   repeating the same operation key reported replay without another Note. An
   explicit Task with a fixture owner and deadline was also created/read through
   MCP with its automatic Chat provenance connection.
+- The normal Centaur Python agent client independently found/read the Memory and
+  its Chat connection through the standard authenticated agent listener.
 - A second disposable Context instance had separate credentials, canonical human
   and repository alias. It could not read the first instance's Chat/Memory and
   rejected its repository alias. Stopping/restarting only the second fixture
