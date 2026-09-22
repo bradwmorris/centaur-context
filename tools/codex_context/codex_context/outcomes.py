@@ -2,6 +2,7 @@
 import hashlib
 import subprocess
 import time
+from .privacy import redact
 
 
 def git(cwd, *args):
@@ -31,7 +32,9 @@ def observe(db, session, turn, cwd):
         raw=git(cwd,'cat-file','commit',oid)
         digest=hashlib.sha1 if len(oid)==40 else hashlib.sha256
         if digest(b'commit '+str(len(raw)).encode()+b'\0'+raw).hexdigest()!=oid:return None
-        text=raw.decode('utf-8');headers=text.split('\n\n',1)[0].splitlines()
+        text=raw.decode('utf-8')
+        if redact(text) != text:return None  # Redaction would invalidate the proof hash.
+        headers=text.split('\n\n',1)[0].splitlines()
         parents=[x[7:] for x in headers if x.startswith('parent ')]
         if not parents or parents[0]!=parent:return None
         stamp=int(next(x for x in headers if x.startswith('committer ')).rsplit(' ',2)[1])

@@ -160,3 +160,32 @@ completion. Receipts use a distinct codex-capture actor, standard reversible Eve
 and the existing memory_capture Run kind. They stay outside current Memory dreaming
 admission. The server retains references and proof digests rather than raw author
 or signature data. No new interactive Memory-write capability is exposed.
+
+### Isolated end-to-end evidence — 2026-09-22
+
+Using the actual bundled Codex 0.153.4 runtime, reviewed native hook trust and an
+installed bridge package (not direct calls to mocked capture handlers):
+
+- A fresh real turn spooled its human/assistant visible messages and completed
+  marker into one canonical Chat in a disposable Context instance.
+- A controlled local model fixture exercised the real curator validation/commit
+  pipeline and produced one concise Memory with its originating Chat connection.
+  This verifies data plumbing; real subscription inference remains a live adopter
+  rollout check and is not claimed from that fixture.
+- A fresh runtime session retrieved that Memory with the actual MCP client, then
+  read its Connections and Events. An explicit Note write succeeded through MCP;
+  repeating the same operation key reported replay without another Note.
+- A second disposable Context instance had separate credentials, canonical human
+  and repository alias. It could not read the first instance's Chat/Memory and
+  rejected its repository alias. Stopping/restarting only the second fixture
+  service preserved the offline message and delivered it once after recovery.
+- A real HTTP test exposed and fixed a transport mismatch hidden by earlier
+  method mocks. A successful delivery cannot clear a transcript parsing error.
+- Remote CI passed Rust lint/tests (including real disposable PostgreSQL), web
+  checks, package/contract checks, Python tests and ARM64 composition/stock builds.
+  Further fixes receive the same checks before merge.
+
+Fixture databases: centaur_context_test_codex_a and centaur_context_test_codex_b.
+No live instance was written or restarted during these checks. The installer is
+still confined to a temporary Codex home. Native Desktop activation and adopter
+subscription inference remain outstanding; this is not a completion declaration.

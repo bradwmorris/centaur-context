@@ -1,7 +1,7 @@
 # Codex desktop and Context
 
 The opt-in local bridge stores new visible Codex conversation text as canonical
-Chats and sends completed windows to the existing Memory-only curator. It also
+Chats and sends bounded windows to the existing Memory-only curator. It also
 exposes exactly `context_search`, `context_read`, and `context_apply` through MCP.
 Agent execution continues in Codex. The automatic path does not create ordinary
 Tasks, Notes, Entities, Sources or Themes.
@@ -111,7 +111,9 @@ transactions prevent replay duplication. Failed delivery preserves queue and
 cursor, uses bounded backoff, and retries through the host scheduler. The queue
 is capped at 32 MiB/500 batches; full queues stop cursor advancement and require
 attention rather than dropping unsent content. Successful payloads are deleted;
-small delivery receipts expire after 30 days. Registered session cursors remain
+small delivery receipts expire after 30 days. Curation windows contain at most
+100 messages; long turns queue full windows incrementally. Git checkpoints expire
+after seven days. Registered session cursors remain
 for future resumes. No transcript rewrite or history import is attempted.
 
 Disable/remove the owned hooks, MCP entry and periodic job to stop the bridge;
@@ -142,7 +144,8 @@ Concurrent writers on the same checkout cannot be attributed to a particular age
 
 The receipt uses a distinct system actor and a namespaced `memory_capture` Run,
 with standard Object Events and a `derived_from` Chat Connection. Only commit IDs
-and a proof digest are retained; raw author/email/signature data is discarded.
+and a proof digest are retained; raw author/email/signature data is discarded. Credential-looking raw commit
+objects are skipped because redacting them would invalidate the proof.
 Existing Memory dreaming excludes this actor until it has its own evidence adapter.
 The ordinary human-message curator validator remains unchanged. CODEX_CURATE
 also gates Git outcome Memories. Missing baselines, rebases, older imported commits,

@@ -7,7 +7,6 @@ import hashlib
 import ipaddress
 import json
 import os
-import re
 from pathlib import Path
 import sqlite3
 import stat
@@ -22,6 +21,7 @@ import uuid
 
 from centaur_tool_centaur_context.client import CentaurContextClient, _UrllibResponse
 from . import outcomes, contract
+from .privacy import redact
 
 MAX_BATCH_BYTES = 400_000
 MAX_QUEUE_BYTES = 32 * 1024 * 1024
@@ -30,14 +30,6 @@ MAX_LINE_BYTES = 4 * 1024 * 1024
 MAX_MESSAGE_CHARS = 20_000
 MAX_PENDING_BATCHES = 500
 CAPTURE_EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "Interrupt", "SessionEnd"}
-
-
-def redact(text: str) -> str:
-    """Defense in depth for obvious credentials, not a claim to detect all secrets."""
-    text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[REDACTED PRIVATE KEY]", text)
-    text = re.sub(r"(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}", r"\1[REDACTED]", text)
-    text = re.sub(r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{15,})", "[REDACTED TOKEN]", text)
-    return text
 
 
 def canonical(value: Any) -> str:

@@ -229,3 +229,11 @@ def test_real_http_delivery_uses_stdlib_client_and_scoped_headers(setup):
         assert seen[0][:3]==('/api/v2/codex/capture',sid,'project')
         assert pending(s)==[]
     finally:server.shutdown();server.server_close();thread.join()
+
+
+def test_uninstall_does_not_claim_success_when_owned_hook_was_changed(setup,tmp_path):
+    from codex_context.install import install
+    s,*_=setup;home=tmp_path/'codex';install(s,home)
+    p=home/'hooks.json';hooks=json.loads(p.read_text());hooks['hooks']['Stop'][0]['hooks'][0]['command']='edited-command';p.write_text(json.dumps(hooks))
+    with pytest.raises(ValueError,match='hook was changed'):install(s,home,remove=True)
+    assert 'centaur_context' in (home/'config.toml').read_text()
