@@ -941,6 +941,20 @@ fn validate_human_grounded_objects(
                 "curator-created Memories must be supported only by human-authored messages".into(),
             ));
         }
+        if event_capture_enabled() && is_object_creation_report(&item.description) {
+            return Err(CuratorError::Invalid(
+                "committed Object creation is captured from its event ledger, not chat prose"
+                    .into(),
+            ));
+        }
+        if evidence
+            .iter()
+            .all(|message| is_memory_noise(&message.content))
+        {
+            return Err(CuratorError::Invalid(
+                "operational or synthetic traffic is not durable memory".into(),
+            ));
+        }
         if evidence
             .iter()
             .all(|message| is_workflow_request(&message.content))
@@ -953,6 +967,46 @@ fn validate_human_grounded_objects(
         }
     }
     Ok(())
+}
+
+/// Conservative exclusion of explicit operational/test traffic; ordinary mentions
+/// of testing in real research are not enough to discard a human statement.
+fn event_capture_enabled() -> bool {
+    std::env::var("MEMORY_CAPTURE_ENABLED").is_ok_and(|value| value == "true")
+}
+
+fn is_object_creation_report(description: &str) -> bool {
+    let words = description
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    ["added", "created", "saved", "imported"]
+        .iter()
+        .any(|word| words.contains(*word))
+        && ["source", "sources", "note", "notes", "task", "tasks"]
+            .iter()
+            .any(|word| words.contains(*word))
+        && !is_request_framed_memory(description)
+}
+
+fn is_memory_noise(content: &str) -> bool {
+    let text = content.trim().to_lowercase();
+    [
+        "synthetic acceptance",
+        "synthetic task-creation",
+        "synthetic source acceptance",
+        "one-time status check",
+        "check the status once",
+        "requested one-time check",
+        "retry acceptance check",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+        || matches!(
+            text.as_str(),
+            "thanks" | "thank you" | "ok" | "okay" | "done"
+        )
 }
 
 fn is_workflow_request(content: &str) -> bool {
@@ -997,7 +1051,7 @@ fn drop_disallowed_worker_creates(
 ) -> Vec<String> {
     let human_message_ids = messages
         .iter()
-        .filter(|message| message.sender_kind == "human")
+        .filter(|message| message.sender_kind == "human" && !is_memory_noise(&message.content))
         .map(|message| message.id)
         .collect::<HashSet<_>>();
     let dropped = plan
@@ -1005,6 +1059,7 @@ fn drop_disallowed_worker_creates(
         .iter()
         .filter(|item| {
             item.kind != "memory"
+                || (event_capture_enabled() && is_object_creation_report(&item.description))
                 || item.supporting_message_ids.is_empty()
                 || item
                     .supporting_message_ids
@@ -1882,7 +1937,6 @@ async fn request_plan(
     candidates: &crate::search::SearchPacket,
     validation_feedback: Option<&str>,
 ) -> Result<ReconciliationPlan, CuratorError> {
-    let attempt_id = Uuid::new_v4().to_string();
     let system = r#"You are the Centaur Context Curator, an append-only interaction-memory extractor. Return only one JSON object with exactly these two arrays:
 {"create_objects":[],"create_connections":[]}.
 
@@ -1893,11 +1947,18 @@ Every create_connections entry MUST contain all of these fields:
 {"source":{"client_id":"created-object-client-id"},"kind":"derived_from","target":{"object_id":"existing-object-UUID"},"description":"...","supporting_message_ids":["UUID"]}.
 An existing Object reference is {"object_id":"UUID"}; a newly created Memory reference is {"client_id":"unique-local-name"}.
 
-Create zero or more Memories only for a concrete event or insight explicitly asserted by a human message and worth retaining. Every new Memory must have a derived_from Connection from that Memory to run.chat_object_id, using the exact same supporting_message_ids. Other links may connect a new or existing Memory to one unambiguous existing candidate using only involves, about, themed, related_to, or derived_from. Never invent a missing target or choose between ambiguous candidates; leave it unlinked. Every Connection must have at least one Memory endpoint.
+Create zero or more Memories only for a meaningful event, explicit decision, stable preference or commitment asserted by a human and useful later. A Memory records who did what to which specific subject; research claims and quotations belong in Notes and Sources, not copied summaries. Skip routine status checks, retries, synthetic tests, acknowledgements and incidental mentions. Zero Memories is normal. Every new Memory must have a derived_from Connection from that Memory to run.chat_object_id, using the exact same supporting_message_ids. Other links may connect a new or existing Memory to one unambiguous existing candidate using only involves, about, themed, related_to, or derived_from. Never invent a missing target or choose between ambiguous candidates; leave it unlinked. Every Connection must have at least one Memory endpoint.
 
 Never create an Entity, Source, Note, Task, Chat, User, Theme, or any other non-Memory Object. Never update or delete any Object, including a Memory. Never update or delete a Connection. A human request proves only that the request was made: without a trusted workflow-result message, describe what the human asked for and never claim the workflow succeeded, completed, created, updated, or connected anything.
 
-Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description must explicitly identify the subject, what the interaction established, and its evidenced context in 50–150 direct words. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
+Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description is normally ONE plain sentence of about 15–35 words, at most two short sentences when essential. There is no minimum length. Name the actor, truthful action and concrete subject. Use the actual event time in happened_at; avoid relative time such as just or today. Use a truthful verb such as asked instead of adding caveats about what was not established. Keep IDs and evidence in provenance and Connections, not narrative boilerplate. Link only direct participants and affected objects, never incidental mentions or guessed themes. A request and a completed action are different events. Do not re-create an event already supported by the same message IDs in an existing Memory. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
+    let system = if event_capture_enabled() {
+        format!(
+            "{system}\nActual Source, Note and Task creation outcomes are captured separately from committed Object Events. Do not duplicate those outcomes from chat prose, even if a human reports them. You may selectively record a meaningful request, decision or discussion instead."
+        )
+    } else {
+        system.to_owned()
+    };
     let input = json!({
         "run": {"id":run.id,"chat_object_id":run.chat_object_id,"trigger":run.trigger},
         "messages": messages,
@@ -1915,12 +1976,43 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
             "initial"
         }
     );
+    let value = request_json_model(
+        pool,
+        client,
+        config,
+        run.id,
+        Some(run.chat_object_id),
+        &system,
+        input,
+        reconciliation_plan_schema(),
+        idempotency_id,
+    )
+    .await?;
+    serde_json::from_value(value)
+        .map_err(|e| CuratorError::Invalid(format!("invalid capture plan: {e}")))
+}
+
+/// Shared inference transport and usage attribution. Callers retain separate
+/// schemas and commit authorities; model output itself grants no permissions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_json_model(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    config: &CuratorModelConfig,
+    run_id: Uuid,
+    chat_id: Option<Uuid>,
+    system: &str,
+    input: String,
+    schema: Value,
+    idempotency_id: String,
+) -> Result<Value, CuratorError> {
+    let attempt_id = Uuid::new_v4().to_string();
     let request_body = match config.transport {
         CuratorModelTransport::CentaurSubscription => json!({
             "request_id": idempotency_id,
             "system_prompt": system,
             "input": input,
-            "output_schema": reconciliation_plan_schema(),
+            "output_schema": schema,
             "reasoning_effort": "low"
         }),
         CuratorModelTransport::DirectApi => json!({
@@ -1945,7 +2037,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
             let attribution = default_usage_attribution(config, &attempt_id);
             record_curator_usage(
                 pool,
-                run,
+                run_id,
+                chat_id,
                 &config.model,
                 &attribution,
                 None,
@@ -1962,7 +2055,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
         let attribution = default_usage_attribution(config, &attempt_id);
         record_curator_usage(
             pool,
-            run,
+            run_id,
+            chat_id,
             &config.model,
             &attribution,
             None,
@@ -1979,7 +2073,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
             let attribution = default_usage_attribution(config, &attempt_id);
             record_curator_usage(
                 pool,
-                run,
+                run_id,
+                chat_id,
                 &config.model,
                 &attribution,
                 None,
@@ -1999,7 +2094,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
                     let attribution = default_usage_attribution(config, &attempt_id);
                     record_curator_usage(
                         pool,
-                        run,
+                        run_id,
+                        chat_id,
                         &config.model,
                         &attribution,
                         None,
@@ -2022,7 +2118,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
                 let attribution = default_usage_attribution(config, &attempt_id);
                 record_curator_usage(
                     pool,
-                    run,
+                    run_id,
+                    chat_id,
                     &config.model,
                     &attribution,
                     response.usage.as_ref(),
@@ -2045,7 +2142,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
             };
             record_curator_usage(
                 pool,
-                run,
+                run_id,
+                chat_id,
                 &config.model,
                 &attribution,
                 response.usage.as_ref(),
@@ -2055,7 +2153,7 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
                     .then_some("Codex response omitted usage"),
             )
             .await;
-            let plan = serde_json::from_value(response.output).map_err(|error| {
+            let plan: Value = serde_json::from_value(response.output).map_err(|error| {
                 CuratorError::Invalid(format!(
                     "curator model returned an invalid reconciliation plan: {error}"
                 ))
@@ -2069,7 +2167,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
                     let attribution = default_usage_attribution(config, &attempt_id);
                     record_curator_usage(
                         pool,
-                        run,
+                        run_id,
+                        chat_id,
                         &config.model,
                         &attribution,
                         None,
@@ -2084,7 +2183,8 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
             let attribution = default_usage_attribution(config, &attempt_id);
             record_curator_usage(
                 pool,
-                run,
+                run_id,
+                chat_id,
                 &config.model,
                 &attribution,
                 response.usage.as_ref(),
@@ -2101,7 +2201,7 @@ Never create a Memory from an unanswered question, a failed or empty search, an 
                 .ok_or_else(|| CuratorError::Invalid("curator model returned no choices".into()))?
                 .message
                 .content;
-            let plan = serde_json::from_str(&content).map_err(|error| {
+            let plan: Value = serde_json::from_str(&content).map_err(|error| {
                 CuratorError::Invalid(format!(
                     "curator model returned an invalid reconciliation plan: {error}"
                 ))
@@ -2185,15 +2285,21 @@ fn default_usage_attribution<'a>(
 
 async fn record_curator_usage(
     pool: &PgPool,
-    run: &CuratorRun,
+    run_id: Uuid,
+    chat_id: Option<Uuid>,
     model_id: &str,
     attribution: &UsageAttribution<'_>,
     usage: Option<&ModelUsage>,
     missing_reason: Option<&str>,
 ) {
     let input = crate::runs::NormalizedUsage {
-        run_id: run.id,
-        component: "context_curator".into(),
+        run_id,
+        component: if chat_id.is_some() {
+            "context_curator"
+        } else {
+            "context_memory_dream"
+        }
+        .into(),
         provider: attribution.provider.into(),
         model_id: model_id.to_owned(),
         display_tier: Some(model_id.to_owned()),
@@ -2203,9 +2309,9 @@ async fn record_curator_usage(
         billing_mode: attribution.billing_mode.into(),
         reasoning_effort: attribution.reasoning_effort.map(str::to_owned),
         service_tier: None,
-        source_thread_id: Some(run.chat_object_id.to_string()),
+        source_thread_id: chat_id.map(|id| id.to_string()),
         source_execution_id: attribution.source_execution_id.to_owned(),
-        source_turn_id: Some(run.id.to_string()),
+        source_turn_id: Some(run_id.to_string()),
         call_index: Some(1),
         usage_status: if usage.is_some() {
             "reported"
@@ -2241,7 +2347,7 @@ async fn record_curator_usage(
         pricing_snapshot: None,
     };
     if let Err(error) = crate::runs::record_usage(pool, &input).await {
-        tracing::error!(run_id=%run.id,%error,"failed to record Curator usage");
+        tracing::error!(run_id=%run_id,%error,"failed to record Curator usage");
     }
 }
 

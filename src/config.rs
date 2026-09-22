@@ -27,6 +27,9 @@ pub struct Config {
     pub embedding: Option<EmbeddingConfig>,
     pub text_search_config: TextSearchConfig,
     pub curator_model: Option<CuratorModelConfig>,
+    pub memory_capture_enabled: bool,
+    pub memory_dream_mode: String,
+    pub memory_dream_interval: std::time::Duration,
     pub static_dir: PathBuf,
     pub identity_assets_dir: PathBuf,
 }
@@ -188,6 +191,14 @@ impl Config {
                 .map_err(anyhow::Error::msg)?;
         let embedding = embedding_config()?;
         let curator_model = curator_model_config()?;
+        let memory_dream_mode = env::var("MEMORY_DREAM_MODE").unwrap_or_else(|_| "off".into());
+        if !matches!(memory_dream_mode.as_str(), "off" | "preview" | "apply") {
+            bail!("MEMORY_DREAM_MODE must be off, preview or apply");
+        }
+        if memory_dream_mode != "off" && curator_model.is_none() {
+            bail!("memory dreaming requires configured Curator model transport");
+        }
+
         let intake = intake_config()?;
         let source_intake = source_intake_config()?;
         let research_mutation = research_mutation_config()?;
@@ -326,6 +337,13 @@ impl Config {
                 &env::var("TEXT_SEARCH_CONFIG").unwrap_or_else(|_| "simple".to_owned()),
             )?,
             curator_model,
+            memory_dream_mode,
+            memory_dream_interval: parse_duration_seconds(
+                "MEMORY_DREAM_INTERVAL_SECONDS",
+                3600,
+                60,
+            )?,
+            memory_capture_enabled: env::var("MEMORY_CAPTURE_ENABLED").is_ok_and(|v| v == "true"),
             static_dir,
             identity_assets_dir,
         })
