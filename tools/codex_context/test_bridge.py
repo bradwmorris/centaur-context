@@ -211,3 +211,21 @@ def test_install_refuses_to_overwrite_edited_owned_config(setup,tmp_path):
     s,*_=setup;home=tmp_path/'codex';install(s,home)
     p=home/'config.toml';p.write_text(p.read_text().replace('tool_timeout_sec=30','tool_timeout_sec=90'))
     with pytest.raises(ValueError,match='edited'):install(s,home,remove=True)
+
+
+def test_real_http_delivery_uses_stdlib_client_and_scoped_headers(setup):
+    from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+    from threading import Thread
+    s,repo,sid,path=setup;b.capture(s,event(repo,sid,path));seen=[]
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append((self.path,self.headers['X-Codex-Session-Id'],self.headers['X-Codex-Repository'],json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+            self.send_response(200);self.end_headers();self.wfile.write(json.dumps({'data':{'chat_object_id':str(uuid.uuid4())}}).encode())
+        def log_message(self,*args):pass
+    server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+    s.targets['organization']['url']=f'http://127.0.0.1:{server.server_port}'
+    try:
+        assert b.flush(s)['delivered']==1
+        assert seen[0][:3]==('/api/v2/codex/capture',sid,'project')
+        assert pending(s)==[]
+    finally:server.shutdown();server.server_close();thread.join()

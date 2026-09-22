@@ -185,7 +185,7 @@ async fn capture(
     .await
     .map_err(DbError::from)?;
     if let Some((prior, result)) = prior {
-        if prior["payload_sha256"] != hash {
+        if prior["payload_sha256"] != hash || prior["repository"] != session.repository {
             return Err(ApiError::IdempotencyConflict);
         }
         return Ok(Json(json!({"data":result})));

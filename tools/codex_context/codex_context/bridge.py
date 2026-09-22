@@ -335,7 +335,10 @@ class SessionClient(CentaurContextClient):
         target = settings.targets[session["target"]]
         token = private_file(Path(target["capture_token_file" if capture_token else "tool_token_file"]).expanduser()).decode()
         super().__init__(base_url=target["url"],token=token,principal_id="codex-bridge",thread_key="codex-bridge",
-            transport=SafeTransport(),timeout=5)
+            timeout=5)
+        # The core client's `transport` argument is an httpx BaseTransport;
+        # install our request client directly to retain stdlib-only operation.
+        self._http = SafeTransport()
 
     def _headers(self, idempotency_key=None, **kwargs):
         return {**super()._headers(idempotency_key,**kwargs),
