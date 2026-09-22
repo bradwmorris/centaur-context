@@ -29,9 +29,9 @@ pub struct MaintenanceConfig {
 }
 
 #[derive(Clone)]
-struct MaintenanceState {
-    app: AppState,
-    config: Arc<MaintenanceConfig>,
+pub(crate) struct MaintenanceState {
+    pub(crate) app: AppState,
+    pub(crate) config: Arc<MaintenanceConfig>,
 }
 
 pub(crate) fn router(app: AppState, config: MaintenanceConfig) -> Router {
@@ -41,6 +41,18 @@ pub(crate) fn router(app: AppState, config: MaintenanceConfig) -> Router {
     };
     Router::new()
         .route("/api/v2/maintenance/apply", post(apply))
+        .route(
+            "/api/v2/maintenance/tables",
+            get(crate::reviewed_purge::catalog),
+        )
+        .route(
+            "/api/v2/maintenance/table-rows",
+            get(crate::reviewed_purge::audit_rows),
+        )
+        .route(
+            "/api/v2/maintenance/purge",
+            post(crate::reviewed_purge::purge),
+        )
         .route("/api/v2/maintenance/objects", get(objects))
         .route("/api/v2/maintenance/connections", get(connections))
         .with_state(state.clone())
