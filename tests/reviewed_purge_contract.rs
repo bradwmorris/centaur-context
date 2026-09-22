@@ -440,6 +440,19 @@ async fn reviewed_purge_is_exact_atomic_replayable_and_preserves_real_history() 
             .await
             .unwrap();
     assert_eq!(count, 0);
+    // References in active Runs are operational dependencies, not historical mentions.
+    let active_fixture = object(&pool, "note").await;
+    let active_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'human_mutation','running','human','fixture',$2,$3)").bind(active_run).bind(Uuid::new_v4().to_string()).bind(json!({"object_id":active_fixture})).execute(&pool).await.unwrap();
+    let req = request(vec![selection(&pool, "objects", active_fixture).await]);
+    let (_, preview) = call(&unapproved, "POST", "/api/v2/maintenance/purge", TOKEN, req).await;
+    assert!(
+        preview["data"]["manifest"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["reason"].as_str().unwrap_or("").contains("nonterminal"))
+    );
     // A late database rejection rolls back earlier subtype deletion and emits no receipt.
     let rollback_fixture = object(&pool, "note").await;
     sqlx::query(&format!("CREATE FUNCTION fixture77_reject_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF OLD.id='{}'::uuid THEN RAISE EXCEPTION 'synthetic late failure'; END IF; RETURN OLD; END $$",rollback_fixture)).execute(&pool).await.unwrap();

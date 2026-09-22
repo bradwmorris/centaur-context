@@ -391,7 +391,17 @@ async fn preview(
     let mut historical = Vec::new();
     for (table, rs) in &rows {
         for row in rs {
-            if !selected(&set, table, row) && contains_id(row, &ids) {
+            let mentions_selected = contains_id(row, &ids);
+            if table == "runs"
+                && mentions_selected
+                && !matches!(
+                    row["status"].as_str(),
+                    Some("completed" | "failed" | "reversed" | "delivered" | "suppressed")
+                )
+            {
+                blockers.push(json!({"table":table,"key":key(table,row),"row_sha256":digest(row),"reason":"nonterminal Run references selected fixtures; wait for execution to finish"}));
+            }
+            if !selected(&set, table, row) && mentions_selected {
                 historical.push(json!({"table":table,"key":key(table,row),"row_sha256":digest(row),"reason":"retained reference or historical mention; original payload is preserved; live dependencies are separately blocked"}));
             }
         }

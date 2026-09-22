@@ -14,7 +14,7 @@ changed rows or dependencies fail atomically. Receipt keys are principal-scoped.
 
 Deleting a canonical Object may remove its own fixture history, but must not
 remove a neighbouring Object. Retained foreign keys, current Artifact pointers,
-Note evidence locators and event targets block. Historical mentions in preserved
+Note evidence locators, event targets and references from nonterminal Runs block. Historical mentions in preserved
 messages, Run inputs/traces/results, Object provenance and request responses are
 reported rather than rewritten. The minimal receipt retains removed identities
 and hashes, without fixture payload. Shared Runs and Chats are never inferred to

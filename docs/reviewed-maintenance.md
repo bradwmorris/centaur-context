@@ -45,7 +45,8 @@ A successful commit removes only listed rows and returns a payload-free durable
 receipt. The same committed request returns that receipt on replay; changing a
 request under its used key fails. The receipt retains deleted row keys/hashes so
 historical mentions in original messages and mixed Runs remain explainable.
-Shared/mixed live foreign keys and Note evidence pointers block. Historical
+Shared/mixed live foreign keys, Note evidence pointers and references from
+nonterminal Runs block. Wait for concurrent execution to finish. Historical
 messages, provenance, Run inputs/traces/results, consulted IDs and cache snapshots
 are explicitly retained, not rewritten. Selecting a whole Chat or Run requires
 separate confirmation that it is entirely a fixture. Subtype and embedding rows
