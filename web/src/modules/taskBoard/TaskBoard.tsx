@@ -1,10 +1,7 @@
 import { FormEvent, useDeferredValue, useMemo, useState } from "react";
-import { api } from "../../api";
-import { detailPath, navigate } from "../../routing";
-import type { Task, TaskStatus, ObjectVisual } from "../../types";
-import type { ModuleContext } from "../moduleRegistry";
+import type { Task, TaskStatus, ObjectVisual, TaskViewProps } from "../../ui";
 import "./taskBoard.css";
-import { TaskAssignee, TaskIssueLink, TaskReadiness } from "../../TaskIdentity";
+import { TaskAssignee, TaskIssueLink, TaskReadiness } from "../../ui";
 
 const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
   { status: "backlog", label: "Backlog", icon: "◌" },
@@ -17,7 +14,7 @@ const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
 
 const dueDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 
-export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: ModuleContext) {
+export function TaskBoard({ tasks, visuals, loading, reload: onReload, changeStatus, openTask }: TaskViewProps) {
   const [query, setQuery] = useState("");
   const [showDone, setShowDone] = useState(false);
   const [movingId, setMovingId] = useState<string | null>(null);
@@ -42,11 +39,7 @@ export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: 
     setMovingId(task.object_id);
     setError(null);
     try {
-      const changes: Record<string, unknown> = { expected_revision: task.revision, status };
-      if (status === "blocked") changes.blocked_reason = reason;
-      if (task.status === "blocked" && status !== "blocked") changes.clear_blocked_reason = true;
-      const updated = await api.updateTask(task.object_id, changes);
-      onTasksChange((current) => current.map((item) => item.object_id === updated.object_id ? updated : item));
+      await changeStatus(task, status, reason);
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Task could not be moved.");
@@ -93,7 +86,7 @@ export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: 
       }}>
         <header><span className="column-status" aria-hidden="true">{column.icon}</span><strong>{column.label}</strong><span>{grouped.get(column.status)?.length ?? 0}</span></header>
         <div className="task-column-cards">
-          {(grouped.get(column.status) ?? []).map((task) => <TaskCard key={task.object_id} task={task} visuals={visuals} moving={movingId === task.object_id} onDragStart={() => setDraggingId(task.object_id)} onDragEnd={() => setDraggingId(null)} onMove={(status) => requestMove(task, status)} />)}
+          {(grouped.get(column.status) ?? []).map((task) => <TaskCard key={task.object_id} task={task} openTask={openTask} visuals={visuals} moving={movingId === task.object_id} onDragStart={() => setDraggingId(task.object_id)} onDragEnd={() => setDraggingId(null)} onMove={(status) => requestMove(task, status)} />)}
           {(grouped.get(column.status)?.length ?? 0) === 0 ? <div className="column-empty">Drop tasks here</div> : null}
         </div>
       </section>)}
@@ -108,9 +101,9 @@ export function TaskBoard({ tasks, visuals, loading, onTasksChange, onReload }: 
   </section>;
 }
 
-function TaskCard({ task, visuals, moving, onDragStart, onDragEnd, onMove }: { task: Task; visuals: Map<string, ObjectVisual>; moving: boolean; onDragStart: () => void; onDragEnd: () => void; onMove: (status: TaskStatus) => void }) {
+function TaskCard({ task, openTask, visuals, moving, onDragStart, onDragEnd, onMove }: { task: Task; openTask: (id: string) => void; visuals: ReadonlyMap<string, ObjectVisual>; moving: boolean; onDragStart: () => void; onDragEnd: () => void; onMove: (status: TaskStatus) => void }) {
   return <article className={moving ? "task-board-card moving" : "task-board-card"} draggable={!moving} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.object_id); onDragStart(); }} onDragEnd={onDragEnd}>
-    <button className="task-card-open" type="button" onClick={() => navigate(detailPath("tasks", task.object_id))} aria-label={`Open ${task.title}`} />
+    <button className="task-card-open" type="button" onClick={() => openTask(task.object_id)} aria-label={`Open ${task.title}`} />
     <div className="task-card-title"><span className={`priority-dot ${task.priority}`} title={`${task.priority} priority`} /><strong>{task.title}</strong></div>
     {task.description ? <p>{task.description}</p> : null}
     {task.blocked_reason ? <p className="task-blocked-reason"><strong>Blocked:</strong> {task.blocked_reason}</p> : null}

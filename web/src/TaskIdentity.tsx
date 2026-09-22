@@ -2,7 +2,7 @@ import { AttributionStack } from "./RecordVisuals";
 import type { ObjectVisual, Task } from "./types";
 import "./taskIdentity.css";
 
-export function TaskAssignee({ task, visuals, showName = false }: { task: Task; visuals: Map<string, ObjectVisual>; showName?: boolean }) {
+export function TaskAssignee({ task, visuals, showName = false }: { task: Task; visuals: ReadonlyMap<string, ObjectVisual>; showName?: boolean }) {
   if (!task.owner_object_id) return <span className="task-assignee missing" title="Assign a user before execution">Unassigned</span>;
   const user = visuals.get(task.object_id)?.users.find((u) => u.role === "owner" && u.user_object_id === task.owner_object_id)
     ?? visuals.get(task.owner_object_id)?.users.find((u) => u.user_object_id === task.owner_object_id);
