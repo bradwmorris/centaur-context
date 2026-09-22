@@ -33,6 +33,8 @@ npm --prefix web run build
 CONTEXT_UI_INTEGRATION=1 node --test scripts/context-ui.test.mjs
 python3 -m pytest tools/centaur_context/test_client.py tools/centaur_context/test_cli.py scripts/test_rename_contract.py
 python3 -m compileall -q tools/centaur_context
+python3 -m pip install tools/centaur_context tools/codex_context
+python3 -m pytest tools/codex_context/test_bridge.py
 git diff --check
 ```
 

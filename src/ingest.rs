@@ -995,7 +995,7 @@ async fn get_or_create_user(
     Ok(id)
 }
 
-async fn ensure_participant_connection(
+pub(crate) async fn ensure_participant_connection(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
     run_id: Uuid,
@@ -1083,7 +1083,7 @@ async fn insert_message(
     Ok(Some(id))
 }
 
-async fn queue_next_window(
+pub(crate) async fn queue_next_window(
     tx: &mut Transaction<'_, Postgres>,
     _actor: &ActorContext,
     run_id: Uuid,

@@ -91,8 +91,8 @@ jobs:
 
       - name: Install and test agent client
         run: |
-          python -m pip install --disable-pip-version-check 'tools/centaur_context[test]'
-          python -m pytest tools/centaur_context/test_client.py tools/centaur_context/test_cli.py scripts/test_rename_contract.py
+          python -m pip install --disable-pip-version-check 'tools/centaur_context[test]' tools/codex_context
+          python -m pytest tools/centaur_context/test_client.py tools/centaur_context/test_cli.py scripts/test_rename_contract.py tools/codex_context/test_bridge.py
           python -m compileall -q tools/centaur_context
 
   ui-composition:

@@ -315,7 +315,7 @@ async fn api_meta() -> Json<Value> {
     }))
 }
 
-async fn read_contract(headers: HeaderMap) -> Result<Response, ApiError> {
+pub(crate) async fn read_contract(headers: HeaderMap) -> Result<Response, ApiError> {
     let etag = format!("\"{}\"", crate::contract::hash());
     if headers
         .get(header::IF_NONE_MATCH)
@@ -338,7 +338,7 @@ async fn read_contract(headers: HeaderMap) -> Result<Response, ApiError> {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UniversalSearchRequest {
+pub(crate) struct UniversalSearchRequest {
     #[serde(default)]
     query: String,
     task_filters: Option<db::TaskQueueFilter>,
@@ -349,7 +349,7 @@ struct UniversalSearchRequest {
     lexical_only: bool,
 }
 
-async fn universal_search(
+pub(crate) async fn universal_search(
     State(state): State<AppState>,
     Json(input): Json<UniversalSearchRequest>,
 ) -> Result<Json<Value>, ApiError> {
@@ -414,7 +414,7 @@ pub(crate) fn maintenance_read_router(state: AppState) -> Router {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UniversalReadRequest {
+pub(crate) struct UniversalReadRequest {
     object_ids: Vec<Uuid>,
     #[serde(default)]
     include: Vec<String>,
@@ -431,7 +431,7 @@ struct UniversalArtifactWindow {
     limit: Option<i64>,
 }
 
-async fn universal_read(
+pub(crate) async fn universal_read(
     State(state): State<AppState>,
     Json(input): Json<UniversalReadRequest>,
 ) -> Result<Json<Value>, ApiError> {
@@ -504,7 +504,7 @@ async fn universal_read(
     })))
 }
 
-async fn universal_apply(
+pub(crate) async fn universal_apply(
     State(state): State<AppState>,
     Extension(actor): Extension<ActorContext>,
     headers: HeaderMap,

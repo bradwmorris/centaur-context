@@ -1632,6 +1632,7 @@ pub async fn run_worker(
     embeddings: Option<crate::embeddings::EmbeddingClient>,
     config: CuratorModelConfig,
     text_search_config: crate::config::TextSearchConfig,
+    allowed_providers: Vec<String>,
 ) {
     let worker_id = format!("context-curator-{}", Uuid::new_v4());
     let client = match reqwest::Client::builder()
@@ -1647,7 +1648,7 @@ pub async fn run_worker(
     let mut interval = tokio::time::interval(config.poll_interval);
     loop {
         interval.tick().await;
-        let run = match claim_run(&pool, &worker_id, &config).await {
+        let run = match claim_run(&pool, &worker_id, &config, &allowed_providers).await {
             Ok(Some(run)) => run,
             Ok(None) => continue,
             Err(error) => {
@@ -1756,12 +1757,14 @@ async fn claim_run(
     pool: &PgPool,
     worker_id: &str,
     config: &CuratorModelConfig,
+    allowed_providers: &[String],
 ) -> Result<Option<CuratorRun>, CuratorError> {
     let mut tx = pool.begin().await?;
     let run: Option<CuratorRun> = sqlx::query_as(
         r#"WITH candidate AS (
                SELECT id FROM runs
                WHERE kind='curator' AND COALESCE((result->>'attempts')::integer,0) < 3
+                 AND EXISTS (SELECT 1 FROM chats WHERE object_id=runs.chat_object_id AND provider=ANY($4))
                  AND (
                    (status IN ('queued','failed') AND available_at <= now())
                    OR (status='running' AND started_at < now() - interval '10 minutes')
@@ -1789,6 +1792,7 @@ async fn claim_run(
     .bind(worker_id)
     .bind(&config.model)
     .bind(&config.prompt_version)
+    .bind(allowed_providers)
     .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
