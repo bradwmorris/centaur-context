@@ -1,0 +1,21 @@
+# Reviewed maintenance reconciliation
+
+Extend the separate maintenance listener with typed actions inside its existing exact-manifest transaction. Ordinary agents gain no administrative authority. Preview records before/after row hashes, proof rows, blockers and full private recovery export; commit recomputes under write-excluding locks. Receipt replay cannot broaden scope. Never edit original Note bodies or immutable Events.
+
+## Obsolete object embeddings
+
+An exact placeholder may be removed only when it is an untouched pending `__unconfigured__` object embedding (no Artifact, attempts zero, dimensions one, no vector), its Object remains, and a retained completed embedding matches the server's configured model, dimensions, document input mode, supported format, and database-computed current Object hash. The replacement vector must have the configured dimensions. Manifest-bind the Object and replacement proof hashes. Missing configuration or replacement is a blocker; archive status grants no exception.
+
+## Historical Chat references
+
+An exact `detach_chat` action may clear only a terminal unpinned retained Run's `chat_object_id`, where that exact Chat is selected for deletion. Preserve input/result/trace, primary Object, parent Run, original execution timestamps, review fields and all Events. Bind before/after hashes and original Chat ID in the durable receipt, exposed through Run detail. Only maintenance `updated_at` changes. Preview checks FKs against the projected Run; nonterminal guards inspect original history. A stale Run, retained Chat, pinned Run or any other live FK blocks the whole operation.
+
+## Abandoned interactions: reviewed owner observation and Context fence
+
+Age or a failed child is not evidence that an external executor cannot resume. Limit cancellation to legacy `slack_interaction` wrappers, with exact owner-maintenance attestation binding the current Run hash, owning sink/executor identity, observation time and the authenticated runtime interrupt response `ok=true, interrupted=false, execution_id=null` for every recorded execution thread. This proves no current execution, not that upstream retries are disabled. An explicitly owner-attested runtime sink mapping may supply the bot-qualified key when legacy traces omit it; provider workspace/channel/thread must still match the stored Run and Chat. Missing, ambiguous, stale (over 30 minutes) or interrupted-active observations reject. Actual owner evidence is required, never age alone.
+
+Record status `cancelled` and the current reconciliation time, never successful completion. Preserve original payload/start time and retain an immutable maintenance receipt. A durable Context execution fence survives later fixture deletion and blocks the entire exact provider Chat identity across actor/key variants, as well as Run ID/kind/idempotency identity. Ingest acquires a shared fence-table lock and checks before any User/message/Chat/Run mutation; reconciliation holds the exclusive lock. Database guards reject recreation, updates/appends/finish, new child links and new Events, including descendants. Thus an earlier in-flight ingest changes reviewed hashes or completes first; a later ingest sees the permanent fence. This fences Context writes, not the external execution engine. A transaction-scoped exact allowlist may permit only the reviewed cancellation/detachment itself. Cancellation and subsequent purge are separately reviewed operations; retain real child history. Centralize terminal semantics without treating unknown states as terminal. No generic force option, arbitrary field update or ordinary-agent cancellation.
+
+## Verification
+
+Synthetic integration tests exercise exact authority, current replacement validation, stale Object/Run/proof rejection, immutable retained evidence, terminal versus pinned/live references, complete rollback and replay. Cancellation additionally requires owner evidence and late-write/retry/recreation fencing tests. Full checks run remotely; no heavy compilation on the shared workstation. Root reviewed this lifecycle contract and must review the PR before merge or any live use. Preview projects only deterministic changed content (excluding commit timestamps); receipt records actual committed row hashes/timestamps, avoiding nondeterministic preview approval.

@@ -523,6 +523,17 @@ pub async fn ingest(
 ) -> Result<IngestResult, DbError> {
     let actor = ActorContext::system(INGESTOR_ACTOR_ID);
     let mut tx = pool.begin().await?;
+    sqlx::query("LOCK TABLE maintenance_execution_fences IN SHARE MODE")
+        .execute(&mut *tx)
+        .await?;
+    let fenced:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM maintenance_execution_fences WHERE provider='slack' AND workspace_id=$1 AND channel_id=$2 AND thread_id=$3)")
+        .bind(&input.workspace_id).bind(&input.channel_id).bind(&input.thread_id).fetch_one(&mut *tx).await?;
+    if fenced {
+        return Err(DbError::Invalid(
+            "provider Chat is permanently fenced by reviewed maintenance".into(),
+        ));
+    }
+
     advisory_lock(
         &mut tx,
         &format!(

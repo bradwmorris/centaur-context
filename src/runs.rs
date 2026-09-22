@@ -6,6 +6,14 @@ use uuid::Uuid;
 
 use crate::db::{DbError, ObjectEvent};
 
+pub(crate) fn is_terminal(kind: &Value, status: &Value, completed_at: &Value) -> bool {
+    matches!(
+        status.as_str(),
+        Some("completed" | "failed" | "reversed" | "delivered" | "suppressed")
+    ) || (kind == "slack_interaction" && status == "cancelled" && !completed_at.is_null())
+        || (kind == "memory_dream" && status == "preview" && !completed_at.is_null())
+}
+
 pub const VERDICTS: &[&str] = &["unreviewed", "pass", "mixed", "fail"];
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -78,6 +86,7 @@ pub struct RunDetail {
     pub children: Vec<RunSummary>,
     pub objects: Vec<RunObject>,
     pub events: Vec<ObjectEvent>,
+    pub maintenance_history: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -262,7 +271,10 @@ pub async fn detail(pool: &PgPool, id: Uuid) -> Result<RunDetail, DbError> {
         .bind(id)
         .fetch_all(pool)
         .await?;
+    let maintenance_history: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('principal_id',principal_id,'created_at',created_at,'manifest_sha256',manifest_sha256,'changes',receipt->'changes') FROM maintenance_purge_receipts WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(receipt->'changes','[]'::jsonb)) c WHERE c->'key'->>'id'=$1) ORDER BY created_at")
+        .bind(id.to_string()).fetch_all(pool).await?;
     Ok(RunDetail {
+        maintenance_history,
         run,
         children,
         objects,
