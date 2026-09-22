@@ -2364,6 +2364,10 @@ async fn list_runs(
                             "human_mutation",
                             "system_mutation",
                             "legacy_import",
+                            "memory_capture_start",
+                            "memory_capture",
+                            "memory_dream",
+                            "memory_undo",
                         ],
                     )
                 })
@@ -2374,7 +2378,14 @@ async fn list_runs(
                     allowed(
                         value,
                         "status",
-                        &["open", "running", "completed", "failed", "reversed"],
+                        &[
+                            "open",
+                            "running",
+                            "completed",
+                            "failed",
+                            "reversed",
+                            "preview",
+                        ],
                     )
                 })
                 .transpose()?,
