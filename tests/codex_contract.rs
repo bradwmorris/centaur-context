@@ -393,7 +393,7 @@ async fn git_receipts_are_verified_deduplicated_and_reversible() {
         )
         .await
         .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     let run: Uuid = sqlx::query_scalar(
         "SELECT id FROM runs WHERE kind='memory_capture' AND primary_object_id=$1",
@@ -411,4 +411,31 @@ async fn git_receipts_are_verified_deduplicated_and_reversible() {
             .await
             .unwrap();
     assert!(archived);
+}
+
+#[tokio::test]
+async fn long_codex_turns_queue_bounded_windows() {
+    let Some(pool) = pool().await else { return };
+    let (app, cfg) = setup(pool.clone(), true).await;
+    let sid = Uuid::new_v4();
+    let turn = Uuid::new_v4();
+    for (offset, count, finished) in [(0, 100, false), (100, 50, true)] {
+        let messages=(offset..offset+count).map(|n|json!({"id":format!("message-{n}"),"turn_id":turn,"role":"human","content":"We decided to publish the documentation on Friday.","created_at":"2026-09-22T01:00:00Z"})).collect::<Vec<_>>();
+        let b = json!({"version":1,"batch_id":Uuid::new_v4(),"title":"Documentation planning","messages":messages,"finished_turn_id":if finished {Some(turn)} else {None}});
+        let (status, result) = response(
+            app.clone(),
+            request(
+                "/api/v2/codex/capture",
+                &cfg.capture_token,
+                sid,
+                "organization",
+                Some(b),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+    }
+    let counts:Vec<i32>=sqlx::query_scalar("SELECT (r.input->>'message_count')::integer FROM runs r JOIN chats c ON c.object_id=r.chat_object_id WHERE r.kind='curator' AND c.provider='codex' AND c.workspace_id=$1 AND c.thread_id=$2 ORDER BY r.created_at,r.id")
+        .bind(cfg.host_id.to_string()).bind(sid.to_string()).fetch_all(&pool).await.unwrap();
+    assert_eq!(counts, vec![100, 50]);
 }

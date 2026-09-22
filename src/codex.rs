@@ -249,12 +249,31 @@ async fn capture(
     }
     sqlx::query("UPDATE chats SET latest_source_message_at=(SELECT max(source_created_at) FROM chat_messages WHERE chat_object_id=$1),processing_updated_at=now() WHERE object_id=$1")
         .bind(chat_id).execute(&mut *tx).await.map_err(DbError::from)?;
-    let curator_run_id = if input.finished_turn_id.is_some() && session.config.curate {
-        crate::ingest::queue_next_window(&mut tx, &actor, run_id, chat_id, "explicit_finish", None)
+    let mut curator_run_ids = Vec::new();
+    // Incoming batches contain <=100 messages. Drain at most two bounded windows
+    // on finish; while running, queue full windows so evidence cannot grow unbounded.
+    if session.config.curate {
+        for _ in 0..2 {
+            let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM chat_messages m WHERE m.chat_object_id=$1 AND m.ingestion_sequence>COALESCE((SELECT previous.ingestion_sequence FROM chat_messages previous JOIN chats c ON c.curation_queued_through_message_id=previous.id WHERE c.object_id=$1),0)")
+                .bind(chat_id).fetch_one(&mut *tx).await.map_err(DbError::from)?;
+            if pending == 0 || (input.finished_turn_id.is_none() && pending < 100) {
+                break;
+            }
+            if let Some(id) = crate::ingest::queue_next_window(
+                &mut tx,
+                &actor,
+                run_id,
+                chat_id,
+                "explicit_finish",
+                None,
+            )
             .await?
-    } else {
-        None
-    };
+            {
+                curator_run_ids.push(id);
+            }
+        }
+    }
+    let curator_run_id = curator_run_ids.first().copied();
     let mut outcome_memories = Vec::new();
     if session.config.curate {
         for receipt in &input.git_receipts {
@@ -272,7 +291,7 @@ async fn capture(
             }
         }
     }
-    let result = json!({"outcome_memory_ids":outcome_memories,"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curation_enabled":session.config.curate});
+    let result = json!({"outcome_memory_ids":outcome_memories,"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curator_run_ids":curator_run_ids,"curation_enabled":session.config.curate});
     sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now() WHERE id=$1")
         .bind(run_id)
         .bind(&result)
