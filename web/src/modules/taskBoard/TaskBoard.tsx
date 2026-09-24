@@ -1,7 +1,7 @@
 import { FormEvent, useDeferredValue, useMemo, useState } from "react";
 import type { Task, TaskStatus, ObjectVisual, TaskViewProps } from "../../ui";
 import "./taskBoard.css";
-import { TaskAssignee, TaskIssueLink, TaskReadiness } from "../../ui";
+import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "../../ui";
 
 const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
   { status: "backlog", label: "Backlog", icon: "◌" },
@@ -26,7 +26,7 @@ export function TaskBoard({ tasks, visuals, loading, reload: onReload, changeSta
   const grouped = useMemo(() => {
     const result = new Map<TaskStatus, Task[]>(columns.map(({ status }) => [status, []]));
     for (const task of tasks) {
-      if (deferredQuery && !`${task.title} ${task.description}`.toLocaleLowerCase().includes(deferredQuery)) continue;
+      if (deferredQuery && !`${task.title} ${task.description} ${task.brief_markdown ?? ""}`.toLocaleLowerCase().includes(deferredQuery)) continue;
       result.get(task.status)?.push(task);
     }
     return result;
@@ -107,7 +107,7 @@ function TaskCard({ task, openTask, visuals, moving, onDragStart, onDragEnd, onM
     <div className="task-card-title"><span className={`priority-dot ${task.priority}`} title={`${task.priority} priority`} /><strong>{task.title}</strong></div>
     {task.description ? <p>{task.description}</p> : null}
     {task.blocked_reason ? <p className="task-blocked-reason"><strong>Blocked:</strong> {task.blocked_reason}</p> : null}
-    <TaskReadiness task={task} />
+    <TaskProject task={task} /><TaskReadiness task={task} />
     <footer><div className="task-card-meta"><TaskIssueLink url={task.github_issue_url} />{task.due_at ? <span className={isOverdue(task) ? "task-due overdue" : "task-due"}><CalendarIcon />{formatDue(task.due_at)}</span> : null}{task.agent_suitable ? <span className="agent-ready" title="Agent suitable">✦</span> : null}</div><div className="task-card-actions"><TaskAssignee task={task} visuals={visuals} /><select aria-label={`Move ${task.title}`} value={task.status} disabled={moving} onClick={(event) => event.stopPropagation()} onChange={(event) => onMove(event.target.value as TaskStatus)}>{columns.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}</select></div></footer>
   </article>;
 }

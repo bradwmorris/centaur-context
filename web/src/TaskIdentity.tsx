@@ -1,3 +1,4 @@
+import { taskProject } from "./taskProject";
 import { AttributionStack } from "./RecordVisuals";
 import type { ObjectVisual, Task } from "./types";
 import "./taskIdentity.css";
@@ -24,4 +25,10 @@ export function TaskIssueLink({ url, showLabel = false }: { url: string | null; 
 export function TaskReadiness({ task, showComplete = false }: { task: Task; showComplete?: boolean }) {
   const missing = [!task.owner_object_id && "assignee", !task.due_at && "due date", !task.brief_markdown?.trim() && "brief", task.work_kind === "code" && !task.github_issue_url && "GitHub issue"].filter(Boolean);
   return missing.length ? <span className="task-readiness" title={`Before execution, add ${missing.join(", ")}`}>Needs {missing.join(", ")}</span> : showComplete ? <span>Details supplied; check brief and dependencies</span> : null;
+}
+
+export function TaskProject({ task }: { task: Task }) {
+  const project = taskProject(task.brief_markdown);
+  const label = project ? project.charAt(0).toUpperCase() + project.slice(1) : "No project";
+  return <span className={`task-project-badge${project ? "" : " missing"}`} aria-label={`Project: ${label}`} title={project ? `Project: ${label}` : "Set one project in task details"}>{label}</span>;
 }
