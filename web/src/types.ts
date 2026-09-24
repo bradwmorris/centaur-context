@@ -157,6 +157,7 @@ export interface Theme {
 }
 
 export interface Task {
+  routine?: { enabled: boolean; next_run_at: string | null } | null;
   work_kind?: "general" | "code";
   created_by_type?: string;
   created_by_id?: string;

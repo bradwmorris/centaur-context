@@ -14,8 +14,8 @@ const typeVisuals: Record<ObjectKind, { icon: string; label: string; code: strin
 
 const statusVisuals: Record<TaskStatus, { icon: string; label: string }> = {
   backlog: { icon: "◌", label: "Backlog" },
-  todo: { icon: "○", label: "To do" },
-  doing: { icon: "◐", label: "Doing" },
+  todo: { icon: "○", label: "Ready" },
+  doing: { icon: "◐", label: "In progress" },
   blocked: { icon: "!", label: "Blocked" },
   review: { icon: "◇", label: "Review" },
   done: { icon: "✓", label: "Done" },

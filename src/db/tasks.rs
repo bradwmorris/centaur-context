@@ -7,6 +7,7 @@ pub async fn list_tasks(pool: &PgPool, filter: TaskListFilter) -> Result<Vec<Tas
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
            t.completed_at,t.work_kind,t.github_issue_url,t.brief_markdown,
+           (SELECT to_jsonb(r) FROM task_routines r WHERE r.task_id=t.object_id) AS routine,
            o.created_by_type,o.created_by_id,o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.archived_at IS NULL"#,
     );
     if let Some(status) = filter.status {
@@ -30,6 +31,7 @@ pub async fn get_task(pool: &PgPool, id: Uuid) -> Result<Task, DbError> {
         r#"SELECT o.id AS object_id,o.title,o.description,CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,o.revision,o.provenance,o.protected,
            t.status,t.priority,t.owner_object_id,t.agent_suitable,t.blocked_reason,t.due_at,
            t.completed_at,t.work_kind,t.github_issue_url,t.brief_markdown,
+           (SELECT to_jsonb(r) FROM task_routines r WHERE r.task_id=t.object_id) AS routine,
            o.created_by_type,o.created_by_id,o.created_at,o.updated_at FROM tasks t JOIN objects o ON o.id=t.object_id WHERE o.id=$1"#,
     )
     .bind(id)

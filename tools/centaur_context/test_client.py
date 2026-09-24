@@ -533,3 +533,17 @@ def test_task_queue_preserves_filters_and_allows_empty_query():
     assert json.loads(requests[0].content)["limit"] == 8
     with pytest.raises(ValueError):
         value.context_search("")
+
+
+def test_routine_client_uses_current_identity_and_preserves_response():
+    seen = []
+    def handler(request):
+        seen.append((request.method,request.url.path))
+        assert request.headers["X-Centaur-Principal-Id"] == "agent-test"
+        assert request.headers["X-Centaur-Thread-Key"] == "codex:test"
+        return response({"routine":None,"runs":[]})
+    value=client(handler)
+    assert value.routine_read("task") == {"routine":None,"runs":[]}
+    value.routine_configure("task",{"expected_revision":1,"enabled":False})
+    value.routine_result("run","review","Synthetic evidence")
+    assert seen == [("GET","/api/v2/tasks/task/routine"),("PUT","/api/v2/tasks/task/routine"),("PATCH","/api/v2/routine-runs/run")]

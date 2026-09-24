@@ -431,7 +431,7 @@ async fn human_api_declares_v2_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.3.0");
     assert_eq!(metadata["api_version"], "v2");
     assert_eq!(metadata["ontology_version"], "v3");
-    assert_eq!(metadata["database_schema_version"], 31);
+    assert_eq!(metadata["database_schema_version"], 32);
     assert_eq!(metadata["tool_version"], "1.1.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -1102,4 +1102,34 @@ async fn ingestion_listener_rejects_unapproved_slack_surfaces_before_database_ac
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn routine_runner_is_not_accessible_with_an_agent_token() {
+    let agent_token = "a".repeat(32);
+    let ingest_token = "i".repeat(32);
+    let agent = agent_router(state(), agent_token.clone());
+    let ingest = ingest_router(
+        state(),
+        ingest_token,
+        ApprovedSlackSurfaces::parse("TTEST:CTEST").unwrap(),
+    );
+    let req = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v2/ingest/routines/claim")
+            .header("authorization", format!("Bearer {agent_token}"))
+            .header("x-centaur-principal-id", "routine-test")
+            .header("x-centaur-thread-key", "slack:TTEST:bot-test:CTEST:123.456")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        agent.oneshot(req()).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        ingest.oneshot(req()).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
 }

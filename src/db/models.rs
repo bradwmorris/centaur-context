@@ -73,6 +73,7 @@ pub struct ConnectionGraphSnapshot {
 
 #[derive(Clone, Debug, FromRow, Serialize)]
 pub struct Task {
+    pub routine: Option<Value>,
     pub created_by_type: String,
     pub created_by_id: String,
     pub object_id: Uuid,

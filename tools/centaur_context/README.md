@@ -29,3 +29,10 @@ is not a standalone agent runtime and never receives a database connection.
 
 See the main [Centaur Context repository](https://github.com/bradwmorris/centaur-context)
 for setup, API boundaries, and compatibility information.
+
+## Routines
+
+`context_routine read TASK_UUID` returns its schedule and recent occurrences.
+`context_routine configure TASK_UUID --json '{"expected_revision":2,"schedule":{"timezone":"UTC","local_time":"09:00","weekdays":[1,2,3,4,5]},"enabled":false}'` saves a paused schedule. For intervals use `every_minutes` instead of `local_time`/`weekdays`. Explicit user approval permits `enabled:true,confirmed:true`; due dates never schedule execution. Read back the task revision after configuration. Editing the task pauses its schedule.
+
+An assigned execution reports `context_routine result RUN_UUID --status review --result "Deliverable and evidence"`. Use completed for an uneventful check or blocked with a reason. Never claim or complete the parent task for an occurrence. Only the bound execution thread may report its result; the human UI accepts reviewed results.

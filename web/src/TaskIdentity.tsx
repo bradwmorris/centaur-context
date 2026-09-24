@@ -30,5 +30,5 @@ export function TaskReadiness({ task, showComplete = false }: { task: Task; show
 export function TaskProject({ task }: { task: Task }) {
   const project = taskProject(task.brief_markdown);
   const label = project ? project.charAt(0).toUpperCase() + project.slice(1) : "No project";
-  return <span className={`task-project-badge${project ? "" : " missing"}`} aria-label={`Project: ${label}`} title={project ? `Project: ${label}` : "Set one project in task details"}>{label}</span>;
+  return <>{task.routine && <span className="task-project-badge" title={task.routine.next_run_at ? `Next run: ${new Date(task.routine.next_run_at).toLocaleString()}` : "Schedule paused"}>Routine · {task.routine.enabled ? "Enabled" : "Paused"}</span>}<span className={`task-project-badge${project ? "" : " missing"}`} aria-label={`Project: ${label}`} title={project ? `Project: ${label}` : "Set one project in task details"}>{label}</span></>;
 }

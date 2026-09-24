@@ -16,6 +16,8 @@ use crate::{domain::ActorContext, intake::IntakeError, maintenance::MaintenanceS
 const TABLES: &[&str] = &[
     "objects",
     "connections",
+    "task_routine_runs",
+    "task_routines",
     "tasks",
     "chats",
     "chat_messages",
@@ -38,6 +40,8 @@ const DELETE_ORDER: &[&str] = &[
     "connections",
     "runs",
     "chat_messages",
+    "task_routine_runs",
+    "task_routines",
     "tasks",
     "notes",
     "sources",
@@ -60,6 +64,8 @@ fn digest(value: &Value) -> String {
 fn key(table: &str, row: &Value) -> Value {
     if table == "context_apply_requests" {
         json!({"principal_id":row["principal_id"],"idempotency_key":row["idempotency_key"]})
+    } else if table == "task_routines" {
+        json!({"task_id":row["task_id"]})
     } else if SUBTYPES.contains(&table) {
         json!({"object_id":row["object_id"]})
     } else {
@@ -756,6 +762,10 @@ fn preview_rows_with_plan(
                     && selected_id(&set, "objects", &row["object_id"])
                 {
                     Some("owned subtype of selected fixture Object")
+                } else if matches!(table.as_str(), "task_routines" | "task_routine_runs")
+                    && selected_id(&set, "objects", &row["task_id"])
+                {
+                    Some("owned Routine configuration or occurrence")
                 } else if table == "connections"
                     && (selected_id(&set, "objects", &row["source_object_id"])
                         || selected_id(&set, "objects", &row["target_object_id"]))
@@ -898,6 +908,12 @@ fn preview_rows_with_plan(
     for (table, rs) in &rows {
         for row in rs {
             let mentions_selected = contains_id(row, &ids);
+            if table == "task_routine_runs"
+                && mentions_selected
+                && matches!(row["status"].as_str(), Some("pending" | "running"))
+            {
+                blockers.push(json!({"table":table,"key":key(table,row),"reason":"active Routine occurrence references selected fixtures; wait for execution to finish"}));
+            }
             if table == "runs"
                 && mentions_selected
                 && !crate::runs::is_terminal(&row["kind"], &row["status"], &row["completed_at"])
@@ -1092,6 +1108,8 @@ async fn execute_purge(
                 "principal_id text, idempotency_key text",
                 "t.principal_id = k.principal_id AND t.idempotency_key = k.idempotency_key",
             )
+        } else if *table == "task_routines" {
+            ("task_id uuid", "t.task_id = k.task_id")
         } else if SUBTYPES.contains(table) {
             ("object_id uuid", "t.object_id = k.object_id")
         } else {

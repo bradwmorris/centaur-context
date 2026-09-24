@@ -134,6 +134,14 @@ pub fn agent_router(state: AppState, token: String) -> Router {
             "/api/v2",
             Router::new()
                 .route("/contract", get(read_contract))
+                .route(
+                    "/tasks/{id}/routine",
+                    get(read_routine).put(configure_routine),
+                )
+                .route(
+                    "/routine-runs/{id}",
+                    axum::routing::patch(update_routine_run),
+                )
                 .route("/search", post(universal_search))
                 .route("/read", post(universal_read))
                 .route("/apply", post(universal_apply))
@@ -227,6 +235,14 @@ fn service_router(state: AppState) -> Router {
                 )
                 .route("/connections/{id}/archive", post(archive_connection))
                 .route("/tasks", get(list_tasks).post(create_task))
+                .route(
+                    "/tasks/{id}/routine",
+                    get(read_routine).put(configure_routine),
+                )
+                .route(
+                    "/routine-runs/{id}",
+                    axum::routing::patch(update_routine_run),
+                )
                 .route("/tasks/{id}", get(read_task).patch(update_task))
                 .route("/chats/{id}/messages", get(list_chat_messages))
                 .route("/users", get(list_users))
@@ -2758,6 +2774,35 @@ fn is_constraint_error(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .is_some_and(|error| matches!(error.code().as_deref(), Some("23503" | "23505" | "23514")))
+}
+
+async fn read_routine(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_read(&state.pool,id).await?}),
+    ))
+}
+async fn configure_routine(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<db::RoutineConfigure>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_configure(&state.pool,&actor,id,input).await?}),
+    ))
+}
+async fn update_routine_run(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<db::RoutineRunUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_run_update(&state.pool,Some(&actor),id,input).await?}),
+    ))
 }
 
 #[cfg(test)]
