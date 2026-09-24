@@ -260,3 +260,20 @@ intake listener with a separate maintenance credential and configured principal.
 See [reviewed maintenance](operations.md#reviewed-maintenance-on-the-intake-listener)
 for inventory, readback, exact-request approval and `/api/v2/maintenance/apply`.
 These routes are not part of the interactive-agent tool contract.
+
+## Task Routines
+
+| Surface | Method | Path | Purpose |
+| --- | --- | --- | --- |
+| Agent | GET | `/api/v2/tasks/{id}/routine` | Read schedule and last 50 occurrences. |
+| Agent | PUT | `/api/v2/tasks/{id}/routine` | Configure with expected_revision, schedule, enabled and confirmed. |
+| Agent | PATCH | `/api/v2/routine-runs/{id}` | Bound execution thread reports result. |
+| Slack ingestion | POST | `/api/v2/ingest/routines/claim` | Trusted dispatcher claims due occurrences atomically. |
+| Slack ingestion | GET | `/api/v2/ingest/routine-runs/{id}` | Read occurrence and current eligibility. |
+| Slack ingestion | PATCH | `/api/v2/ingest/routine-runs/{id}` | Bind execution thread/link or finish an occurrence. |
+
+The human API supports the same configuration/read/result paths and can accept a Review result. Agent authentication cannot access ingestion paths. Routine configuration requires an expected task revision and increments it, with an Object Event; protected tasks reject agent configuration. Enabling requires explicit confirmation, an active Ready/Review task, an owner, a review date and an execution brief.
+
+Schedules contain `timezone` and either `every_minutes` (1–525600), or `local_time` (`HH:MM`) with `weekdays` (Monday 1 through Sunday 7). PostgreSQL timezone rules apply: a missing local time shifts by the DST gap; an ambiguous time uses standard time. Claiming advances to the next future occurrence and skips catch-up. The unique active occurrence prevents overlapping work. Task edits pause its schedule. Due dates are unrelated to scheduling.
+
+Occurrence statuses are pending, running, completed (uneventful success), review (substantive output), blocked and skipped. Execution results belong to the occurrence, not the parent Task. Only its bound thread can report a result, with at most 20000 bytes of text. A blocked result needs a reason. Runtime fallback to Review never overwrites an explicit terminal result.

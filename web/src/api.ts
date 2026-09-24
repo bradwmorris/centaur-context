@@ -47,7 +47,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload.data;
 }
 
-function write(method: "POST" | "PATCH", body: unknown): RequestInit {
+function write(method: "POST" | "PATCH" | "PUT", body: unknown): RequestInit {
   return {
     method,
     headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -56,6 +56,9 @@ function write(method: "POST" | "PATCH", body: unknown): RequestInit {
 }
 
 export const api = {
+  routine(id: string) { return request<import("./TaskRoutine").RoutineDetail>(`/api/v2/tasks/${id}/routine`); },
+  configureRoutine(id: string, body: unknown) { return request(`/api/v2/tasks/${id}/routine`, write("PUT", body)); },
+  acceptRoutineRun(id: string) { return request(`/api/v2/routine-runs/${id}`, write("PATCH", { status: "completed" })); },
   schema() {
     return request<SchemaSnapshot>("/api/v2/schema");
   },

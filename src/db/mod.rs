@@ -35,6 +35,7 @@ mod models;
 mod notes;
 mod objects;
 mod retrieval;
+mod routines;
 mod sources;
 mod tasks;
 
@@ -46,6 +47,7 @@ pub use models::*;
 pub use notes::*;
 pub use objects::*;
 pub use retrieval::*;
+pub use routines::*;
 pub use sources::*;
 pub use tasks::*;
 

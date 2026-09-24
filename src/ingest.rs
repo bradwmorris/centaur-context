@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration as StdDuration};
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{Path, Request, State},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::Response,
@@ -89,6 +89,11 @@ pub fn router(state: AppState, token: String, approved_surfaces: ApprovedSlackSu
             post(ingest_slack_interaction),
         )
         .route("/api/v2/ingest/runs/usage", post(ingest_run_usage))
+        .route("/api/v2/ingest/routines/claim", post(claim_routines))
+        .route(
+            "/api/v2/ingest/routine-runs/{id}",
+            get(read_routine_run).patch(update_routine_run),
+        )
         .with_state(IngestState {
             pool: state.pool,
             approved_surfaces,
@@ -1460,4 +1465,28 @@ mod tests {
             })
         );
     }
+}
+
+async fn claim_routines(State(state): State<IngestState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_claim_due(&state.pool).await?}),
+    ))
+}
+async fn update_routine_run(
+    State(state): State<IngestState>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<db::RoutineRunUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_run_update(&state.pool,None,id,input).await?}),
+    ))
+}
+
+async fn read_routine_run(
+    State(state): State<IngestState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"data":db::routine_run_read(&state.pool,id).await?}),
+    ))
 }

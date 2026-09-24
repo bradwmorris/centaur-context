@@ -417,6 +417,15 @@ class CentaurContextClient:
             },
         )
 
+    def routine_read(self, task_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/v2/tasks/{quote(task_id, safe='')}/routine")
+
+    def routine_configure(self, task_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", f"/api/v2/tasks/{quote(task_id, safe='')}/routine", json=request)
+
+    def routine_result(self, run_id: str, status: str, result: str) -> dict[str, Any]:
+        return self._request("PATCH", f"/api/v2/routine-runs/{quote(run_id, safe='')}", json={"status": status, "result": result})
+
     def context_apply(self, request: dict[str, Any]) -> dict[str, Any]:
         """Validate and commit one atomic universal Context write batch."""
         if not isinstance(request, dict):

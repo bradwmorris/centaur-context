@@ -1,3 +1,4 @@
+import { TaskRoutine } from "./TaskRoutine";
 import { taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
@@ -929,7 +930,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
             <Property label="Project"><TaskProject task={task} /><InlineEditor label="Task project" value={taskProject(task.brief_markdown) ?? ""} maxLength={64} onSave={async (value) => { const brief = withTaskProject(task.brief_markdown, value); const updated = await saveFields({ brief_markdown: brief }); return taskProject(updated.brief_markdown) ?? ""; }} onReload={load} /></Property>
             <Property label="Source">{visuals.get(task.object_id)?.source_provider ? <SourceBadge provider={visuals.get(task.object_id)?.source_provider} /> : textValue(task.provenance.source_type, "Unspecified")}</Property>
             <Property label="Users">{(visuals.get(task.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(task.object_id)?.users ?? []} /> : "None"}</Property>
-            <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>
+            <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status} value={status}>{status === "todo" ? "Ready" : status === "doing" ? "In progress" : status.charAt(0).toUpperCase() + status.slice(1)}</option>)}</select></Field>
             <Property label="Agent suitability"><label className="check"><input type="checkbox" checked={task.agent_suitable} onChange={(event) => void saveProperty({ agent_suitable: event.target.checked })} /> Suitable</label></Property>
             <Property label="Priority"><span className="property-value-wrap">{task.priority}</span></Property>
             <Property label="Created by"><span>{objects.find((o) => o.id === object.created_by_id)?.title ?? `${object.created_by_type}: ${object.created_by_id}`}</span></Property>
@@ -943,6 +944,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
+        <TaskRoutine task={task} onChanged={async () => { await load(); await onChanged(); }} />
         <Section title="Brief"><InlineEditor label="Task brief" value={task.brief_markdown ?? ""} multiline maxLength={100000} placeholder="Scope, constraints, acceptance criteria, and verification…" className="detail-body-editor task-brief-editor" onSave={(value) => saveText("brief_markdown", value)} onReload={load} /></Section>
       </div>
       {error && <p className="form-error">{error}</p>}

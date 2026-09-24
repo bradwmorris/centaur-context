@@ -9,14 +9,14 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 SURFACES = {
     # source file, router start, router end, nested prefix, expected routes
-    "Agent": ("src/api.rs", "pub fn agent_router", "pub fn note_write_router", "/api/v2", 21),
+    "Agent": ("src/api.rs", "pub fn agent_router", "pub fn note_write_router", "/api/v2", 24),
     "Note/Task writer": ("src/api.rs", "pub fn note_write_router", "fn service_router", "/api/v2", 4),
-    "Slack ingestion": ("src/ingest.rs", "pub fn router", ".with_state", "", 2),
+    "Slack ingestion": ("src/ingest.rs", "pub fn router", ".with_state", "", 5),
     "Source intake": ("src/source_intake.rs", "pub fn router", ".with_state", "", 7),
 }
 ROW = re.compile(
     r"^\| (Agent|Note/Task writer|Slack ingestion|Source intake) "
-    r"\| (GET|POST|PATCH) \| `([^`]+)` \|",
+    r"\| (GET|POST|PATCH|PUT) \| `([^`]+)` \|",
     re.MULTILINE,
 )
 
@@ -39,7 +39,7 @@ def failures(document: str, sources: dict[str, str]) -> list[str]:
         local_path = public_path.removeprefix(prefix)
         pattern = (
             rf'\.route\s*\(\s*"{re.escape(local_path)}"\s*,\s*'
-            rf"(?:axum::routing::)?{method.lower()}\s*\("
+            rf"(?:(?:axum::routing::)?(?:get|post|put|patch)\s*\([^()]*\)\s*\.)*(?:axum::routing::)?{method.lower()}\s*\("
         )
         if not re.search(pattern, router):
             errors.append(

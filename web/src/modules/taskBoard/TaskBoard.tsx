@@ -5,7 +5,7 @@ import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "../../u
 
 const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
   { status: "backlog", label: "Backlog", icon: "◌" },
-  { status: "todo", label: "To do", icon: "○" },
+  { status: "todo", label: "Ready", icon: "○" },
   { status: "doing", label: "In progress", icon: "◐" },
   { status: "review", label: "Review", icon: "◇" },
   { status: "blocked", label: "Blocked", icon: "!" },

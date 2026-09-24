@@ -245,6 +245,8 @@ async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping()
             "objects",
             "runs",
             "sources",
+            "task_routine_runs",
+            "task_routines",
             "tasks",
             "themes",
             "users"

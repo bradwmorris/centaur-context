@@ -18,7 +18,7 @@ describe("record visual language", () => {
       {(["task", "chat", "user", "entity", "memory"] as const).map((kind) => <ObjectTypeBadge kind={kind} key={kind} />)}
       {(["todo", "doing", "blocked", "review", "done"] as const).map((status) => <TaskStatusBadge status={status} key={status} />)}
     </>);
-    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "To do", "Doing", "Blocked", "Review", "Done"]) {
+    for (const label of ["Task", "Chat", "User", "Entity", "Memory", "Ready", "In progress", "Blocked", "Review", "Done"]) {
       expect(screen.getByText(label)).toBeVisible();
     }
     expect(screen.getByText("Memory")).toHaveTextContent("✦Memory");
