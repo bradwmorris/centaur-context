@@ -6,6 +6,8 @@ export { objectPath, detailPath, navigate } from "../routing";
 
 export interface TaskViewProps {
   tasks: readonly Readonly<Task>[];
+  /** Optional host toolbar; standalone modules retain their own controls. */
+  controls?: { showDone: boolean; onShowDoneChange(value: boolean): void };
   visuals: ReadonlyMap<string, ObjectVisual>;
   loading: boolean;
   error: string | null;

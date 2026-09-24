@@ -14,9 +14,11 @@ const columns: Array<{ status: TaskStatus; label: string; icon: string }> = [
 
 const dueDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 
-export function TaskBoard({ tasks, visuals, loading, reload: onReload, changeStatus, openTask }: TaskViewProps) {
+export function TaskBoard({ tasks, visuals, loading, reload: onReload, changeStatus, openTask, controls }: TaskViewProps) {
   const [query, setQuery] = useState("");
-  const [showDone, setShowDone] = useState(false);
+  const [localShowDone, setLocalShowDone] = useState(false);
+  const showDone = controls?.showDone ?? localShowDone;
+  const setShowDone = (value: boolean) => controls ? controls.onShowDoneChange(value) : setLocalShowDone(value);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [blockingTask, setBlockingTask] = useState<Task | null>(null);
@@ -73,11 +75,11 @@ export function TaskBoard({ tasks, visuals, loading, reload: onReload, changeSta
   };
 
   return <section className="task-board-module" aria-label="Task board">
-    <div className="task-board-toolbar">
+    {!controls && <div className="task-board-toolbar">
       <label className="board-search"><SearchIcon /><input aria-label="Search task board" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tasks…" /></label>
       <span className="board-total">{tasks.length} tasks</span>
-      <button className={showDone ? "board-filter active" : "board-filter"} type="button" onClick={() => setShowDone((value) => !value)}><span aria-hidden="true">✓</span>{showDone ? "Hide completed" : `Show completed (${completedCount})`}</button>
-    </div>
+      <button className={showDone ? "board-filter active" : "board-filter"} type="button" onClick={() => setShowDone(!showDone)}><span aria-hidden="true">✓</span>{showDone ? "Hide completed" : `Show completed (${completedCount})`}</button>
+    </div>}
     {error ? <div className="board-error" role="alert"><span>{error}</span><span><button type="button" onClick={() => { setError(null); void onReload(); }}>Reload tasks</button><button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button></span></div> : null}
     {loading ? <div className="board-loading" role="status">Loading tasks…</div> : <div className="task-board-columns" data-columns={visibleColumns.length}>
       {visibleColumns.map((column) => <section className={`task-column ${column.status}`} aria-label={`${column.label} tasks`} key={column.status} onDragOver={(event) => event.preventDefault()} onDrop={() => {

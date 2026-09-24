@@ -17,3 +17,7 @@
 
 .task-project-badge { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border: 1px solid var(--border, #d1d5db); border-radius: 5px; background: var(--panel-raised); color: var(--text-primary); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .task-project-badge.missing { opacity: .65; }
+
+.task-project-badge.project-colour { gap: 4px; padding: 3px 6px; border-radius: 5px; font-size: 10px; line-height: 1.2; letter-spacing: .045em; color: hsl(var(--project-hue) 75% 78%); background: hsl(var(--project-hue) 55% 52% / .14); border-color: hsl(var(--project-hue) 65% 65% / .26); flex-shrink: 0; }
+.task-project-badge.project-colour > span:first-child { font-size: 12px; line-height: 1; }
+.task-project-badge.project-colour.missing { color: var(--text-muted); background: #ffffff06; border-color: #ffffff16; }

@@ -10,6 +10,7 @@ import { TaskBoard } from "./taskBoard/TaskBoard";
 
 export interface ModuleContext {
   tasks: Task[];
+  taskControls?: TaskViewProps["controls"];
   sources?: Source[];
   visuals: Map<string, ObjectVisual>;
   loading: boolean;
@@ -40,14 +41,14 @@ export function ModuleViewSwitcher({ section, activeId }: { section: Section; ac
   const requested = new URLSearchParams(window.location.search).get("view");
   return <div className="module-switcher" role="group" aria-label={`${section} views`}>
     {requested && !activeId ? <span role="status">This view is unavailable. Showing the list.</span> : null}
-    <button className={activeId === null ? "active" : ""} type="button" onClick={() => navigate(sectionPath(section))}><span aria-hidden="true">☷</span>List</button>
-    {sectionModules.map((module) => <button key={module.id} className={activeId === module.id ? "active" : ""} type="button" onClick={() => navigate(`${sectionPath(section)}?view=${encodeURIComponent(module.id)}`)}><span aria-hidden="true">{module.icon}</span>{module.label}</button>)}
+    <button className={activeId === null ? "active" : ""} type="button" onClick={() => navigate(viewPath(section, null))}><span aria-hidden="true">☷</span>List</button>
+    {sectionModules.map((module) => <button key={module.id} className={activeId === module.id ? "active" : ""} type="button" onClick={() => navigate(viewPath(section, module.id))}><span aria-hidden="true">{module.icon}</span>{module.label}</button>)}
   </div>;
 }
 
 export function taskViewProps(context: ModuleContext): TaskViewProps {
   return {
-    tasks: structuredClone(context.tasks), visuals: structuredClone(context.visuals), loading: context.loading,
+    tasks: structuredClone(context.tasks), controls: context.taskControls, visuals: structuredClone(context.visuals), loading: context.loading,
     error: context.error ?? null,
     completeness: context.loading ? "loading" : context.error ? "unknown" : "complete",
     reload: context.onReload,
@@ -94,4 +95,11 @@ function RenderView({ module, context }: { module: ContextUiModule; context: Mod
 
 export function ContextModuleView({ module, context }: { module: ContextUiModule; context: ModuleContext }) {
   return <ViewBoundary key={module.id} section={module.section}><RenderView module={module} context={context} /></ViewBoundary>;
+}
+
+
+function viewPath(section: Section, view: string | null) {
+  const params = new URLSearchParams(window.location.search);
+  if (view) params.set("view", view); else params.delete("view");
+  return `${sectionPath(section)}${params.size ? `?${params}` : ""}`;
 }

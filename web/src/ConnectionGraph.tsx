@@ -1,3 +1,4 @@
+import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { FormEvent, PointerEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { layoutConnectionGraph } from "./connectionGraphLayout";
@@ -101,9 +102,8 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
   if (error && !graph) return <div className="connection-graph-blank error"><p>{error}</p><button className="secondary" onClick={load}>Try again</button></div>;
 
   return <section className="connection-graph-workspace" aria-label="Connections graph">
-    <header className="connection-graph-toolbar">
+    <WorkspaceToolbar className="connection-graph-toolbar">
       <div>
-        <h1>Connections</h1>
         <p>{graph?.node_count ?? 0} Objects · {graph?.connection_count ?? 0} Connections · {layout.componentCount} clusters</p>
       </div>
       <form className="connection-graph-search" onSubmit={submitSearch} role="search">
@@ -116,9 +116,9 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
         <button type="button" onClick={() => zoom(0.82)} aria-label="Zoom out">−</button>
         <button type="button" onClick={() => setTransform(initialTransform)}>Fit</button>
         <button type="button" onClick={() => zoom(1.22)} aria-label="Zoom in">+</button>
-        <button type="button" onClick={load} aria-label="Refresh graph">↻</button>
+
       </div>
-    </header>
+    </WorkspaceToolbar>
 
     {error && <div className="connection-graph-notice">{error}<button onClick={load}>Retry</button></div>}
     {layout.nodes.length === 0 ? <div className="connection-graph-blank">No active Objects yet.</div> : <div className="connection-graph-body">

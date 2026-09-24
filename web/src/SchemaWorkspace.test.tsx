@@ -45,7 +45,8 @@ describe("dynamic schema refresh", () => {
     vi.mocked(api.schema).mockResolvedValueOnce(initial).mockResolvedValue(changed);
     vi.mocked(api.schemaRows).mockResolvedValue({ schema_fingerprint: "first", table: "tasks", rows: [], next_cursor: null, page_size: 50 });
     const view = render(<SchemaWorkspace selectedTable="tasks" refreshKey={0} />);
-    expect(await screen.findByRole("heading", { name: "Tasks" })).toBeVisible();
+    expect(await screen.findByRole("link", { name: "← Schema map" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
     expect(window.location.pathname).toBe("/schema/tasks/rows");
     expect(screen.getByRole("link", { name: "← Schema map" })).toHaveAttribute("href", "/schema");
     expect(screen.queryByRole("navigation", { name: "Schema tables" })).not.toBeInTheDocument();
