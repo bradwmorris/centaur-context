@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TaskAssignee, TaskIssueLink, TaskReadiness } from "./TaskIdentity";
+import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "./TaskIdentity";
 import type { Task, UserAttribution } from "./types";
 
 const owner: UserAttribution = { object_id: "task", user_object_id: "owner", title: "Assigned Person", user_kind: "human", role: "owner", avatar_url: null, avatar_asset_url: "/avatar.png" };
@@ -44,4 +44,11 @@ describe("legacy rendering", () => {
     render(<TaskReadiness task={{ ...task, owner_object_id: null, work_kind: "code", github_issue_url: null }} />);
     expect(screen.getByText("Needs assignee, due date, brief, GitHub issue")).toBeInTheDocument();
   });
+});
+
+it("shows General as a project and explicitly identifies missing assignments", () => {
+  const { rerender } = render(<TaskProject task={{ ...task, brief_markdown: "Project: general" }} />);
+  expect(screen.getByLabelText("Project: General")).toBeTruthy();
+  rerender(<TaskProject task={{ ...task, brief_markdown: null }} />);
+  expect(screen.getByLabelText("Project: No project")).toBeTruthy();
 });

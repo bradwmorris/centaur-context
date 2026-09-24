@@ -1,3 +1,4 @@
+import { taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
 import type { ListSort } from "./api";
@@ -5,7 +6,7 @@ import { DescriptionSnippet } from "./DescriptionSnippet";
 import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph";
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
-import { TaskAssignee, TaskIssueLink, TaskReadiness } from "./TaskIdentity";
+import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "./TaskIdentity";
 import { InlineEditor } from "./InlineEditor";
 import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
 import { SchemaWorkspace } from "./SchemaWorkspace";
@@ -199,7 +200,7 @@ export default function App() {
                   <span className="record-main">
                     <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
                     <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <><TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
+                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <><TaskProject task={item} /><TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
                   </span>
                   <DescriptionSnippet description={itemDescription(item, objects)} />
                   <time>{relative(item.created_at)}</time>
@@ -485,7 +486,7 @@ export function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreat
   }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", owner_object_id: String(data.get("owner_object_id")), due_at: data.get("due_at") ? new Date(String(data.get("due_at"))).toISOString() : null, work_kind: String(data.get("work_kind")), github_issue_url: String(data.get("github_issue_url") || "") || null, brief_markdown: String(data.get("brief_markdown") || ""), provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
+    try { onCreated(await api.createTask({ title: String(data.get("title")), description: String(data.get("description")), status: "todo", priority: "medium", agent_suitable: data.get("agent_suitable") === "on", owner_object_id: String(data.get("owner_object_id")), due_at: data.get("due_at") ? new Date(String(data.get("due_at"))).toISOString() : null, work_kind: String(data.get("work_kind")), github_issue_url: String(data.get("github_issue_url") || "") || null, brief_markdown: withTaskProject(String(data.get("brief_markdown") || ""), String(data.get("project") || "")), provenance: { source_type: "human", note: "Created in Centaur Context" } })); }
     catch (cause) { setError(message(cause)); setBusy(false); }
   };
   return <CreateModal title="New task" onClose={onCancel}><form className="create-form task-create-form" onSubmit={submit}>
@@ -494,6 +495,7 @@ export function NewTask({ onCancel, onCreated }: { onCancel: () => void; onCreat
     {error && <p className="form-error">{error}</p>}
     <div className="task-fields">
       <label>Assigned to<select name="owner_object_id" required disabled={loadingUsers} defaultValue=""><option value="" disabled>{loadingUsers ? "Loading users…" : "Select a user"}</option>{users.map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></label>
+      <label>Project<input name="project" required maxLength={64} pattern="[A-Za-z][A-Za-z0-9-]{0,63}" placeholder="Project name" /></label>
       <label>Due<input type="datetime-local" name="due_at" /></label>
       <label>Work type<select name="work_kind"><option value="general">General</option><option value="code">Code / repository change</option></select></label>
       <label>GitHub issue<input name="github_issue_url" type="url" placeholder="https://github.com/owner/repo/issues/1" /></label>
@@ -924,6 +926,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
           <div className="properties-grid">
             <Property label="Object ID"><ObjectId id={task.object_id} label={false} navigate /></Property>
             <Property label="Type"><ObjectTypeBadge kind="task" /></Property>
+            <Property label="Project"><TaskProject task={task} /><InlineEditor label="Task project" value={taskProject(task.brief_markdown) ?? ""} maxLength={64} onSave={async (value) => { const brief = withTaskProject(task.brief_markdown, value); const updated = await saveFields({ brief_markdown: brief }); return taskProject(updated.brief_markdown) ?? ""; }} onReload={load} /></Property>
             <Property label="Source">{visuals.get(task.object_id)?.source_provider ? <SourceBadge provider={visuals.get(task.object_id)?.source_provider} /> : textValue(task.provenance.source_type, "Unspecified")}</Property>
             <Property label="Users">{(visuals.get(task.object_id)?.users.length ?? 0) > 0 ? <AttributionStack users={visuals.get(task.object_id)?.users ?? []} /> : "None"}</Property>
             <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status}>{status}</option>)}</select></Field>

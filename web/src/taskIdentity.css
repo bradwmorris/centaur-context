@@ -14,3 +14,6 @@
 .task-fields input, .task-fields select, .task-fields textarea { width: 100%; border: 1px solid #3d3f47; border-radius: 6px; background: #141517; color: #d9dade; padding: 9px 10px; }
 .task-fields textarea { min-height: 80px; resize: vertical; }
 .task-create-form .create-footer { position: sticky; bottom: -14px; background: #151517; padding: 12px 0; }
+
+.task-project-badge { display: inline-flex; align-items: center; width: fit-content; padding: 2px 7px; border: 1px solid var(--border, #d1d5db); border-radius: 5px; background: var(--panel-raised); color: var(--text-primary); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.task-project-badge.missing { opacity: .65; }
