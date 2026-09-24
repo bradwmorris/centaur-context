@@ -21,3 +21,12 @@ it("enables only when the explicit enable control is used", async () => {
   fireEvent.click(await screen.findByRole("button",{name:"Enable Routine"}));
   await waitFor(() => expect(api.configureRoutine).toHaveBeenCalledWith("task-1",expect.objectContaining({enabled:true,confirmed:true})));
 });
+
+it("refreshes occurrence history when the task revision is unchanged", async () => {
+  const props = {task,onChanged:vi.fn()};
+  const view=render(<TaskRoutine {...props} refreshKey={0} />);
+  await waitFor(() => expect(api.routine).toHaveBeenCalledTimes(1));
+  vi.mocked(api.routine).mockResolvedValue({routine:null,runs:[{id:"run",scheduled_for:"2026-09-25T00:00:00Z",status:"completed",execution_url:null,result:"Verified occurrence result"}]});
+  view.rerender(<TaskRoutine {...props} refreshKey={1} />);
+  expect(await screen.findByText("Verified occurrence result")).toBeInTheDocument();
+});
