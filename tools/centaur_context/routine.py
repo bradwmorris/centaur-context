@@ -10,7 +10,9 @@ def app(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="context_routine", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("read").add_argument("task_id", type=UUID)
-    configure = sub.add_parser("configure", help="Save schedule; enabled=true requires confirmed=true and explicit user approval")
+    configure = sub.add_parser("configure", help="Save schedule; enabled=true requires confirmed=true and explicit user approval",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Example --json: {"expected_revision":2,"schedule":{"timezone":"UTC","local_time":"09:00","weekdays":[1,2,3,4,5]},"enabled":false}\nFor intervals use every_minutes instead of local_time/weekdays. Explicit enable adds "enabled":true,"confirmed":true. Task edits pause the schedule.')
     configure.add_argument("task_id", type=UUID)
     configure.add_argument("--json")
     configure.add_argument("--file")
