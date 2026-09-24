@@ -944,7 +944,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
-        <TaskRoutine task={task} onChanged={async () => { await load(); await onChanged(); }} />
+        <TaskRoutine task={task} refreshKey={refreshKey} onChanged={async () => { await load(); await onChanged(); }} />
         <Section title="Brief"><InlineEditor label="Task brief" value={task.brief_markdown ?? ""} multiline maxLength={100000} placeholder="Scope, constraints, acceptance criteria, and verification…" className="detail-body-editor task-brief-editor" onSave={(value) => saveText("brief_markdown", value)} onReload={load} /></Section>
       </div>
       {error && <p className="form-error">{error}</p>}

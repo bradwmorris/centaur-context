@@ -5,7 +5,7 @@ import type { Task } from "./types";
 type Schedule = { timezone: string; every_minutes: number | null; local_time: string | null; weekdays: number[] };
 export type RoutineDetail = { routine: { schedule: Schedule; enabled: boolean; next_run_at: string | null } | null;
   runs: { id: string; scheduled_for: string; status: string; execution_url: string | null; result: string | null }[] };
-export function TaskRoutine({ task, onChanged }: { task: Task; onChanged: () => Promise<void> }) {
+export function TaskRoutine({ task, onChanged, refreshKey = 0 }: { task: Task; onChanged: () => Promise<void>; refreshKey?: number }) {
   const [detail, setDetail] = useState<RoutineDetail | null>(null);
   const [editing, setEditing] = useState(false);
   const [mode, setMode] = useState("daily");
@@ -24,7 +24,7 @@ export function TaskRoutine({ task, onChanged }: { task: Task; onChanged: () => 
       if (schedule) { setZone(schedule.timezone); setMode(schedule.every_minutes ? "interval" : "daily"); setMinutes(schedule.every_minutes ?? 60); setClock(schedule.local_time ?? "09:00"); setDays(schedule.weekdays); }
     }).catch((cause: Error) => { if (current) setError(cause.message); });
     return () => { current = false; };
-  }, [task.object_id, task.revision]);
+  }, [task.object_id, task.revision, refreshKey]);
   const save = async (enabled: boolean, keepSchedule = false) => {
     setBusy(true); setError(null);
     try {
