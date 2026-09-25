@@ -1,3 +1,4 @@
+import { WorkspaceToolbar } from "./WorkspaceToolbar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import { interceptNavigation, objectPath, navigate, schemaPath, schemaRowPath, schemaView } from "./routing";
@@ -41,10 +42,10 @@ export function SchemaWorkspace({ selectedTable, refreshKey = 0 }: Props) {
   const table = snapshot?.tables.find((item) => item.name === selectedTable) ?? null;
   return <section className="schema-workspace" aria-label="Database schema">
     <div className="schema-main">
-      {mode === "rows" && table && <header className="schema-toolbar">
+      {mode === "rows" && table && <WorkspaceToolbar className="schema-toolbar">
         <a className="schema-back-link" href={schemaPath()} onClick={(event) => interceptNavigation(event, schemaPath())}>← Schema map</a>
-        <div><h1>{tableLabel(table.name)}</h1><p>{table.classification} table · {table.columns.length} columns</p></div>
-      </header>}
+        <div><p>{table.classification} table · {table.columns.length} columns</p></div>
+      </WorkspaceToolbar>}
       {error && <div className="schema-message error">{error}<button onClick={() => setError(null)} aria-label="Dismiss error">×</button></div>}
       {loading && !snapshot ? <div className="schema-blank">Reading the live schema…</div> : !snapshot ? <div className="schema-blank">Schema unavailable.</div> : mode === "map" ? <SchemaMap snapshot={snapshot} /> : !table ? <div className="schema-blank">Choose a table to inspect.</div> : <TableRows table={table} fingerprint={snapshot.fingerprint} foreignKeys={snapshot.foreign_keys} />}
     </div>

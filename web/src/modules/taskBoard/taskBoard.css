@@ -82,3 +82,7 @@
 @media (prefers-reduced-motion: reduce) {
   .task-board-card { transition: none; }
 }
+
+.task-board-module { height: 100%; display: flex; flex-direction: column; }
+.task-board-columns { flex: 1; }
+.task-board-module > :not(.task-board-columns) { flex-shrink: 0; }

@@ -52,3 +52,11 @@ it("shows General as a project and explicitly identifies missing assignments", (
   rerender(<TaskProject task={{ ...task, brief_markdown: null }} />);
   expect(screen.getByLabelText("Project: No project")).toBeTruthy();
 });
+
+it("uses compact visual text while retaining the full accessible project name", () => {
+  render(<TaskProject task={{ ...task, brief_markdown: "Project: customer-support" }} />);
+  const badge = screen.getByLabelText("Project: Customer support");
+  expect(badge).toHaveTextContent("CUS");
+  expect(badge).toHaveAttribute("title", "Project: Customer support");
+  expect(badge).toHaveClass("project-colour");
+});

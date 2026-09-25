@@ -246,3 +246,25 @@ describe("minimal canonical UI", () => {
     expect(paths.some((path) => /\/api\/v2\/(tasks|sources|notes|themes|runs)/.test(path))).toBe(false);
   });
 });
+
+it("keeps project and text filters across list/board without duplicate headings or search", async () => {
+  const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+  const base = { object_id: "task-a", title: "Alpha task", description: "Example work", status: "todo", priority: "medium", revision: 1, owner_object_id: null, due_at: null, created_at: now, updated_at: now, brief_markdown: "Project: alpha", github_issue_url: null };
+  vi.mocked(fetch).mockImplementation((input, init) => String(input).includes("/api/v2/tasks?") ? envelope([base, { ...base, object_id: "task-b", title: "Beta task", brief_markdown: "Project: beta" }]) : defaultFetch(input, init));
+  window.history.replaceState({}, "", "/tasks");
+  render(<App />);
+  expect(await screen.findByText("Alpha task")).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", { name: "Filter task projects" }), { target: { value: "alpha" } });
+  expect(screen.queryByText("Beta task")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Board" }));
+  expect(new URLSearchParams(window.location.search).get("project")).toBe("alpha");
+  expect(await screen.findByText("Alpha task")).toBeVisible();
+  expect(screen.queryByText("Beta task")).toBeNull();
+  expect(screen.getAllByRole("textbox", { name: "Search task board" })).toHaveLength(1);
+  fireEvent.change(screen.getByRole("textbox", { name: "Search task board" }), { target: { value: "absent" } });
+  expect(screen.queryByText("Alpha task")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "List" }));
+  expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveValue("absent");
+  expect(screen.getByRole("combobox", { name: "Filter task projects" })).toHaveValue("alpha");
+});

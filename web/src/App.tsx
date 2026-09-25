@@ -1,5 +1,5 @@
 import { TaskRoutine } from "./TaskRoutine";
-import { taskProject, withTaskProject } from "./taskProject";
+import { projectPresentation, taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
 import type { ListSort } from "./api";
@@ -47,6 +47,7 @@ export default function App() {
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [showDone, setShowDone] = useState(false);
   const [sort, setSort] = useState<ListSort>("recent");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,11 +130,21 @@ export default function App() {
     setRefreshKey((value) => value + 1);
   };
 
-  const currentItems = itemsForSection(section, objects, tasks, sources, notes, themes, runs, query);
+  const selectedProject = new URLSearchParams(window.location.search).get("project") ?? "";
+  const projectChoices = [...new Set(tasks.map(task => taskProject(task.brief_markdown) ?? "_none"))].sort();
+  if (selectedProject && !projectChoices.includes(selectedProject)) projectChoices.push(selectedProject);
+  const filteredTasks = tasks.filter(task => !selectedProject || (taskProject(task.brief_markdown) ?? "_none") === selectedProject);
+  const currentItems = itemsForSection(section, objects, filteredTasks, sources, notes, themes, runs, query);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const activeModule = resolveActiveModule(section, window.location.search);
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
+  const collection = !selectedId && !connectionId && section !== "schema" && section !== "connections";
+  const filterProject = (value: string) => {
+    const params = new URLSearchParams(window.location.search);
+    if (value) params.set("project", value); else params.delete("project");
+    navigate(`${sectionPath(section)}${params.size ? `?${params}` : ""}`);
+  };
 
   return (
     <main className={collapsed ? "app nav-collapsed" : "app"}>
@@ -166,42 +177,41 @@ export default function App() {
       </aside>
 
       <section className="main-panel">
-        <header className="topbar">
+        <header className={`topbar${collection || (!connectionId && section === "connections") || section === "schema" ? " collection-toolbar" : ""}`}>
           <div className="page-path">
             <button className="path-root" onClick={() => navigate(sectionPath(section))}>{sectionLabel}</button>
             {(selectedId || connectionId) && <><span>›</span><strong>{connectionId ? `Connection ${shortId(connectionId)}` : section === "schema" ? selectedId : selectedItem ? itemTitle(selectedItem, objects) : shortId(selectedId ?? "")}</strong></>}
           </div>
+          {!collection && <div id="workspace-toolbar-slot" />}
+          {collection && <>
+            <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={section === "tasks" && activeModule?.id === "kanban" ? "Search task board" : `Search ${sectionLabel.toLowerCase()}`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search…" /></label>
+            {section === "tasks" && <label className="project-filter"><span className="sr-only">Filter task projects</span><select aria-label="Filter task projects" value={selectedProject} onChange={event => filterProject(event.target.value)}><option value="">All projects</option>{projectChoices.map(project => { const display = projectPresentation(project === "_none" ? null : project); return <option key={project} value={project}>{display.icon} {display.label}</option>; })}</select></label>}
+            {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={event => setSort(event.target.value as ListSort)}><option value="recent">Recent</option><option value="connections">Connected</option></select></label>}
+            <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
+            {section === "tasks" && activeModule?.id === "kanban" && <button className={`completed-toggle${showDone ? " active" : ""}`} aria-pressed={showDone} aria-label={showDone ? "Hide completed" : "Show completed"} title={showDone ? "Hide completed" : "Show completed"} onClick={() => setShowDone(!showDone)}>✓</button>}
+            <span className="collection-count" aria-label={`${currentItems.length} records`}>{currentItems.length}</span>
+          </>}
           <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={refreshState === "refreshing"} aria-label="Refresh current view">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 5.5A5.5 5.5 0 1 0 13 11"/><path d="M13.2 2.5v3.2H10"/></svg><span>{refreshState === "refreshing" ? "Refreshing…" : refreshState === "done" ? "Updated" : refreshState === "error" ? "Retry refresh" : "Refresh"}</span>
           </button>
+          {collection && createSections.has(section) && <button className="collection-new" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><span aria-hidden="true">＋</span> New</button>}
         </header>
         {error && <div className="error-banner">{error}<button onClick={() => setError(null)}>×</button></div>}
 
         <div className="workspace">
-          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} query={query} onQuery={setQuery} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
-            <header className="list-view-head">
-              <div className="title-with-action"><h1>{sectionLabel}</h1>{createSections.has(section) && <button className="add-icon" type="button" onClick={() => setCreateOpen(true)} aria-label={`New ${sectionSingular[section as keyof typeof sectionSingular]}`}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.25v9.5M3.25 8h9.5" /></svg></button>}</div>
-              <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
-            </header>
-            {(!activeModule || section === "sources") && <>
-            <div className="list-toolbar">
-              {section !== "tasks" && <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={`Search ${sectionLabel.toLowerCase()}`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${sectionLabel.toLowerCase()}`} /></label>}
-              {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={(event) => setSort(event.target.value as ListSort)}><option value="recent">Recently added</option><option value="connections">Most connected</option></select></label>}
-              <span>{currentItems.length} {currentItems.length === 1 ? "record" : "records"}</span>
-            </div>
-            </>}
-            {activeModule ? <ContextModuleView module={activeModule} context={{ tasks, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
+          {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+            {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
                   <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
-                  <span className="record-kind">{"actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
+                  <span className="record-kind">{section === "tasks" && "status" in item && !("actor_type" in item) ? <TaskProject task={item} /> : "actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
                   <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
                   <span className="record-main">
                     <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
                     <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <><TaskProject task={item} /><TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
+                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <>{section !== "tasks" && <TaskProject task={item} />}<TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
                   </span>
                   <DescriptionSnippet description={itemDescription(item, objects)} />
                   <time>{relative(item.created_at)}</time>
@@ -244,7 +254,10 @@ function sortWithGraphFallback<T extends Exclude<ListItem, Run>>(items: T[], gra
 
 function itemsForSection(section: Section, objects: SharedObject[], tasks: Task[], sources: Source[], notes: NoteSummary[], themes: Theme[], runs: Run[], query: string): ListItem[] {
   if (section === "schema" || section === "connections") return [];
-  if (section === "tasks") return tasks;
+  if (section === "tasks") {
+    const normalized = query.trim().toLocaleLowerCase();
+    return normalized ? tasks.filter(task => `${task.title} ${task.description} ${task.brief_markdown ?? ""}`.toLocaleLowerCase().includes(normalized)) : tasks;
+  }
   if (section === "sources") return sources;
   if (section === "notes") return notes;
   if (section === "themes") {
@@ -341,13 +354,8 @@ function NavButton({ active, compact, icon, label, onClick }: { active: boolean;
   return <button className={active ? "nav-button active" : "nav-button"} onClick={onClick} aria-label={label} aria-current={active ? "page" : undefined} title={compact ? label : undefined}><span aria-hidden="true">{icon}</span>{!compact && label}</button>;
 }
 
-function EvalsView({ runs, objects, visuals, query, onQuery, loading, onUpdated }: { runs: Run[]; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; query: string; onQuery: (value: string) => void; loading: boolean; onUpdated: (run: Run) => void }) {
+function EvalsView({ runs, objects, visuals, loading, onUpdated }: { runs: Run[]; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; loading: boolean; onUpdated: (run: Run) => void }) {
   return <section className="list-view evals-view" aria-label="evals records">
-    <header className="list-view-head"><div className="title-with-action"><h1>Evals</h1></div></header>
-    <div className="list-toolbar">
-      <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label="Search evals" value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search evals" /></label>
-      <span>{runs.length} {runs.length === 1 ? "run" : "runs"}</span>
-    </div>
     <div className="eval-table-wrap">
       <table className="eval-table" aria-label="Eval runs">
         <thead><tr><th>Golden</th><th>Run</th><th>Users</th><th>Actual result</th><th>Verdict</th><th>Annotation</th><th>Date</th></tr></thead>

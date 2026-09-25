@@ -12,3 +12,15 @@ export function withTaskProject(brief: string | null | undefined, project: strin
   const body = (brief ?? "").split(/\r?\n/).filter((line) => !/^Project:/i.test(line)).join("\n").replace(/^\n+/, "");
   return `Project: ${slug}\n\n${body}`;
 }
+
+
+/** Stable presentation for arbitrary deployment project slugs, not a catalog. */
+export function projectPresentation(project: string | null) {
+  const label = project ? project.charAt(0).toUpperCase() + project.slice(1).replaceAll("-", " ") : "No project";
+  let hash = 0;
+  for (const character of project ?? "") hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  const icons = ["◇", "◎", "▤", "✦", "⌘", "◈", "◉", "▧", "⌁", "△", "⊞", "⬡"];
+  const commonIcons: Record<string, string> = { general: "◇", research: "⌕", networking: "⌁", build: "⚒", dev: "⌘", work: "▣", finance: "$", health: "+", family: "⌂" };
+  return { label, short: project ? project.slice(0, 3).toUpperCase() : "—",
+    icon: project ? commonIcons[project] ?? icons[hash % icons.length] : "?", hue: hash % 360 };
+}
