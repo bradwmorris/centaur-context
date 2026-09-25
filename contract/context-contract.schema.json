@@ -63,7 +63,7 @@
     "rules": {
       "type": "object",
       "properties": {
-        "standalone_note_intents": {"type": "array", "items": {"type": "string", "enum": ["insight", "question"]}}
+        "standalone_note_intents": {"type": "array", "items": {"type": "string", "enum": ["idea", "fact", "insight", "question"]}}
       },
       "additionalProperties": {"type": "boolean"}
     }

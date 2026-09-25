@@ -167,7 +167,7 @@ async fn captures_replays_curates_and_supplies_canonical_write_provenance() {
         .0,
         StatusCode::CONFLICT
     );
-    let apply = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Release rationale","description":"The owner chose Friday for the documentation release.","fields":{"intent":"insight","content":"A deliberately requested note."}}]});
+    let apply = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Release rationale","description":"The owner chose Friday for the documentation release.","fields":{"intent":"idea","content":"A deliberately requested note."}}]});
     let (status, result) = response(
         app.clone(),
         request(

@@ -394,7 +394,7 @@ async fn cancellation_requires_owner_proof_and_permanently_fences_execution_iden
         let counts_before: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM objects),(SELECT count(*) FROM runs),(SELECT count(*) FROM object_events),(SELECT count(*) FROM context_apply_requests)").fetch_one(&pool).await.unwrap();
         let retry_uuid = Uuid::new_v4();
         let apply = json!({"contract_version":"1.1.0","idempotency_key":format!("fresh-fenced-retry-{retry_uuid}"),"operations":[
-            {"operation":"create_object","local_ref":"retry_note","kind":"note","title":format!("Synthetic forbidden retry {retry_uuid}"),"description":"Synthetic regression fixture that must never be created from a fenced execution.","fields":{"content":"Original retry text must not be saved.","content_format":"plain_text","intent":"insight"}},
+            {"operation":"create_object","local_ref":"retry_note","kind":"note","title":format!("Synthetic forbidden retry {retry_uuid}"),"description":"Synthetic regression fixture that must never be created from a fenced execution.","fields":{"content":"Original retry text must not be saved.","content_format":"plain_text","intent":"idea"}},
             {"operation":"create_connection","source":{"local_ref":"retry_note"},"kind":"related_to","target":{"object_id":retained},"description":"Synthetic connected note used to exercise otherwise valid ordinary apply."}
         ]});
         let response = ordinary

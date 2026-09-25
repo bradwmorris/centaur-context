@@ -218,7 +218,7 @@ export interface Note {
   description: string;
   content: string;
   content_format: "plain_text" | "markdown";
-  intent: "excerpt" | "insight" | "question" | null;
+  intent: "idea" | "excerpt" | "fact" | "insight" | "question" | null;
   source_artifact_id: string | null;
   source_locator: Record<string, unknown> | null;
   lifecycle: "active" | "archived";
@@ -237,7 +237,7 @@ export interface NoteSummary {
   lifecycle: "active" | "archived";
   revision: number;
   content_format: "plain_text" | "markdown";
-  intent: "excerpt" | "insight" | "question" | null;
+  intent: "idea" | "excerpt" | "fact" | "insight" | "question" | null;
   excerpt: string;
   created_at: string;
   updated_at: string;

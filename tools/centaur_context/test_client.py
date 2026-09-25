@@ -56,6 +56,18 @@ def response(data):
     return httpx.Response(200, json={"data": data})
 
 
+def test_note_and_object_reads_can_target_bound_context_listener():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return response({"id": "selected-note"})
+    scoped = client(handler)
+    scoped.read_object("selected-note", thread_key="workflow:synthetic", base_url="http://context.test")
+    scoped.read_note("selected-note", thread_key="workflow:synthetic", base_url="http://context.test")
+    assert [request.url.path for request in seen] == ["/api/v2/objects/selected-note", "/api/v2/notes/selected-note"]
+    assert all(request.headers["x-centaur-thread-key"] == "workflow:synthetic" for request in seen)
+
+
 def privileged_client(handler):
     return CentaurContextClient(
         base_url="http://context.test",
@@ -241,7 +253,7 @@ def test_specialized_writes_keep_distinct_credentials_and_v2_routes():
         title="Research note",
         description="A source-grounded note created through the narrow write listener.",
         content="Evidence",
-        intent="insight",
+        intent="idea",
         originating_chat_object_id="chat-1",
         derived_from_source_object_ids=["source-1"],
         idempotency_key="note-1",
@@ -369,7 +381,7 @@ def test_create_note_accepts_documented_provenance_on_first_request():
         title="Recursive self-improvement",
         description="A source-grounded note.",
         content="Evidence",
-        intent="insight",
+        intent="idea",
         provenance={"source_type": "slack", "source_ref": "1700000000.000001"},
         derived_from_source_object_ids=["source-1"],
         idempotency_key="1700000000.000001",
@@ -380,7 +392,7 @@ def test_create_note_accepts_documented_provenance_on_first_request():
     assert len(requests) == 1
     payload = json.loads(requests[0].content)
     assert payload["originating_chat_object_id"] is None
-    assert payload["intent"] == "insight"
+    assert payload["intent"] == "idea"
     assert payload["derived_from_note_object_ids"] == []
     assert requests[0].headers["x-centaur-thread-key"] == "workflow:run-3:research-capture"
 
@@ -415,7 +427,7 @@ def test_append_artifact_uses_the_scoped_writer_and_preserves_content():
 
 
 def test_create_note_rejects_unknown_intent_before_request():
-    with pytest.raises(ValueError, match="intent must be excerpt, insight, or question"):
+    with pytest.raises(ValueError, match="intent must be idea, excerpt, or fact"):
         privileged_client(lambda _: response({})).create_note(
             title="Ambiguous note",
             description="A note whose intent is not part of the contract.",
@@ -451,7 +463,7 @@ def test_create_note_rejects_undocumented_passage_provenance_before_request():
             title="Recursive self-improvement",
             description="A source-grounded note.",
             content="Evidence",
-            intent="insight",
+            intent="idea",
             provenance={"passage_start": 1, "passage_end": 2},
             idempotency_key="note-invalid-provenance",
         )
@@ -464,7 +476,7 @@ def test_create_note_rejects_undocumented_passage_provenance_before_request():
             title="Research note",
             description="A source-grounded note created through a narrow listener.",
             content="Evidence",
-            intent="insight",
+            intent="idea",
             idempotency_key="note-1",
         ),
         lambda value: value.create_task(

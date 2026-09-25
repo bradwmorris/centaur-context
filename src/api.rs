@@ -1493,7 +1493,13 @@ async fn note_page(state: &AppState, query: NoteListQuery) -> Result<Value, ApiE
             query: optional_text(query.q, "q", 1000)?,
             intent: query
                 .intent
-                .map(|value| allowed(value, "intent", &["excerpt", "insight", "question"]))
+                .map(|value| {
+                    allowed(
+                        value,
+                        "intent",
+                        &["idea", "excerpt", "fact", "insight", "question"],
+                    )
+                })
                 .transpose()?,
             cursor: query.cursor,
             limit: limit + 1,
@@ -1660,7 +1666,7 @@ async fn create_note(
             provenance: provenance(input.provenance)?,
             content: required_text(input.content, "content", 100_000)?,
             content_format: allowed(input.content_format, "content_format", NOTE_CONTENT_FORMATS)?,
-            intent: allowed(input.intent, "intent", &["excerpt", "insight", "question"])?,
+            intent: allowed(input.intent, "intent", &["idea", "excerpt", "fact"])?,
             source_artifact_id: input.source_artifact_id,
             source_locator: validated_source_locator(input.source_locator)?,
             originating_chat_object_id: input.originating_chat_object_id,

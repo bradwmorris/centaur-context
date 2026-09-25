@@ -509,9 +509,11 @@ class CentaurContextClient:
             thread_key=thread_key,
         )
 
-    def read_object(self, id: str) -> dict[str, Any]:
+    def read_object(
+        self, id: str, *, thread_key: str | None = None, base_url: str | None = None,
+    ) -> dict[str, Any]:
         """Read one shared record by ID."""
-        return self._request("GET", f"/api/v2/objects/{quote(id, safe='')}")
+        return self._request("GET", f"/api/v2/objects/{quote(id, safe='')}", thread_key=thread_key, base_url=_clean(base_url).rstrip("/") or None)
 
     def list_themes(self, slug: str | None = None) -> list[dict[str, Any]]:
         """List approved Themes, optionally selecting one exact slug."""
@@ -704,20 +706,22 @@ class CentaurContextClient:
             raise ValueError("query must be at most 1000 characters")
         params: dict[str, Any] = {"q": query, "limit": _bounded_limit(limit)}
         intent = _clean(intent).lower()
-        if intent and intent not in {"excerpt", "insight", "question"}:
-            raise ValueError("intent must be excerpt, insight, or question")
+        if intent and intent not in {"idea", "excerpt", "fact", "insight", "question"}:
+            raise ValueError("intent must be idea, excerpt, fact, insight, or question")
         if intent:
             params["intent"] = intent
         if _clean(cursor):
             params["cursor"] = _clean(cursor)
         return self._request("GET", "/api/v2/search/notes", params=params)
 
-    def read_note(self, note_id: str) -> dict[str, Any]:
+    def read_note(
+        self, note_id: str, *, thread_key: str | None = None, base_url: str | None = None,
+    ) -> dict[str, Any]:
         """Read one canonical Note and its content."""
         note_id = _clean(note_id)
         if not note_id:
             raise ValueError("note_id is required")
-        return self._request("GET", f"/api/v2/notes/{quote(note_id, safe='')}")
+        return self._request("GET", f"/api/v2/notes/{quote(note_id, safe='')}", thread_key=thread_key, base_url=_clean(base_url).rstrip("/") or None)
 
     def append_artifact(
         self,
@@ -809,8 +813,8 @@ class CentaurContextClient:
             raise ValueError("content must be at most 100000 characters")
         if content_format not in {"markdown", "plain_text"}:
             raise ValueError("content_format must be markdown or plain_text")
-        if intent not in {"excerpt", "insight", "question"}:
-            raise ValueError("intent must be excerpt, insight, or question")
+        if intent not in {"idea", "excerpt", "fact"}:
+            raise ValueError("intent must be idea, excerpt, or fact")
         if source_locator is not None and not isinstance(source_locator, dict):
             raise ValueError("source_locator must be a JSON object")
         provenance = _validated_provenance(provenance)
