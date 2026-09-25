@@ -98,6 +98,7 @@ pub enum ApplyOperation {
         capture_reason: Option<String>,
         #[serde(default = "empty_object")]
         metadata: Value,
+        supersedes_artifact_id: Option<Uuid>,
     },
 }
 
@@ -449,7 +450,7 @@ fn validate_new_object_connections(request: &ApplyRequest) -> Result<(), DbError
             continue;
         };
         let standalone_note = kind == "note"
-            && contract::standalone_note_intent(&string_or(fields, "intent", "insight")?);
+            && contract::standalone_note_intent(&string_or(fields, "intent", "idea")?);
         if !standalone_note && !connected.contains(local_ref.as_str()) {
             return Err(DbError::Invalid(format!(
                 "new Object {local_ref} requires a Connection"
@@ -722,6 +723,7 @@ async fn execute_operation(
             capture_outcome,
             capture_reason,
             metadata,
+            supersedes_artifact_id,
         } => {
             let object_id = resolve_reference(object, local_ids)?;
             let value = append_artifact(
@@ -738,6 +740,7 @@ async fn execute_operation(
                 capture_outcome,
                 capture_reason.as_deref(),
                 metadata,
+                *supersedes_artifact_id,
                 authority,
             )
             .await?;
@@ -985,12 +988,8 @@ async fn insert_subtype(
                 "content_format",
                 NOTE_CONTENT_FORMATS,
             )?;
-            let intent = string_or(fields, "intent", "insight")?;
-            allowed(
-                intent.clone(),
-                "intent",
-                &["excerpt", "insight", "question"],
-            )?;
+            let intent = string_or(fields, "intent", "idea")?;
+            allowed(intent.clone(), "intent", &["idea", "excerpt", "fact"])?;
             validate_note_evidence(tx, &content, &intent, fields).await?;
             sqlx::query(
                 r#"INSERT INTO notes
@@ -1394,18 +1393,28 @@ async fn update_subtype(
         "note" => {
             let content = required_field_string(&fields, "content")?;
             let content_format = required_field_string(&fields, "content_format")?;
-            let intent = required_field_string(&fields, "intent")?;
+            let intent = optional_string(&fields, "intent")?;
             allowed(
                 content_format.clone(),
                 "content_format",
                 NOTE_CONTENT_FORMATS,
             )?;
-            allowed(
-                intent.clone(),
-                "intent",
-                &["excerpt", "insight", "question"],
-            )?;
-            validate_note_evidence(tx, &content, &intent, &fields).await?;
+            if let Some(value) = intent.as_deref() {
+                allowed(
+                    value.to_owned(),
+                    "intent",
+                    &["idea", "excerpt", "fact", "insight", "question"],
+                )?;
+                validate_note_evidence(tx, &content, value, &fields).await?;
+            } else if optional_uuid(&fields, "source_artifact_id")?.is_some()
+                || fields
+                    .get("source_locator")
+                    .is_some_and(|value| !value.is_null())
+            {
+                return Err(DbError::Invalid(
+                    "unclassified Notes cannot carry excerpt evidence".into(),
+                ));
+            }
             sqlx::query(
                 "UPDATE notes SET content=$2,content_format=$3,intent=$4,source_artifact_id=$5,source_locator=$6 WHERE object_id=$1",
             )
@@ -1506,7 +1515,7 @@ async fn validate_endpoints(
                 || (kind == "derived_from"
                     && source.is_some_and(|row| row.1 == "note")
                     && sqlx::query_scalar::<_, bool>(
-                        "SELECT EXISTS (SELECT 1 FROM notes n LEFT JOIN artifacts a ON a.id=n.source_artifact_id WHERE n.object_id=$1 AND (n.intent IN ('insight','question') OR (n.intent='excerpt' AND a.object_id=$2)))",
+                        "SELECT EXISTS (SELECT 1 FROM notes n LEFT JOIN artifacts a ON a.id=n.source_artifact_id WHERE n.object_id=$1 AND (n.intent IN ('idea','fact','insight','question') OR (n.intent='excerpt' AND a.object_id=$2)))",
                     )
                     .bind(source_id)
                     .bind(target_id)
@@ -1756,6 +1765,7 @@ async fn append_artifact(
     capture_outcome: &str,
     capture_reason: Option<&str>,
     metadata: &Value,
+    supersedes_artifact_id: Option<Uuid>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
     let object = lock_writable_object(tx, object_id, authority).await?;
@@ -1771,6 +1781,20 @@ async fn append_artifact(
         return Err(DbError::Invalid(
             "Artifact metadata must be an object".into(),
         ));
+    }
+    if let Some(predecessor) = supersedes_artifact_id {
+        let same_object: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=$1 AND object_id=$2)",
+        )
+        .bind(predecessor)
+        .bind(object_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !same_object {
+            return Err(DbError::Invalid(
+                "superseded Artifact belongs to another Object".into(),
+            ));
+        }
     }
     allowed(
         capture_outcome.to_owned(),
@@ -1803,8 +1827,8 @@ async fn append_artifact(
     let artifact: Value = sqlx::query_scalar(
         r#"INSERT INTO artifacts
            (id,object_id,kind,title,content,uri,media_type,language,sha256,size_bytes,
-            capture_outcome,capture_reason,metadata)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+            capture_outcome,capture_reason,metadata,supersedes_artifact_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
            RETURNING to_jsonb(artifacts)-'content'"#,
     )
     .bind(artifact_id)
@@ -1820,6 +1844,7 @@ async fn append_artifact(
     .bind(capture_outcome)
     .bind(capture_reason)
     .bind(metadata)
+    .bind(supersedes_artifact_id)
     .fetch_one(&mut **tx)
     .await?;
     sqlx::query(

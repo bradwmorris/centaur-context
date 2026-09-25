@@ -579,7 +579,7 @@ async fn typed_research_notes_preserve_canonical_source_content_and_note_derivat
             capture_outcome: "complete".into(),
             capture_reason: None,
             expected_size_bytes: None,
-            metadata: json!({"source_type":"synthetic_test"}),
+            metadata: json!({"source_type":"synthetic_test","document_key":"interview-working"}),
             supersedes_artifact_id: None,
         },
         "typed-note-supporting-artifact",
@@ -587,6 +587,33 @@ async fn typed_research_notes_preserve_canonical_source_content_and_note_derivat
     .await
     .unwrap();
     assert_eq!(working_notes.kind, "research_notes");
+    let revised_notes = db::append_artifact(
+        &pool,
+        &actor,
+        source_id,
+        db::NewArtifact {
+            expected_revision: Some(2),
+            kind: "research_notes".into(),
+            title: Some("Working notes revision".into()),
+            content: Some("A clearer connection with an unresolved question.".into()),
+            uri: None,
+            media_type: Some("text/plain".into()),
+            language: Some("en".into()),
+            captured_at: None,
+            capture_outcome: "complete".into(),
+            capture_reason: None,
+            expected_size_bytes: None,
+            metadata: json!({"document_key":"interview-working","predecessor_artifact_id":working_notes.id}),
+            supersedes_artifact_id: Some(working_notes.id),
+        },
+        &format!("typed-note-working-revision-{source_id}"),
+    )
+    .await
+    .unwrap();
+    let versions = db::list_artifacts(&pool, source_id).await.unwrap();
+    assert_eq!(versions[0].id, revised_notes.id);
+    assert!(versions.iter().any(|item| item.id == working_notes.id));
+    assert_eq!(revised_notes.supersedes_artifact_id, Some(working_notes.id));
     let current: Option<Uuid> =
         sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
             .bind(source_id)
@@ -651,7 +678,7 @@ async fn typed_research_notes_preserve_canonical_source_content_and_note_derivat
             provenance: json!({"source_type":"test"}),
             content: "This is the researcher's interpretation.".into(),
             content_format: "plain_text".into(),
-            intent: "insight".into(),
+            intent: "idea".into(),
             source_artifact_id: None,
             source_locator: None,
             originating_chat_object_id: None,
@@ -662,7 +689,7 @@ async fn typed_research_notes_preserve_canonical_source_content_and_note_derivat
     )
     .await
     .unwrap();
-    assert_eq!(insight.intent.as_deref(), Some("insight"));
+    assert_eq!(insight.intent.as_deref(), Some("idea"));
     let targets: Vec<Uuid> = sqlx::query_scalar(
         "SELECT target_object_id FROM connections WHERE source_object_id=$1 AND kind='derived_from' ORDER BY target_object_id",
     )
@@ -984,7 +1011,7 @@ async fn dedicated_note_capture_accepts_non_chat_research_threads() {
         centaur_execution_id: None,
         is_agent: true,
     };
-    for intent in ["insight", "question"] {
+    for intent in ["idea", "fact"] {
         let note = db::create_note(
             &pool,
             &actor,
@@ -1015,4 +1042,103 @@ async fn dedicated_note_capture_accepts_non_chat_research_threads() {
         .unwrap();
         assert_eq!(links, 0);
     }
+}
+
+#[tokio::test]
+async fn publication_receipts_preserve_note_copy_and_distinct_shares() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let actor = centaur_context::domain::ActorContext::system("receipt-test");
+    let note = db::create_note(
+        &pool,
+        &actor,
+        db::NewNote {
+            title: "Synthetic idea".into(),
+            description: "An original idea whose publication history is tested.".into(),
+            provenance: json!({"source_type":"test"}),
+            content: "The original thought stays here.".into(),
+            content_format: "plain_text".into(),
+            intent: "idea".into(),
+            source_artifact_id: None,
+            source_locator: None,
+            originating_chat_object_id: None,
+            derived_from_source_object_ids: vec![],
+            derived_from_note_object_ids: vec![],
+        },
+        &format!("receipt-note-{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    let mut previous = None;
+    let mut ids = Vec::new();
+    for (index, (status, identity, copy)) in [
+        ("draft", "draft-1", "Draft words"),
+        ("published", "post-1", "Published words"),
+        ("published", "post-1", "Edited words"),
+        ("published", "post-2", "Shared again"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let content = json!({"destination":"x","status":status,"copy":copy,"provider_identity":identity,"note_revision":note.revision,"related_note_ids":[]}).to_string();
+        let key = format!("receipt-{index}-{}", note.object_id);
+        let receipt = db::append_artifact(
+            &pool,
+            &actor,
+            note.object_id,
+            db::NewArtifact {
+                expected_revision: Some(note.revision + index as i64),
+                kind: "publication_receipt".into(),
+                title: Some(format!("{status} {identity}")),
+                content: Some(content.clone()),
+                uri: None,
+                media_type: Some("application/json".into()),
+                language: None,
+                captured_at: None,
+                capture_outcome: "complete".into(),
+                capture_reason: None,
+                expected_size_bytes: None,
+                metadata: json!({"destination":"x","status":status,"provider_identity":identity}),
+                supersedes_artifact_id: if index == 2 { previous } else { None },
+            },
+            &key,
+        )
+        .await
+        .unwrap();
+        let replay = db::append_artifact(
+            &pool,
+            &actor,
+            note.object_id,
+            db::NewArtifact {
+                expected_revision: None,
+                kind: "publication_receipt".into(),
+                title: None,
+                content: Some(content),
+                uri: None,
+                media_type: Some("application/json".into()),
+                language: None,
+                captured_at: None,
+                capture_outcome: "complete".into(),
+                capture_reason: None,
+                expected_size_bytes: None,
+                metadata: json!({}),
+                supersedes_artifact_id: None,
+            },
+            &key,
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.id, receipt.id);
+        previous = Some(receipt.id);
+        ids.push(receipt.id);
+    }
+    let all = db::list_artifacts(&pool, note.object_id).await.unwrap();
+    assert_eq!(all.len(), 4);
+    assert_eq!(all[0].id, ids[3]);
+    assert_eq!(all[1].supersedes_artifact_id, Some(ids[1]));
+    assert_eq!(
+        db::get_note(&pool, note.object_id).await.unwrap().content,
+        note.content
+    );
 }

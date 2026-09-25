@@ -431,7 +431,7 @@ async fn human_api_declares_v2_and_unknown_versions_fail_closed() {
     assert_eq!(metadata["product_version"], "0.3.0");
     assert_eq!(metadata["api_version"], "v2");
     assert_eq!(metadata["ontology_version"], "v3");
-    assert_eq!(metadata["database_schema_version"], 32);
+    assert_eq!(metadata["database_schema_version"], 33);
     assert_eq!(metadata["tool_version"], "1.1.0");
     assert_eq!(metadata["compatibility_policy"], "fail_closed");
     let unsupported = router
@@ -631,7 +631,7 @@ async fn agent_source_routes_are_read_only_and_validate_content_bounds() {
 #[tokio::test]
 async fn note_and_task_write_listener_is_a_separate_attributed_idempotent_grant() {
     let write_token = "w".repeat(32);
-    let body = r##"{"title":"Research note","description":"A bounded note created by an authorized research agent.","content":"# Evidence\nSynthetic evidence only.","intent":"insight","content_format":"markdown","provenance":{"source_type":"human"}}"##;
+    let body = r##"{"title":"Research note","description":"A bounded note created by an authorized research agent.","content":"# Evidence\nSynthetic evidence only.","intent":"idea","content_format":"markdown","provenance":{"source_type":"human"}}"##;
     let wrong = note_write_router(state(), write_token.clone())
         .oneshot(
             Request::builder()

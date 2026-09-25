@@ -94,7 +94,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
             {"operation":"create_object","local_ref":"task","kind":"task","title":"Universal task","description":"A disposable Task created by the universal contract test.","fields":{"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Review this task and record verification evidence."}},
             {"operation":"create_object","local_ref":"entity","kind":"entity","title":"Universal entity","description":"A disposable Entity created by the universal contract test.","fields":{"entity_kind":"concept"}},
             {"operation":"create_object","local_ref":"source","kind":"source","title":"Universal source","description":"A disposable Source metadata record without canonical captured content.","fields":{"source_kind":"article","canonical_uri":"https://example.invalid/universal"}},
-            {"operation":"create_object","local_ref":"note","kind":"note","title":"Universal note","description":"A disposable Note created by the universal contract test.","fields":{"content":"Test evidence.","content_format":"markdown","intent":"insight"}},
+            {"operation":"create_object","local_ref":"note","kind":"note","title":"Universal note","description":"A disposable Note created by the universal contract test.","fields":{"content":"Test evidence.","content_format":"markdown","intent":"idea"}},
             {"operation":"create_object","local_ref":"theme","kind":"theme","title":"Universal theme","description":"A disposable Theme created by the universal contract test.","fields":{"slug":format!("universal-{}", Uuid::new_v4())}},
             {"operation":"create_connection","source":{"local_ref":"task"},"kind":"related_to","target":{"object_id":anchor},"description":"The test Task relates to the disposable test anchor."},
             {"operation":"create_connection","source":{"local_ref":"entity"},"kind":"related_to","target":{"object_id":anchor},"description":"The test Entity relates to the disposable test anchor."},
@@ -539,7 +539,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         token.clone(),
     );
     let mut ids = Vec::new();
-    for intent in ["insight", "question"] {
+    for intent in ["idea", "fact"] {
         let body = json!({"contract_version":"1.1.0","idempotency_key":format!("standalone-{intent}-{}",Uuid::new_v4()),"operations":[{
             "operation":"create_object","local_ref":"note","kind":"note","title":format!("Standalone {intent}"),
             "description":"An independently captured research thought awaiting further evidence.","fields":{"intent":intent,"content":"What makes research context useful?"}
@@ -590,7 +590,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         ids.push(id);
     }
     let connect = json!({"contract_version":"1.1.0","idempotency_key":format!("later-link-{}",Uuid::new_v4()),"operations":[{
-        "operation":"create_connection","source":{"object_id":ids[1]},"target":{"object_id":ids[0]},"kind":"derived_from","description":"This question develops the earlier research thought."
+        "operation":"create_connection","source":{"object_id":ids[1]},"target":{"object_id":ids[0]},"kind":"derived_from","description":"This fact develops the earlier research thought."
     }]});
     let response = app
         .clone()
@@ -600,6 +600,10 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
     assert_eq!(response.status(), StatusCode::OK);
     for (kind, fields) in [
         ("source", json!({"source_kind":"article"})),
+        (
+            "note",
+            json!({"intent":"question","content":"An unresolved question belongs in working notes."}),
+        ),
         (
             "note",
             json!({"intent":"excerpt","content":"Unverified quotation."}),
@@ -625,6 +629,112 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn legacy_note_intents_survive_unrelated_universal_edits() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let token = "l".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    for legacy in [Some("insight"), Some("question"), None] {
+        let id = Uuid::new_v4();
+        let mut seed = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'note','Legacy thought','A historical research Note.','system','test','system','test')")
+            .bind(id).execute(&mut *seed).await.unwrap();
+        sqlx::query("INSERT INTO notes(object_id,content,content_format,intent) VALUES($1,'Original words','plain_text',$2)")
+            .bind(id).bind(legacy).execute(&mut *seed).await.unwrap();
+        seed.commit().await.unwrap();
+        let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+            {"operation":"update_object","object_id":id,"expected_revision":1,"changes":{"title":"Legacy thought retitled"}}
+        ]});
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, body))
+            .await
+            .unwrap();
+        let status = response.status();
+        let payload = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{payload}");
+        let actual: (String, Option<String>) =
+            sqlx::query_as("SELECT content,intent FROM notes WHERE object_id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            actual,
+            ("Original words".to_owned(), legacy.map(str::to_owned))
+        );
+    }
+}
+
+#[tokio::test]
+async fn universal_artifact_revision_keeps_predecessor_and_note_content() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let token = "a".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let create = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+        {"operation":"create_object","local_ref":"idea","kind":"note","title":"Synthetic idea","description":"A source-free synthetic Idea.","fields":{"intent":"idea","content":"Original idea wording."}}
+    ]});
+    let created = json_body(
+        app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, create))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let note: Uuid = created["data"]["results"][0]["data"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut predecessor = None;
+    for (revision, copy) in [(1, "Draft copy"), (2, "Edited draft copy")] {
+        let apply = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+            {"operation":"append_artifact","object":{"object_id":note},"expected_revision":revision,"kind":"publication_receipt","content":json!({"status":"draft","copy":copy}).to_string(),"media_type":"application/json","metadata":{"status":"draft"},"supersedes_artifact_id":predecessor}
+        ]});
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, apply))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"]["results"][0]["data"]["supersedes_artifact_id"],
+            json!(predecessor)
+        );
+        predecessor = Some(
+            body["data"]["results"][0]["data"]["id"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap(),
+        );
+    }
+    assert_eq!(
+        db::get_note(&pool, note).await.unwrap().content,
+        "Original idea wording."
+    );
 }
 
 #[tokio::test]
@@ -770,12 +880,12 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
     for (kind, fields, relation) in [
         (
             "note",
-            json!({"intent":"insight","content":"My own interpretation."}),
+            json!({"intent":"idea","content":"My own interpretation."}),
             "derived_from",
         ),
         (
             "note",
-            json!({"intent":"question","content":"How does this generalize?"}),
+            json!({"intent":"fact","content":"A practical fact from the selected Source."}),
             "derived_from",
         ),
         (

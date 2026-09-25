@@ -73,7 +73,20 @@ pub async fn append_artifact(
     input: NewArtifact,
     idempotency_key: &str,
 ) -> Result<Artifact, DbError> {
-    if let Some(id) = idempotent_entity(pool, actor, idempotency_key).await? {
+    if idempotent_entity(pool, actor, idempotency_key)
+        .await?
+        .is_some()
+    {
+        let id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT (r.result->'summary'->>'artifact_id')::uuid FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.actor_type=$1 AND e.actor_id=$2 AND e.idempotency_key=$3 AND e.action='artifact_attached' AND e.target_id=$4",
+        )
+        .bind(actor.actor_type)
+        .bind(&actor.actor_id)
+        .bind(idempotency_key)
+        .bind(object_id)
+        .fetch_optional(pool)
+        .await?;
+        let id = id.ok_or(DbError::Conflict)?;
         return sqlx::query_as("SELECT * FROM artifacts WHERE id=$1")
             .bind(id)
             .fetch_optional(pool)
