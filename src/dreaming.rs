@@ -569,7 +569,7 @@ async fn apply_plan_mode(
             } => {
                 validate_reason(reason)?;
                 let before = lock_connection(&mut tx, batch, *connection_id).await?;
-                if before["kind"] == "derived_from" {
+                if provenance_edge(batch, &before) {
                     return Err(invalid("cannot remove evidence derivation"));
                 }
                 archive_edge(&mut tx, *connection_id).await?;
@@ -685,6 +685,27 @@ async fn apply_plan_mode(
         tx.commit().await?;
     }
     Ok(())
+}
+
+fn provenance_edge(batch: &Batch, connection: &Value) -> bool {
+    if connection["kind"] == "derived_from" {
+        return true;
+    }
+    batch.memories.iter().any(|memory| {
+        let other = if connection["source_object_id"] == memory["id"] {
+            &connection["target_object_id"]
+        } else if connection["target_object_id"] == memory["id"] {
+            &connection["source_object_id"]
+        } else {
+            return false;
+        };
+        memory["provenance"]["chat_object_id"] == *other
+            || batch.evidence.iter().any(|event| {
+                event["type"] == "committed_event"
+                    && event["id"] == memory["provenance"]["source_event_id"]
+                    && event["object"]["id"] == *other
+            })
+    })
 }
 
 fn validate_reason(reason: &str) -> Result<(), db::DbError> {
@@ -1132,6 +1153,24 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
 #[cfg(test)]
 mod input_tests {
     use super::*;
+
+    #[test]
+    fn source_event_links_remain_provenance_even_when_not_named_derived_from() {
+        let batch = Batch {
+            memories: vec![json!({"id":"memory","provenance":{"source_event_id":"event"}})],
+            connections: vec![],
+            targets: vec![],
+            evidence: vec![json!({"id":"event","type":"committed_event","object":{"id":"source"}})],
+        };
+        assert!(provenance_edge(
+            &batch,
+            &json!({"source_object_id":"memory","target_object_id":"source","kind":"about"})
+        ));
+        assert!(!provenance_edge(
+            &batch,
+            &json!({"source_object_id":"memory","target_object_id":"optional","kind":"about"})
+        ));
+    }
 
     #[test]
     fn model_input_preserves_grounding_without_database_or_note_payloads() {
