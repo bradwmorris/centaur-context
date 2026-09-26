@@ -48,7 +48,7 @@ export function parseRoute(pathname: string): AppRoute {
   }
   const section = sections[parts[0] ?? ""];
   if (!section) return { section: "objects", selectedId: null, connectionId: null, artifact: null };
-  const artifact = (section === "sources" || section === "notes") && parts[1] && parts[3]
+  const artifact = (section === "objects" || section === "sources" || section === "notes") && parts[1] && parts[3]
     ? parts[2] === "working" ? { kind: "latest" as const, id: parts[3] }
       : parts[2] === "artifacts" ? { kind: "exact" as const, id: parts[3] } : null
     : null;
@@ -68,11 +68,11 @@ export function detailPath(section: Section, id: string): string {
   return `${sectionPath(section)}/${encodeURIComponent(id)}`;
 }
 
-export function artifactPath(section: "sources" | "notes", objectId: string, artifactId: string): string {
+export function artifactPath(section: "objects" | "sources" | "notes", objectId: string, artifactId: string): string {
   return `${detailPath(section, objectId)}/artifacts/${encodeURIComponent(artifactId)}`;
 }
 
-export function workingDocumentPath(section: "sources" | "notes", objectId: string, key: string): string {
+export function workingDocumentPath(section: "objects" | "sources" | "notes", objectId: string, key: string): string {
   return `${detailPath(section, objectId)}/working/${encodeURIComponent(key)}`;
 }
 

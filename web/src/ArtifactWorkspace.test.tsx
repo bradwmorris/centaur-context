@@ -95,6 +95,19 @@ describe("artifact reader", () => {
     expect(screen.getByRole("link", { name: /Lab notes.*2 versions/ })).toHaveAttribute("href", `/sources/${objectId}/working/a`);
   });
 
+  it("keeps canonical Object working and history routes on the same Object", async () => {
+    const first = fixture("first", "research_notes", "First version", "doc");
+    const latest = fixture("latest", "research_notes", "Current version", "doc", "first");
+    server([latest, first]);
+    window.history.replaceState({}, "", `/objects/${objectId}/working/doc`);
+    render(<ArtifactReader section="objects" objectId={objectId} target={{ kind: "latest", id: "doc" }} refreshKey={0} />);
+    expect(await screen.findByText("Current version")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← Back to Object" })).toHaveAttribute("href", `/objects/${objectId}`);
+    fireEvent.click(screen.getByLabelText("Artifact options"));
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    expect(screen.getByRole("link", { name: /Previous version/ })).toHaveAttribute("href", `/objects/${objectId}/artifacts/first`);
+  });
+
   it("reconciles an uncertain working-notes creation without a duplicate", async () => {
     const { posts } = server([], 4, false, true);
     render(<Artifacts section="sources" objectId={objectId} artifacts={[]} onCreated={async () => {}} />);

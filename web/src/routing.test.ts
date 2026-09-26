@@ -36,8 +36,12 @@ describe("durable application routes", () => {
     expect(detailPath("notes", "note-id")).toBe("/notes/note-id");
     expect(workingDocumentPath("sources", "source-id", "research notes")).toBe("/sources/source-id/working/research%20notes");
     expect(artifactPath("notes", "note-id", "artifact-id")).toBe("/notes/note-id/artifacts/artifact-id");
+    expect(artifactPath("objects", "source-id", "artifact-id")).toBe("/objects/source-id/artifacts/artifact-id");
+    expect(workingDocumentPath("objects", "note-id", "research notes")).toBe("/objects/note-id/working/research%20notes");
     expect(parseRoute("/sources/source-id/working/research%20notes").artifact).toEqual({ kind: "latest", id: "research notes" });
     expect(parseRoute("/notes/note-id/artifacts/artifact-id").artifact).toEqual({ kind: "exact", id: "artifact-id" });
+    expect(parseRoute("/objects/source-id/working/research%20notes").artifact).toEqual({ kind: "latest", id: "research notes" });
+    expect(parseRoute("/objects/note-id/artifacts/artifact-id").artifact).toEqual({ kind: "exact", id: "artifact-id" });
   });
 
   it("fails closed for unknown and malformed paths", () => {
