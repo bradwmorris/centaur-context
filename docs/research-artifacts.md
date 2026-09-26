@@ -2,6 +2,8 @@
 
 The canonical Source Artifact remains immutable. Attach each cleaned working-document revision as a supporting `research_notes` Artifact on its Source. Set a stable `metadata.document_key` and point `supersedes_artifact_id` and `metadata.predecessor_artifact_id` at the prior working revision. List Artifacts newest first, select the latest entry for that key, and retain every earlier version. This does not promote a working note into the Source's canonical evidence.
 
+Authenticated `context_apply` callers may use this append path on an active protected Source. The server accepts the append only for `research_notes`, requires a nonempty document key, and permits supersession only within the same Source and key. The protected flag, Source fields, and canonical evidence pointer remain unchanged; all other protected Object mutations remain forbidden.
+
 Attach publication history to the originating Note as `publication_receipt` Artifacts. Put a complete JSON snapshot in `content`: destination, status (`draft` or `published`), actual copy, provider/post identity, URL if known, media references, occurrence time, originating Note revision, related Note IDs and candidate digest. Metadata may repeat searchable fields. A draft does not prove a live post. A published receipt requires provider readback or explicit user confirmation. For an edit, append a successor with `supersedes_artifact_id`; a new share gets a distinct provider identity and Artifact. Use a stable idempotency key and reconcile uncertain writes before retrying. Artifact writes advance the Object revision but do not edit the Note's content or intent.
 
 This is a generic Artifact convention. Provider credentials and editorial decisions belong to the calling overlay.

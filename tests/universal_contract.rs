@@ -934,6 +934,274 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
 }
 
 #[tokio::test]
+async fn protected_source_research_notes_are_versioned_without_changing_source_evidence() {
+    use sha2::{Digest, Sha256};
+    let Some(pool) = test_pool().await else {
+        eprintln!(
+            "skipping protected Source research-notes contract: TEST_DATABASE_URL is not set"
+        );
+        return;
+    };
+
+    let source = Uuid::new_v4();
+    let protected_note = Uuid::new_v4();
+    let other_source = Uuid::new_v4();
+    let document_key = format!("working-notes-{}", Uuid::new_v4());
+    let canonical_artifact = Uuid::new_v4();
+    let wrong_kind_artifact = Uuid::new_v4();
+    let mut seed = pool.begin().await.unwrap();
+    for (id, kind, protected) in [
+        (source, "source", true),
+        (protected_note, "note", true),
+        (other_source, "source", true),
+    ] {
+        sqlx::query("INSERT INTO objects (id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,$2,'Protected research fixture','Synthetic protected-source append test.', $3,'system','test','system','test')")
+            .bind(id).bind(kind).bind(protected).execute(&mut *seed).await.unwrap();
+    }
+    sqlx::query("INSERT INTO sources (object_id,source_kind,canonical_uri) VALUES ($1,'article','https://example.invalid/canonical'),($2,'article','https://example.invalid/other')")
+        .bind(source).bind(other_source).execute(&mut *seed).await.unwrap();
+    sqlx::query(
+        "INSERT INTO notes (object_id,content,intent) VALUES ($1,'Protected note fixture','idea')",
+    )
+    .bind(protected_note)
+    .execute(&mut *seed)
+    .await
+    .unwrap();
+    seed.commit().await.unwrap();
+
+    let canonical_content = "Synthetic canonical captured evidence.";
+    sqlx::query("INSERT INTO artifacts (id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,metadata) VALUES ($1,$2,'research_notes',$3,'text/plain',$4,$5,'complete',$6)")
+        .bind(canonical_artifact).bind(source).bind(canonical_content)
+        .bind(format!("{:x}", Sha256::digest(canonical_content))).bind(canonical_content.len() as i64)
+        .bind(json!({"document_key":document_key}))
+        .execute(&pool).await.unwrap();
+    let wrong_kind_content = "Synthetic non-notes artifact.";
+    sqlx::query("INSERT INTO artifacts (id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,metadata) VALUES ($1,$2,'supporting_text',$3,'text/plain',$4,$5,'complete','{}')")
+        .bind(wrong_kind_artifact).bind(source).bind(wrong_kind_content)
+        .bind(format!("{:x}", Sha256::digest(wrong_kind_content))).bind(wrong_kind_content.len() as i64)
+        .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE sources SET current_artifact_id=$2 WHERE object_id=$1")
+        .bind(source)
+        .bind(canonical_artifact)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let token = "r".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let send = |key: String, operation: Value| {
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            app.oneshot(request(
+                "POST",
+                "/api/v2/apply",
+                &token,
+                json!({
+                    "contract_version":"1.1.0",
+                    "idempotency_key":key,
+                    "operations":[operation]
+                }),
+            ))
+            .await
+            .unwrap()
+        }
+    };
+    let append = |expected_revision: i64, body: &str, key: &str, predecessor: Option<Uuid>| {
+        let mut metadata = json!({"document_key":key});
+        if let Some(predecessor) = predecessor {
+            metadata["predecessor_artifact_id"] = json!(predecessor);
+        }
+        json!({
+            "operation":"append_artifact",
+            "object":{"object_id":source},
+            "expected_revision":expected_revision,
+            "kind":"research_notes",
+            "title":"Research working notes",
+            "content":body,
+            "media_type":"text/markdown",
+            "capture_outcome":"complete",
+            "metadata":metadata,
+            "supersedes_artifact_id":predecessor
+        })
+    };
+
+    let first_request_key = format!("protected-notes-first-{}", Uuid::new_v4());
+    let first_request = append(1, "First cleaned research note.", &document_key, None);
+    let first_response = send(first_request_key.clone(), first_request.clone()).await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_response = json_body(first_response).await;
+    let first_id: Uuid = first_response["data"]["results"][0]["data"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let replay = send(first_request_key, first_request).await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await["data"]["replayed"], true);
+
+    let second = send(
+        format!("protected-notes-second-{}", Uuid::new_v4()),
+        append(
+            2,
+            "Second cleaned research note.",
+            &document_key,
+            Some(first_id),
+        ),
+    )
+    .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = json_body(second).await;
+    let second_id: Uuid = second["data"]["results"][0]["data"]["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let stale = send(
+        format!("protected-notes-stale-{}", Uuid::new_v4()),
+        append(2, "Stale revision.", &document_key, Some(second_id)),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let missing_key = send(
+        format!("protected-notes-missing-key-{}", Uuid::new_v4()),
+        json!({
+            "operation":"append_artifact","object":{"object_id":source},
+            "expected_revision":3,"kind":"research_notes","content":"No key",
+            "capture_outcome":"complete"
+        }),
+    )
+    .await;
+    assert_eq!(missing_key.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    for (name, object_id, revision, metadata, predecessor) in [
+        (
+            "canonical-evidence",
+            source,
+            3,
+            json!({"document_key":document_key,"predecessor_artifact_id":canonical_artifact}),
+            Some(canonical_artifact),
+        ),
+        (
+            "wrong-kind",
+            source,
+            3,
+            json!({"document_key":document_key,"predecessor_artifact_id":wrong_kind_artifact}),
+            Some(wrong_kind_artifact),
+        ),
+        (
+            "cross-document",
+            source,
+            3,
+            json!({"document_key":"another-document","predecessor_artifact_id":first_id}),
+            Some(first_id),
+        ),
+        (
+            "cross-source",
+            other_source,
+            1,
+            json!({"document_key":document_key,"predecessor_artifact_id":first_id}),
+            Some(first_id),
+        ),
+    ] {
+        let response = send(
+            format!("protected-notes-{name}-{}", Uuid::new_v4()),
+            json!({
+                "operation":"append_artifact","object":{"object_id":object_id},
+                "expected_revision":revision,"kind":"research_notes","content":"Invalid successor",
+                "capture_outcome":"complete","metadata":metadata,
+                "supersedes_artifact_id":predecessor
+            }),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{name}"
+        );
+    }
+
+    for (name, object_id, revision) in [
+        ("protected-note", protected_note, 1),
+        ("protected-source", source, 3),
+    ] {
+        let update = send(
+            format!("protected-notes-update-{name}-{}", Uuid::new_v4()),
+            json!({"operation":"update_object","object_id":object_id,"expected_revision":revision,"changes":{"title":"Must remain protected"}}),
+        ).await;
+        assert_eq!(update.status(), StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+        let archive = send(
+            format!("protected-notes-archive-{name}-{}", Uuid::new_v4()),
+            json!({"operation":"archive_object","object_id":object_id,"expected_revision":revision}),
+        ).await;
+        assert_eq!(archive.status(), StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+    }
+    let non_source_artifact = send(
+        format!("protected-notes-non-source-{}", Uuid::new_v4()),
+        json!({
+            "operation":"append_artifact","object":{"object_id":protected_note},
+            "expected_revision":1,"kind":"research_notes","content":"Wrong target",
+            "capture_outcome":"complete","metadata":{"document_key":document_key}
+        }),
+    )
+    .await;
+    assert_eq!(
+        non_source_artifact.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let other_artifact_kind = send(
+        format!("protected-notes-other-kind-{}", Uuid::new_v4()),
+        json!({
+            "operation":"append_artifact","object":{"object_id":source},
+            "expected_revision":3,"kind":"supporting_text","content":"Wrong artifact kind",
+            "capture_outcome":"complete","metadata":{"document_key":document_key}
+        }),
+    )
+    .await;
+    assert_eq!(
+        other_artifact_kind.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let source_state: (bool, i64, String, Option<Uuid>) = sqlx::query_as(
+        "SELECT o.protected,o.revision,s.canonical_uri,s.current_artifact_id FROM objects o JOIN sources s ON s.object_id=o.id WHERE o.id=$1",
+    ).bind(source).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        source_state,
+        (
+            true,
+            3,
+            "https://example.invalid/canonical".into(),
+            Some(canonical_artifact)
+        )
+    );
+    let artifact_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE object_id=$1")
+            .bind(source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(artifact_count, 4);
+    let final_revision: (Uuid, String) = sqlx::query_as(
+        "SELECT supersedes_artifact_id,metadata->>'document_key' FROM artifacts WHERE id=$1",
+    )
+    .bind(second_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(final_revision, (first_id, document_key));
+}
+
+#[tokio::test]
 async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations() {
     let Some(pool) = test_pool().await else {
         return;
