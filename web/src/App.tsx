@@ -2,6 +2,7 @@ import { TaskRoutine } from "./TaskRoutine";
 import { projectPresentation, taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import { ArtifactReader, Artifacts } from "./ArtifactWorkspace";
 import type { ListSort } from "./api";
 import { DescriptionSnippet } from "./DescriptionSnippet";
 import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph";
@@ -13,7 +14,7 @@ import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./mo
 import { SchemaWorkspace } from "./SchemaWorkspace";
 import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
-import type { Artifact, ArtifactWindow, ChatMessage, Connection, ConnectionGraphSnapshot, EmbeddingStatus, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
+import type { Artifact, ChatMessage, Connection, ConnectionGraphSnapshot, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
@@ -36,7 +37,7 @@ const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video
 
 export default function App() {
   const [route, setRoute] = useState(() => parseRoute(window.location.pathname));
-  const { section, selectedId, connectionId } = route;
+  const { section, selectedId, connectionId, artifact } = route;
   const [collapsed, setCollapsed] = useState(false);
   const [objects, setObjects] = useState<SharedObject[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -221,7 +222,7 @@ export default function App() {
             </div>
             </>}
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}
         </div>
       </section>
@@ -637,7 +638,7 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       <InlineEditor label="Source description" value={source.description} multiline required maxLength={600} placeholder={descriptionExamples.source} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
     </div>
     {error && <p className="form-error">{error}</p>}
-    <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={source.current_artifact_id} onCreated={load} />
+    <Artifacts section="sources" objectId={id} artifacts={artifacts} onCreated={load} />
     <Section title="Atomic notes">
       {derivedNotes.length === 0 ? <p className="empty">No atomic notes derive from this Source.</p> : (["idea", "excerpt", "fact", "insight", "question", null] as const).map((intent) => {
         const grouped = derivedNotes.filter((note) => note.intent === intent);
@@ -648,66 +649,6 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={source.provenance} />
   </div></div>;
-}
-
-function Artifacts({ objectId, artifacts, currentArtifactId, onCreated }: { objectId: string; artifacts: Artifact[]; currentArtifactId: string | null; onCreated: () => Promise<void> }) {
-  const selectedDefault = currentArtifactId ?? artifacts[0]?.id ?? null;
-  const [selectedId, setSelectedId] = useState<string | null>(selectedDefault);
-  const [preview, setPreview] = useState<ArtifactWindow[]>([]);
-  const [pasteOpen, setPasteOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus | null>(null);
-  const latestWorking = new Map<string, string>();
-  for (const artifact of artifacts) {
-    if (artifact.kind === "research_notes") {
-      const key = String(artifact.metadata.document_key ?? "default");
-      if (!latestWorking.has(key)) latestWorking.set(key, artifact.id);
-    }
-  }
-  useEffect(() => { void api.embeddingStatus().then(setEmbeddingStatus).catch(() => setEmbeddingStatus(null)); }, [artifacts]);
-  useEffect(() => { setSelectedId(selectedDefault); setPreview([]); }, [selectedDefault]);
-  const read = async (offset: number) => {
-    if (selectedId === null) return; setBusy(true); setError(null);
-    try { const window = await api.artifactContent(selectedId, offset); setPreview((items) => offset === 0 ? [window] : [...items, window]); }
-    catch (cause) { setError(message(cause)); }
-    finally { setBusy(false); }
-  };
-  const append = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); setBusy(true); setError(null); const data = new FormData(event.currentTarget);
-    try {
-      const captureOutcome = String(data.get("capture_outcome"));
-      const kind = String(data.get("kind"));
-      const documentKey = String(data.get("document_key") ?? "").trim() || "default";
-      const predecessor = kind === "research_notes"
-        ? artifacts.find((item) => item.kind === kind && String(item.metadata.document_key ?? "default") === documentKey)?.id ?? null
-        : selectedId;
-      await api.createArtifact(objectId, { kind, title: optional(data, "title"), content: String(data.get("text")), media_type: "text/plain", language: optional(data, "language"), capture_outcome: captureOutcome, capture_reason: captureOutcome === "complete" ? null : optional(data, "capture_reason"), expected_size_bytes: null, metadata: { source_type: "human_paste", ...(kind === "research_notes" ? { document_key: documentKey, predecessor_artifact_id: predecessor } : {}) }, supersedes_artifact_id: predecessor, captured_at: optionalDate(data, "captured_at") });
-      setPasteOpen(false); setPreview([]); await onCreated();
-    } catch (cause) { setError(message(cause)); }
-    finally { setBusy(false); }
-  };
-  const nextOffset = preview.at(-1)?.next_offset ?? null;
-  return <Section title="Artifacts" action={<button className="text-button" type="button" onClick={() => setPasteOpen((value) => !value)}>+ Add artifact</button>}>
-    <p className="muted">{embeddingStatus?.configured ? `Semantic indexing: ${embeddingStatus.configuration?.model} (${embeddingStatus.configuration?.dimensions} dimensions)` : "Semantic indexing disabled; full-text search remains available."}</p>
-    {pasteOpen && <form className="form source-content-form" onSubmit={append}>
-      <div className="source-fields"><Field label="Kind"><input name="kind" required maxLength={100} defaultValue="transcript" /></Field><Field label="Document key for working notes"><input name="document_key" maxLength={100} placeholder="e.g. interview-notes" /></Field><Field label="Title"><input name="title" maxLength={300} /></Field><Field label="Captured"><input name="captured_at" type="datetime-local" /></Field><Field label="Language"><input name="language" maxLength={35} placeholder="en" /></Field><Field label="Capture outcome"><select name="capture_outcome" defaultValue="complete"><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="unavailable">Unavailable</option><option value="paywalled">Paywalled</option><option value="disallowed">Disallowed</option><option value="too_large">Too large</option><option value="unsupported">Unsupported</option></select></Field><Field label="Reason when not complete"><input name="capture_reason" maxLength={1000} /></Field></div>
-      <Field label="Text"><textarea name="text" aria-label="Artifact text" rows={12} required placeholder="Paste a transcript or other supporting text…" /></Field>
-      <div className="create-actions"><button type="button" className="ghost" onClick={() => setPasteOpen(false)}>Cancel</button><button className="secondary" disabled={busy}>{busy ? "Saving…" : "Save artifact"}</button></div>
-    </form>}
-    {artifacts.length > 0 ? <div className="content-preview">
-      <div className="content-toolbar"><label>Artifact <select aria-label="Artifact" value={selectedId ?? ""} onChange={(event) => { setSelectedId(event.target.value); setPreview([]); }}>{artifacts.map((artifact) => <option value={artifact.id} key={artifact.id}>{artifact.title ?? artifact.kind}{artifact.id === currentArtifactId ? " · canonical" : artifact.kind === "research_notes" && latestWorking.get(String(artifact.metadata.document_key ?? "default")) === artifact.id ? " · latest working notes" : " · supporting"}</option>)}</select></label>{preview.length === 0 && <button className="secondary" type="button" disabled={busy} onClick={() => void read(0)}>{busy ? "Loading…" : "Load preview"}</button>}</div>
-      {selectedId !== null && <ArtifactSummary artifact={artifacts.find((item) => item.id === selectedId)} />}
-      {preview.length > 0 && <pre className="source-text-preview" aria-label="Artifact content preview">{preview.map((item) => item.text).join("")}</pre>}
-      {nextOffset !== null && <button className="secondary" type="button" disabled={busy} onClick={() => void read(nextOffset)}>{busy ? "Loading…" : "Load next 8,000 characters"}</button>}
-    </div> : <p className="muted">No artifacts yet.</p>}
-    {error && <p className="form-error">{error}</p>}
-  </Section>;
-}
-
-function ArtifactSummary({ artifact }: { artifact: Artifact | undefined }) {
-  if (!artifact) return null;
-  return <p className="content-version-summary">{artifact.kind.replaceAll("_", " ")} · {artifact.capture_outcome} · {artifact.semantic_indexing_enabled ? "semantic indexing enabled" : "lexical only"} · {artifact.size_bytes.toLocaleString()} bytes · {artifact.language ?? "language unspecified"} · {relative(artifact.created_at)}{artifact.metadata.document_key ? ` · document ${String(artifact.metadata.document_key)}` : ""}{artifact.metadata.status ? ` · ${String(artifact.metadata.status)}` : ""}{artifact.capture_reason ? ` · ${artifact.capture_reason}` : ""}</p>;
 }
 
 function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
@@ -762,7 +703,7 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
       <Section title="Content"><InlineEditor label="Note content" value={note.content} multiline required maxLength={100000} placeholder="Write plain text or Markdown…" className="note-content-editor" onSave={(value) => saveField("content", value)} onReload={load} /></Section>
     </div>
     {error && <p className="form-error">{error}</p>}
-    <Artifacts objectId={id} artifacts={artifacts} currentArtifactId={null} onCreated={load} />
+    <Artifacts section="notes" objectId={id} artifacts={artifacts} onCreated={load} />
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
     <Provenance value={note.provenance} />
