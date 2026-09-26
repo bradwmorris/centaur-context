@@ -1142,3 +1142,116 @@ async fn publication_receipts_preserve_note_copy_and_distinct_shares() {
         note.content
     );
 }
+
+#[tokio::test]
+async fn working_documents_append_reverts_and_reject_stale_saves() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let actor = centaur_context::domain::ActorContext::system("working-document-test");
+    let note = db::create_note(
+        &pool,
+        &actor,
+        db::NewNote {
+            title: "Synthetic note".into(),
+            description: "Synthetic document revision contract".into(),
+            provenance: json!({"source_type":"test"}),
+            content: "The Note Object remains unchanged.".into(),
+            content_format: "plain_text".into(),
+            intent: "idea".into(),
+            source_artifact_id: None,
+            source_locator: None,
+            originating_chat_object_id: None,
+            derived_from_source_object_ids: vec![],
+            derived_from_note_object_ids: vec![],
+        },
+        &format!("working-note-{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    let make = |text: &str, key: &str, predecessor: Option<Uuid>, revision: i64| db::NewArtifact {
+        expected_revision: Some(revision),
+        kind: "research_notes".into(),
+        title: Some("Working notes".into()),
+        content: Some(text.into()),
+        uri: None,
+        media_type: Some("text/markdown".into()),
+        language: None,
+        captured_at: None,
+        capture_outcome: "complete".into(),
+        capture_reason: None,
+        expected_size_bytes: None,
+        metadata: json!({"document_key":key,"predecessor_artifact_id":predecessor}),
+        supersedes_artifact_id: predecessor,
+    };
+    let first = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("alpha", "one", None, note.revision),
+        &format!("first-{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    let second = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("beta", "one", Some(first.id), note.revision + 1),
+        &format!("second-{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    let retry_key = format!("reverted-{}", Uuid::new_v4());
+    let reverted = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("alpha", "one", Some(second.id), note.revision + 2),
+        &retry_key,
+    )
+    .await
+    .unwrap();
+    assert_ne!(reverted.id, first.id);
+    assert_eq!(reverted.supersedes_artifact_id, Some(second.id));
+    let replay = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("alpha", "one", Some(second.id), note.revision + 2),
+        &retry_key,
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.id, reverted.id);
+    let other = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("alpha", "two", None, note.revision + 3),
+        &format!("other-{}", Uuid::new_v4()),
+    )
+    .await
+    .unwrap();
+    assert_ne!(other.id, reverted.id);
+    let stale = db::append_artifact(
+        &pool,
+        &actor,
+        note.object_id,
+        make("alpha", "one", Some(second.id), note.revision + 2),
+        &format!("stale-{}", Uuid::new_v4()),
+    )
+    .await;
+    assert!(matches!(stale, Err(db::DbError::Conflict)));
+    assert_eq!(
+        db::list_artifacts(&pool, note.object_id)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        db::get_note(&pool, note.object_id).await.unwrap().content,
+        note.content
+    );
+}

@@ -223,8 +223,12 @@ export const api = {
   artifacts(id: string) {
     return request<Artifact[]>(`/api/v2/objects/${id}/artifacts`);
   },
-  createArtifact(id: string, body: Record<string, unknown>) {
-    return request<Artifact>(`/api/v2/objects/${id}/artifacts`, write("POST", body));
+  createArtifact(id: string, body: Record<string, unknown>, idempotencyKey?: string) {
+    return request<Artifact>(`/api/v2/objects/${id}/artifacts`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey ?? crypto.randomUUID() },
+      body: JSON.stringify(body),
+    });
   },
   artifactContent(artifactId: string, offset = 0, limit = 8_000) {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });

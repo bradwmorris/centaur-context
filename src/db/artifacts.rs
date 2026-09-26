@@ -131,20 +131,24 @@ pub async fn append_artifact(
     .bind(object_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some(existing) =
-        sqlx::query_as("SELECT * FROM artifacts WHERE object_id=$1 AND sha256=$2")
-            .bind(object_id)
-            .bind(&sha256)
-            .fetch_optional(&mut *tx)
-            .await?
-    {
-        tx.commit().await?;
-        return Ok(existing);
-    }
     let Some((current_revision, current_title, current_description)) = current else {
         return Err(DbError::Conflict);
     };
     validate_object_description(&current_title, &current_description)?;
+    // A working document is an immutable revision, including when its text
+    // reverts to an older revision or matches another document on this Object.
+    // Keep the historical Object-wide hash deduplication for other kinds.
+    if input.kind != "research_notes"
+        && let Some(existing) =
+            sqlx::query_as("SELECT * FROM artifacts WHERE object_id=$1 AND sha256=$2")
+                .bind(object_id)
+                .bind(&sha256)
+                .fetch_optional(&mut *tx)
+                .await?
+    {
+        tx.commit().await?;
+        return Ok(existing);
+    }
     if input
         .expected_revision
         .is_some_and(|revision| revision != current_revision)

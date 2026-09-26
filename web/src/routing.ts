@@ -6,6 +6,7 @@ export interface AppRoute {
   section: Section;
   selectedId: string | null;
   connectionId: string | null;
+  artifact: { kind: "latest" | "exact"; id: string } | null;
 }
 
 const sections: Record<string, Section> = {
@@ -43,11 +44,15 @@ const paths: Record<Section, string> = {
 export function parseRoute(pathname: string): AppRoute {
   const parts = pathname.split("/").filter(Boolean).map(safeDecode);
   if (parts[0] === "connections" && parts[1]) {
-    return { section: "connections", selectedId: null, connectionId: parts[1] };
+    return { section: "connections", selectedId: null, connectionId: parts[1], artifact: null };
   }
   const section = sections[parts[0] ?? ""];
-  if (!section) return { section: "objects", selectedId: null, connectionId: null };
-  return { section, selectedId: parts[1] ?? null, connectionId: null };
+  if (!section) return { section: "objects", selectedId: null, connectionId: null, artifact: null };
+  const artifact = (section === "sources" || section === "notes") && parts[1] && parts[3]
+    ? parts[2] === "working" ? { kind: "latest" as const, id: parts[3] }
+      : parts[2] === "artifacts" ? { kind: "exact" as const, id: parts[3] } : null
+    : null;
+  return { section, selectedId: parts[1] ?? null, connectionId: null, artifact };
 }
 
 function safeDecode(value: string): string {
@@ -61,6 +66,14 @@ export function sectionPath(section: Section): string {
 
 export function detailPath(section: Section, id: string): string {
   return `${sectionPath(section)}/${encodeURIComponent(id)}`;
+}
+
+export function artifactPath(section: "sources" | "notes", objectId: string, artifactId: string): string {
+  return `${detailPath(section, objectId)}/artifacts/${encodeURIComponent(artifactId)}`;
+}
+
+export function workingDocumentPath(section: "sources" | "notes", objectId: string, key: string): string {
+  return `${detailPath(section, objectId)}/working/${encodeURIComponent(key)}`;
 }
 
 export function objectPath(id: string): string {
@@ -94,6 +107,7 @@ export function connectionsPath(objectId?: string): string {
 
 export function navigate(path: string, replace = false): void {
   if (`${window.location.pathname}${window.location.search}` === path) return;
+  if (!window.dispatchEvent(new CustomEvent("beforeappnavigate", { cancelable: true, detail: path }))) return;
   window.history[replace ? "replaceState" : "pushState"]({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
