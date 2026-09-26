@@ -197,6 +197,8 @@ def extract_messages(settings: Settings, path: Path, session: str, cursor: int, 
             if len(line) > MAX_LINE_BYTES:
                 raise ValueError("Oversized transcript item; capture cursor preserved")
             if not line or not line.endswith(b"\n"):
+                if line:
+                    coverage = "partial"
                 break  # A partial write remains pending, never advance over it.
             total += len(line)
             record = json.loads(line)
@@ -297,7 +299,7 @@ def capture(settings: Settings, event: dict) -> dict:
         messages, cursor, coverage, finish = extract_messages(settings,path,session,prior["cursor"],prior["transcript_identity"])
         # task_complete follows the Stop hook. The next drain sees it, avoiding
         # premature curation before the final visible message is durably appended.
-        if messages or finish:
+        if messages or finish or (coverage == "partial" and prior["coverage"] != "partial"):
             key = f"{prior['cursor']}:{cursor}:{finish or ''}"
             queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),key)),
                 "title":prior["title"],"messages":messages,"finished_turn_id":finish,"coverage":coverage})

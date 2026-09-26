@@ -68,6 +68,7 @@ def test_partial_write_cursor_and_duplicate_hook(setup):
     with path.open('a') as f:f.write('{"type":"event_msg",')
     b.capture(s,event(repo,sid,path,'Stop',turn))
     with b.database(s) as db:assert db.execute('SELECT cursor FROM sessions').fetchone()[0]==prefix
+    assert pending(s)[-1]["coverage"] == "partial"
     with path.open('a') as f:f.write('"payload":{"type":"task_complete","turn_id":"'+turn+'"}}\n')
     b.capture(s,event(repo,sid,path,'Stop',turn))
     assert pending(s)[-1]['finished_turn_id']==turn

@@ -116,7 +116,7 @@ pub async fn context_subtypes(
                     WHEN 'chat' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','chat','provider',ch.provider,'surface_kind',ch.surface_kind,
                         'channel_name',ch.channel_name,'current_thread',o.id=$2,
-                        'capture_coverage',CASE WHEN ch.provider='codex' THEN COALESCE(o.provenance->>'capture_coverage','partial') END,
+                        'capture_coverage',CASE WHEN ch.provider='codex' THEN COALESCE(o.provenance->>'capture_coverage',CASE WHEN EXISTS(SELECT 1 FROM chat_messages captured WHERE captured.chat_object_id=o.id) THEN 'partial' ELSE 'registered' END) END,
                         'capture_recovery_action',o.provenance->>'capture_recovery_action'))
                     WHEN 'user' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','user','user_kind',u.user_kind,
