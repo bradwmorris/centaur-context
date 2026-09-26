@@ -1032,3 +1032,23 @@ async fn transient_failures_back_off_and_stop_after_three_attempts() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
     server.abort();
 }
+
+#[tokio::test]
+async fn peer_memory_wording_does_not_requeue_unchanged_original_evidence() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let a = evidenced_memory(&pool).await;
+    let b = evidenced_memory(&pool).await;
+    let source = fixture(&pool, "source", json!({})).await;
+    edge(&pool, a, source, "about").await;
+    let peer_edge = edge(&pool, b, source, "about").await;
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    dreaming::apply_plan(&pool, run(&pool).await, &input, &Plan { changes: vec![] })
+        .await
+        .unwrap();
+    sqlx::query("UPDATE objects SET description='Alex requested a clearer research review.',revision=revision+1 WHERE id=$1").bind(b).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE connections SET description='Clarifies the peer event relationship.',revision=revision+1 WHERE id=$1").bind(peer_edge).execute(&pool).await.unwrap();
+    let pending = dreaming::read_batch(&pool).await.unwrap();
+    assert!(pending.memories.iter().any(|m| m["id"] == b.to_string()));
+    assert!(!pending.memories.iter().any(|m| m["id"] == a.to_string()));
+}
