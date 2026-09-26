@@ -1596,6 +1596,7 @@ async fn protected_note_has_preservation_witness(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_endpoints(
     tx: &mut Transaction<'_, Postgres>,
     source_id: Uuid,
@@ -1603,7 +1604,8 @@ async fn validate_endpoints(
     target_id: Uuid,
     authority: WriteAuthority,
     verified_chat_connection: bool,
-) -> Result<(), DbError> {
+    allow_protected_research_connection_creation: bool,
+) -> Result<bool, DbError> {
     if source_id == target_id {
         return Err(DbError::Invalid(
             "source and target Objects must be different".into(),
@@ -1628,9 +1630,17 @@ async fn validate_endpoints(
             "Connections require active endpoint Objects".into(),
         ));
     }
-    if authority == WriteAuthority::Ordinary
-        && (source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2))
-    {
+    let has_protected_endpoint = source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2);
+    let protected_research_connection_creation = allow_protected_research_connection_creation
+        && authority == WriteAuthority::Ordinary
+        && has_protected_endpoint
+        && ((matches!(kind, "involves" | "about")
+            && source.is_some_and(|row| row.1 == "source")
+            && target.is_some_and(|row| row.1 == "entity"))
+            || (kind == "related_to"
+                && source.is_some_and(|row| row.1 == "entity")
+                && target.is_some_and(|row| row.1 == "entity")));
+    if authority == WriteAuthority::Ordinary && has_protected_endpoint {
         // Connecting new research to a protected Source does not edit the Source.
         // Excerpts additionally have to cite an Artifact owned by that Source.
         let research_source_link = target.is_some_and(|row| row.1 == "source")
@@ -1649,7 +1659,8 @@ async fn validate_endpoints(
             && kind == "about"
             && source.is_some_and(|row| row.1 == "chat")
             && target.is_some_and(|row| !row.2);
-        if !research_source_link && !chat_provenance_link {
+        if !research_source_link && !chat_provenance_link && !protected_research_connection_creation
+        {
             return Err(DbError::Invalid(
                 "protected Objects require separate Connection authority".into(),
             ));
@@ -1662,7 +1673,7 @@ async fn validate_endpoints(
             "themed Connections must point from a non-Theme Object to a Theme".into(),
         ));
     }
-    Ok(())
+    Ok(protected_research_connection_creation)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1680,13 +1691,14 @@ async fn create_connection(
     authority: WriteAuthority,
     verified_chat_connection: bool,
 ) -> Result<Value, DbError> {
-    validate_endpoints(
+    let protected_research_connection_creation = validate_endpoints(
         tx,
         source_id,
         kind,
         target_id,
         authority,
         verified_chat_connection,
+        true,
     )
     .await?;
     let description = required_text(description.to_owned(), "description", 1000)?;
@@ -1737,7 +1749,10 @@ async fn create_connection(
     if current.description == description && current.provenance == provenance_value {
         return Ok(json!({"connection":current,"reused":true}));
     }
-    if authority == WriteAuthority::ReviewedMaintenance || current.protected {
+    if authority == WriteAuthority::ReviewedMaintenance
+        || current.protected
+        || protected_research_connection_creation
+    {
         return Err(DbError::Invalid(
             "changing an existing Connection requires its explicit ID and expected revision".into(),
         ));
@@ -1823,6 +1838,7 @@ async fn update_connection(
         kind,
         current.target_object_id,
         authority,
+        false,
         false,
     )
     .await?;
