@@ -150,6 +150,7 @@ async fn reserve(
         if action.provider != provider
             || action.action_kind != action_kind
             || action.external_key != external_key
+            || action.metadata != metadata
         {
             return Err(IntakeError::Conflict(
                 "idempotency key belongs to a different External action".into(),
@@ -167,6 +168,40 @@ async fn reserve(
         return Err(IntakeError::Conflict(
             "idempotency key belongs to a different principal".into(),
         ));
+    }
+
+    // Request keys may change across workflow retries; the provider identity must not.
+    // Serialize different request keys before checking the unique external identity.
+    let identity = serde_json::to_string(&(&provider, &action_kind, &external_key))
+        .expect("string tuple serialization");
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('external_action_identity:' || $1,0))",
+    )
+    .bind(identity)
+    .execute(&mut *tx)
+    .await?;
+    let existing: Option<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id,actor_type,actor_id FROM runs WHERE kind='external_action' AND input->>'provider'=$1 AND input->>'action_kind'=$2 AND input->>'external_key'=$3",
+    )
+    .bind(&provider)
+    .bind(&action_kind)
+    .bind(&external_key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((id, actor_type, actor_id)) = existing {
+        if actor_type != actor.actor_type || actor_id != actor.actor_id {
+            return Err(IntakeError::Conflict(
+                "external identity belongs to a different principal".into(),
+            ));
+        }
+        tx.commit().await?;
+        let action = get_action(&state.app, id).await?;
+        if action.metadata != metadata {
+            return Err(IntakeError::Conflict(
+                "external identity has different immutable metadata".into(),
+            ));
+        }
+        return Ok(Json(json!({"data":action,"idempotent":true})));
     }
 
     let run_id = Uuid::new_v4();
