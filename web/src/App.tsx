@@ -24,14 +24,14 @@ const sectionKinds = { chats: "chat", users: "user", entities: "entity", memorie
 const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
 type CreateSection = keyof typeof sectionSingular;
 const descriptionExamples: Record<ObjectKind, string> = {
-  task: "Define and test the Object-description contract across every write path. Created from Issue #51 to keep retrieval summaries explicit and current.",
-  chat: "A Slack conversation where the release team approved the launch checklist.",
-  user: "A human product lead responsible for the customer migration program.",
-  entity: "Jane Lee, a researcher working on agent-memory evaluation. Relevant as the speaker in the Source supporting the retrieval design.",
-  memory: "The product team approved the customer migration during the August review.",
-  source: "A YouTube interview with Jane Lee about retrieval evaluation for agent memory. Added as evidence for the semantic-search design decision.",
-  note: "The current embedding trigger already invalidates vectors after title or description changes. Recorded to prevent a redundant re-indexing subsystem.",
-  theme: "Work concerning how canonical Objects are found and ranked. Used to group decisions, tests, and Sources about retrieval quality.",
+  "task": "Define and test concise Object descriptions across creation, capture and maintenance paths.",
+  "entity": "Jane Lee studies how agents retain and retrieve useful memories.",
+  "source": "An interview with Jane Lee comparing retrieval evaluation methods for agent memory.",
+  "note": "The current embedding trigger already invalidates vectors after title or description changes. Recorded to prevent a redundant re-indexing subsystem.",
+  "theme": "How canonical Objects are found and ranked using their titles, descriptions and relationships.",
+  "chat": "Alex and a research assistant compared retrieval methods and selected a metadata-only evaluation plan.",
+  "user": "A research assistant that helps review sources and prepare evidence-backed notes.",
+  "memory": "Alex approved the retrieval evaluation plan after reviewing its synthetic test cases."
 };
 const sourceKinds: SourceKind[] = ["article", "paper", "podcast_episode", "video", "book", "report", "document", "dataset", "web_page", "social_post", "other"];
 
@@ -639,7 +639,7 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
     </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts section="sources" objectId={id} artifacts={artifacts} onCreated={load} />
-    <Section title="Atomic notes">
+    <Section title="Notes">
       {derivedNotes.length === 0 ? <p className="empty">No atomic notes derive from this Source.</p> : (["idea", "excerpt", "fact", "insight", "question", null] as const).map((intent) => {
         const grouped = derivedNotes.filter((note) => note.intent === intent);
         return grouped.length > 0 ? <div key={intent ?? "legacy"}><h3>{intent === null ? "Legacy / unclassified" : `${intent.replace(/^./, (value) => value.toUpperCase())}s`}</h3><ul>{grouped.map((note) => <li key={note.object_id}><ObjectId id={note.object_id} label={false} navigate /> · {note.title}</li>)}</ul></div> : null;
@@ -787,15 +787,17 @@ function UserIdentityPanel({ id, visual, refreshKey }: { id: string; visual: Obj
 
 function ChatTranscript({ id, visuals, refreshKey }: { id: string; visuals: Map<string, ObjectVisual>; refreshKey: number }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [capture, setCapture] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void api.chatMessages(id)
-      .then((items) => { if (active) setMessages(items); })
+    void Promise.all([api.chatMessages(id), api.object(id)])
+      .then(([items, object]) => { if (active) { setMessages(items); setCapture(recordValue(object.provenance) ?? null); } })
       .catch((cause) => { if (active) setError(message(cause)); });
     return () => { active = false; };
   }, [id, refreshKey]);
   return <Section title="Messages">
+    {capture?.source_type === "codex" && <p className="muted">Capture: {textValue(capture.capture_coverage, messages.length ? "partial" : "registered").replaceAll("_", " ")}. {textValue(capture.capture_recovery_action, "Original history coverage has not been verified.")}</p>}
     {error && <p className="form-error">{error}</p>}
     <div className="chat-transcript">
       {messages.map((item) => <MessageRow item={item} visual={visuals.get(item.sender_user_object_id)} key={item.id} />)}

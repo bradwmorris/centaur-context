@@ -46,6 +46,14 @@ pub fn router(state: AppState, config: CodexConfig) -> Router {
         .route("/api/v2/codex/capture", post(capture))
         .route("/api/v2/codex/session", get(session_status))
         .route("/api/v2/contract", get(api::read_contract))
+        .route(
+            "/api/v2/audit/objects",
+            get(crate::maintenance::audit_objects),
+        )
+        .route(
+            "/api/v2/audit/connections",
+            get(crate::maintenance::audit_connections),
+        )
         .route("/api/v2/search", post(api::universal_search))
         .route("/api/v2/read", post(api::universal_read))
         .route("/api/v2/apply", post(api::universal_apply))
@@ -121,6 +129,8 @@ pub struct CaptureBatch {
     pub finished_turn_id: Option<Uuid>,
     #[serde(default)]
     pub git_receipts: Vec<crate::codex_outcomes::GitReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -149,6 +159,18 @@ async fn capture(
         ));
     }
     crate::domain::required_text(input.title.clone(), "title", 300)?;
+    if input.coverage.as_deref().is_some_and(|v| {
+        !matches!(
+            v,
+            "registered"
+                | "unavailable"
+                | "partial"
+                | "text_messages"
+                | "text_only_attachments_omitted"
+        )
+    }) {
+        return Err(invalid("Unsupported capture coverage"));
+    }
     for receipt in &input.git_receipts {
         crate::codex_outcomes::verify(receipt)?;
     }
@@ -249,6 +271,46 @@ async fn capture(
     }
     sqlx::query("UPDATE chats SET latest_source_message_at=(SELECT max(source_created_at) FROM chat_messages WHERE chat_object_id=$1),processing_updated_at=now() WHERE object_id=$1")
         .bind(chat_id).execute(&mut *tx).await.map_err(DbError::from)?;
+    // Receipt-only batches must not downgrade established coverage.
+    let before = db::target_snapshot(&mut tx, "object", chat_id).await?;
+    let coverage = input.coverage.clone().unwrap_or_else(|| {
+        if inserted > 0 {
+            "partial".into()
+        } else {
+            before["provenance"]["capture_coverage"]
+                .as_str()
+                .unwrap_or("registered")
+                .to_owned()
+        }
+    });
+    // A provider receipt describes only the observed activation window, never all history.
+    if before["provenance"]["capture_coverage"] != coverage {
+        sqlx::query("UPDATE objects SET provenance=provenance || jsonb_build_object('capture_coverage',$2::text,'capture_scope','visible text from activation','capture_recovery_action',CASE WHEN $2 IN ('registered','unavailable','partial') THEN 'Restore the original transcript and verify its session identity and coverage before recovery.' ELSE 'Attachments and pre-activation history are outside capture coverage.' END),revision=revision+1,updated_at=now() WHERE id=$1")
+            .bind(chat_id).bind(&coverage).execute(&mut *tx).await.map_err(DbError::from)?;
+        let sequence: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(max(sequence),0)::bigint+1 FROM object_events WHERE run_id=$1",
+        )
+        .bind(run_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+        let revision = before["revision"].as_i64().unwrap_or(1);
+        db::insert_event_for_run_with_before(
+            &mut tx,
+            run_id,
+            sequence,
+            &actor,
+            "object",
+            chat_id,
+            chat_id,
+            "updated",
+            None,
+            Some(revision),
+            revision + 1,
+            Some(before),
+        )
+        .await?;
+    }
     let mut curator_run_ids = Vec::new();
     // Incoming batches contain <=100 messages. Drain at most two bounded windows
     // on finish; while running, queue full windows so evidence cannot grow unbounded.
@@ -291,7 +353,7 @@ async fn capture(
             }
         }
     }
-    let result = json!({"outcome_memory_ids":outcome_memories,"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curator_run_ids":curator_run_ids,"curation_enabled":session.config.curate});
+    let result = json!({"capture_coverage":coverage,"outcome_memory_ids":outcome_memories,"run_id":run_id,"chat_object_id":chat_id,"inserted_messages":inserted,"curator_run_id":curator_run_id,"curator_run_ids":curator_run_ids,"curation_enabled":session.config.curate});
     sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now() WHERE id=$1")
         .bind(run_id)
         .bind(&result)
@@ -321,12 +383,12 @@ async fn ensure_chat(
     }
     let id = Uuid::new_v4();
     let description = format!(
-        "A Codex conversation about {}. Read its messages for the original discussion and results.",
+        "Codex session registered for {}. Conversation content and coverage have not yet been established.",
         session.repository
     );
     sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'chat',$2,$3,'system',$4,'system',$4,$5)")
         .bind(id).bind(title).bind(description).bind(&actor.actor_id)
-        .bind(json!({"source_type":"codex","host_id":session.config.host_id,"session_id":session.id,"repository":session.repository}))
+        .bind(json!({"source_type":"codex","host_id":session.config.host_id,"session_id":session.id,"repository":session.repository,"capture_coverage":"registered"}))
         .execute(&mut **tx).await?;
     sqlx::query("INSERT INTO chats(object_id,provider,workspace_id,channel_id,thread_id,surface_kind) VALUES($1,'codex',$2,$3,$4,'desktop')")
         .bind(id).bind(session.config.host_id.to_string()).bind(&session.repository).bind(session.id.to_string()).execute(&mut **tx).await?;
@@ -391,7 +453,9 @@ async fn session_status(
         .bind(session.config.host_id.to_string()).bind(&session.repository).bind(session.id.to_string()).fetch_optional(&state.pool).await.map_err(DbError::from)?;
     let latest: Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'status',status,'error',error) FROM runs WHERE kind='curator' AND chat_object_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1")
         .bind(chat).fetch_optional(&state.pool).await.map_err(DbError::from)?;
+    let capture: Option<Value> = sqlx::query_scalar("SELECT jsonb_build_object('coverage',COALESCE(o.provenance->>'capture_coverage',CASE WHEN EXISTS(SELECT 1 FROM chat_messages m WHERE m.chat_object_id=o.id) THEN 'partial' ELSE 'registered' END),'message_count',(SELECT count(*) FROM chat_messages m WHERE m.chat_object_id=o.id),'scope','visible text from activation','recovery_action',o.provenance->>'capture_recovery_action') FROM objects o WHERE o.id=$1")
+        .bind(chat).fetch_optional(&state.pool).await.map_err(DbError::from)?;
     Ok(Json(
-        json!({"data":{"chat_object_id":chat,"curation_enabled":session.config.curate,"latest_curation":latest}}),
+        json!({"data":{"chat_object_id":chat,"capture":capture,"curation_enabled":session.config.curate,"latest_curation":latest}}),
     ))
 }

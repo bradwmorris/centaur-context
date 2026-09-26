@@ -86,6 +86,8 @@ class Settings:
             if repo["target"] not in self.targets:
                 raise ValueError("Unknown repository target")
         for target in self.targets.values():
+            if not isinstance(target.get("capture_coverage", False), bool):
+                raise ValueError("capture_coverage must be a boolean")
             u = urlparse(target["url"])
             if u.username or u.password or u.query or u.fragment or u.path not in ("", "/"):
                 raise ValueError("Context URL must be an origin without credentials")
@@ -197,6 +199,8 @@ def extract_messages(settings: Settings, path: Path, session: str, cursor: int, 
             if len(line) > MAX_LINE_BYTES:
                 raise ValueError("Oversized transcript item; capture cursor preserved")
             if not line or not line.endswith(b"\n"):
+                if line:
+                    coverage = "partial"
                 break  # A partial write remains pending, never advance over it.
             total += len(line)
             record = json.loads(line)
@@ -262,7 +266,7 @@ def capture(settings: Settings, event: dict) -> dict:
                 (session,alias,target,str(path) if path else None,cursor,inode,
                  f"Codex: {alias}","capture_from_activation",now,now,event["cwd"]))
             queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),"bootstrap")),
-                "title":f"Codex: {alias}","messages":[],"finished_turn_id":None})
+                "title":f"Codex: {alias}","messages":[],"finished_turn_id":None,"coverage":"registered" if path else "unavailable"})
             prior = db.execute("SELECT * FROM sessions WHERE id=?", (session,)).fetchone()
         if path and prior["transcript"] is None:
             runtime_metadata(settings,path,session)
@@ -289,15 +293,18 @@ def capture(settings: Settings, event: dict) -> dict:
                 queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),"git:"+receipt["commits"][-1]["oid"])),
                     "title":prior["title"],"messages":[],"finished_turn_id":None,"git_receipts":[receipt]})
         if not path:
-            db.execute("UPDATE sessions SET error='No transcript: full Chat capture unavailable',updated=? WHERE id=?", (now,session))
+            if prior["coverage"] != "unavailable":
+                queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),f"unavailable:{prior['cursor']}")),
+                    "title":prior["title"],"messages":[],"finished_turn_id":None,"coverage":"unavailable"})
+            db.execute("UPDATE sessions SET coverage='unavailable',error='No transcript: full Chat capture unavailable',updated=? WHERE id=?", (now,session))
             return {"bound":alias,"coverage":"unavailable"}
         messages, cursor, coverage, finish = extract_messages(settings,path,session,prior["cursor"],prior["transcript_identity"])
         # task_complete follows the Stop hook. The next drain sees it, avoiding
         # premature curation before the final visible message is durably appended.
-        if messages or finish:
+        if messages or finish or (coverage == "partial" and prior["coverage"] != "partial"):
             key = f"{prior['cursor']}:{cursor}:{finish or ''}"
             queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),key)),
-                "title":prior["title"],"messages":messages,"finished_turn_id":finish})
+                "title":prior["title"],"messages":messages,"finished_turn_id":finish,"coverage":coverage})
         db.execute("UPDATE sessions SET cursor=?,coverage=?,error=NULL,updated=? WHERE id=?",(cursor,coverage,now,session))
     return {"bound":alias,"coverage":coverage}
 
@@ -365,7 +372,10 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                     capture(settings,{"hook_event_name":"SessionEnd","session_id":row["id"],"cwd":row["cwd"],"transcript_path":row["transcript"]})
                 except (RuntimeError,ValueError,OSError,KeyError,subprocess.SubprocessError) as error:
                     with database(settings) as db,db:
-                        db.execute("UPDATE sessions SET error=?,updated=? WHERE id=?",(str(error),time.time(),row["id"]))
+                        db.execute("UPDATE sessions SET coverage='unavailable',error=?,updated=? WHERE id=?",(str(error),time.time(),row["id"]))
+                        if row["coverage"] != "unavailable":
+                            queue_batch(db,row["id"],{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(row["id"]),f"unavailable:{row['cursor']}")),
+                                "title":row["title"],"messages":[],"finished_turn_id":None,"coverage":"unavailable"})
         with database(settings) as db:
             rows = db.execute("SELECT b.* FROM batches b WHERE (? IS NULL OR session_id=?) AND next_attempt<=? AND NOT EXISTS(SELECT 1 FROM batches older WHERE older.session_id=b.session_id AND older.rowid<b.rowid) ORDER BY rowid LIMIT ?",
                 (session_id,session_id,time.time(),limit)).fetchall()
@@ -374,7 +384,13 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                 session = db.execute("SELECT * FROM sessions WHERE id=?", (batch["session_id"],)).fetchone()
                 try:
                     client = SessionClient(settings,session,capture_token=True)
-                    response = client._request("POST","/api/v2/codex/capture",json=json.loads(batch["payload"]))
+                    payload = json.loads(batch["payload"])
+                    # Older servers reject unknown fields. Enable the additive
+                    # wire field only after this exact destination is upgraded;
+                    # retain local coverage and the immutable queued payload.
+                    if not settings.targets[session["target"]].get("capture_coverage", False):
+                        payload.pop("coverage", None)
+                    response = client._request("POST","/api/v2/codex/capture",json=payload)
                     with db:
                         db.execute("INSERT OR REPLACE INTO receipts VALUES(?,?,?,?)",(batch["id"],session["id"],canonical(response),time.time()))
                         db.execute("UPDATE sessions SET chat_id=?,updated=? WHERE id=?",(response["chat_object_id"],time.time(),session["id"]))

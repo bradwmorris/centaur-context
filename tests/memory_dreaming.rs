@@ -364,6 +364,16 @@ async fn preview_runs_real_validation_then_rolls_back_and_does_not_repeat() {
         json!({"supporting_message_ids":[Uuid::new_v4()]}),
     )
     .await;
+    let evidence_id = Uuid::new_v4();
+    let evidence_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,result) VALUES($1,'mutation','completed','human','synthetic-owner',$2,'{}')").bind(evidence_run).bind(evidence_run.to_string()).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) VALUES($1,$2,1,'object',$3,'created','human','synthetic-owner',1,$4,true,now())").bind(evidence_id).bind(evidence_run).bind(id).bind(json!({"id":id,"kind":"source","title":"Weekly research review","description":"Alex chose weekly research reviews to reduce interruptions."})).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE objects SET provenance=$2 WHERE id=$1")
+        .bind(id)
+        .bind(json!({"source_event_id":evidence_id}))
+        .execute(&pool)
+        .await
+        .unwrap();
     let before = snapshot(&pool, id).await;
     let response = serde_json::to_string(&Plan {
         changes: vec![rewrite(id)],
@@ -406,4 +416,162 @@ async fn preview_runs_real_validation_then_rolls_back_and_does_not_repeat() {
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     server.abort();
+}
+
+#[tokio::test]
+async fn missing_evidence_defers_with_bounded_retries_and_policy_review_is_versioned() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    let id = fixture(
+        &pool,
+        "memory",
+        json!({"supporting_message_ids":[Uuid::new_v4()]}),
+    )
+    .await;
+    let old = run(&pool).await;
+    sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now() WHERE id=$1")
+        .bind(old)
+        .bind(json!({"reviewed":{id.to_string():1}}))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .iter()
+            .any(|m| m["id"] == id.to_string())
+    );
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: "http://127.0.0.1:1/must-not-call".into(),
+        api_token: "synthetic-token".into(),
+        model: "test".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(1),
+    };
+    for _ in 0..3 {
+        let deferred = dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+            .bind(deferred)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(result.get("reviewed").is_none());
+        assert_eq!(result["deferred"][id.to_string()], 1);
+        assert_eq!(result["model_calls"], 0);
+    }
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let unchanged = snapshot(&pool, id).await;
+    assert_eq!(unchanged["revision"], 1);
+    assert!(unchanged["archived_at"].is_null());
+}
+
+#[tokio::test]
+async fn legacy_git_memories_need_exact_original_verified_receipts() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    let provenance = json!({"source_type":"codex_git_commit","repository":"synthetic-project","host_id":Uuid::new_v4(),"commits":["a".repeat(40)]});
+    let trusted = fixture(&pool, "memory", provenance.clone()).await;
+    let unverified = fixture(&pool, "memory", provenance.clone()).await;
+    let actor = format!("codex-capture:{}", Uuid::new_v4());
+    sqlx::query("UPDATE objects SET created_by_id=$2,updated_by_id=$2 WHERE id=ANY($1)")
+        .bind(vec![trusted, unverified])
+        .bind(&actor)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let receipt = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,primary_object_id,input,result,completed_at) VALUES($1,'memory_capture','completed','system',$2,$3,$4,$5,'{}',now())").bind(receipt).bind(actor).bind(receipt.to_string()).bind(trusted).bind(json!({"evidence":provenance,"proof_sha256":"b".repeat(64)})).execute(&pool).await.unwrap();
+    let batch = dreaming::read_batch(&pool).await.unwrap();
+    assert!(batch.memories.iter().any(|m| m["id"] == trusted.to_string()
+        && m["verified_git_receipt"]["id"] == receipt.to_string()));
+    assert!(
+        !batch
+            .memories
+            .iter()
+            .any(|m| m["id"] == unverified.to_string())
+    );
+    assert!(
+        batch
+            .evidence
+            .iter()
+            .any(|e| e["type"] == "verified_git_observation")
+    );
+    let maintenance = run(&pool).await;
+    dreaming::apply_plan(
+        &pool,
+        maintenance,
+        &batch,
+        &Plan {
+            changes: vec![Change::Retire {
+                object_id: trusted,
+                reason: "Only technical Git movement is evidenced; retain its original receipt."
+                    .into(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!snapshot(&pool, trusted).await["archived_at"].is_null());
+    dreaming::undo(&pool, maintenance).await.unwrap();
+    assert!(snapshot(&pool, trusted).await["archived_at"].is_null());
+}
+
+#[tokio::test]
+async fn task_milestones_link_exact_task_atomically_and_keep_distinct_events() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else {
+        return;
+    };
+    memory::capture_outcomes(&pool).await.unwrap();
+    let task = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'task','Evaluate retrieval quality','Evaluate metadata-only retrieval quality.','system','event-test','system','event-test','{}')").bind(task).execute(&mut *tx).await.unwrap();
+    let owner = Uuid::new_v4();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'user','Evaluation agent','The agent performing the evaluation.','system','event-test','system','event-test')").bind(owner).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO users(object_id,user_kind,identities) VALUES($1,'agent','[]')")
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tasks(object_id,status,brief_markdown,owner_object_id,due_at) VALUES($1,'doing','Implementation in progress.',$2,now()+interval '1 day')").bind(task).bind(owner).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    for (index, status) in ["review", "done"].into_iter().enumerate() {
+        let mut tx = pool.begin().await.unwrap();
+        let before = sqlx::query_scalar::<_, Value>("SELECT to_jsonb(o)||jsonb_build_object('subtype',to_jsonb(t)) FROM objects o JOIN tasks t ON t.object_id=o.id WHERE o.id=$1").bind(task).fetch_one(&mut *tx).await.unwrap();
+        let run = Uuid::new_v4();
+        let event = Uuid::new_v4();
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,result) VALUES($1,'mutation','completed','centaur_agent','codex',$2,'{}')").bind(run).bind(run.to_string()).execute(&mut *tx).await.unwrap();
+        sqlx::query("UPDATE tasks SET status=$2,brief_markdown=$3,completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END WHERE object_id=$1").bind(task).bind(status).bind(format!("Recorded {status} evidence: https://example.invalid/result/{index}")).execute(&mut *tx).await.unwrap();
+        let after = sqlx::query_scalar::<_, Value>("SELECT to_jsonb(o)||jsonb_build_object('subtype',to_jsonb(t)) FROM objects o JOIN tasks t ON t.object_id=o.id WHERE o.id=$1").bind(task).fetch_one(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,before_state,after_state,reversible,created_at) VALUES($1,$2,1,'object',$3,'updated','centaur_agent','codex',1,$4,$5,true,now())").bind(event).bind(run).bind(task).bind(before).bind(after).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+        memory::capture_outcomes(&pool).await.unwrap();
+        memory::capture_outcomes(&pool).await.unwrap();
+        let count:i64=sqlx::query_scalar("SELECT count(*) FROM objects o JOIN connections c ON c.source_object_id=o.id WHERE o.kind='memory' AND o.provenance->>'source_event_id'=$1 AND c.kind='about' AND c.target_object_id=$2").bind(event.to_string()).bind(task).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM objects WHERE kind='memory' AND provenance->>'task_object_id'=$1",
+    )
+    .bind(task.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 2);
 }

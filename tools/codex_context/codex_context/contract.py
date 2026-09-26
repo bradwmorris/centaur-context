@@ -24,7 +24,7 @@ def schemas():
     obj=lambda props,req:{'type':'object','properties':props,'required':req,'additionalProperties':False}
     ref={'oneOf':[obj({'object_id':string},['object_id']),obj({'local_ref':string},['local_ref'])]}
     search=obj({'query':{**string,'maxLength':limits['search_query_characters']},'object_types':array({'type':'string','enum':list(c['object_types'])}),'limit':{'type':'integer','minimum':1,'maximum':limits['search_results']},'lexical_only':{'type':'boolean'},'task_filters':{'type':'object'}},tools['context_search']['input']['required'])
-    read=obj({'object_ids':{**array(string),'minItems':1,'maxItems':limits['read_objects']},'include':array({'type':'string','enum':['connections','artifacts','events','messages']}),'artifact_windows':array({'type':'object'})},tools['context_read']['input']['required'])
+    read=obj({'object_ids':{**array(string),'minItems':1,'maxItems':limits['read_objects']},'include':array({'type':'string','enum':['connections','artifacts','events','messages']}),'artifact_windows':array({'type':'object'}),'note_windows':array({'type':'object'})},tools['context_read']['input']['required'])
     variants=[]
     for name,spec in tools['context_apply']['operations'].items():
         fields={'operation':{'type':'string','const':name}}

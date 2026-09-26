@@ -165,7 +165,7 @@ async fn apply(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct InventoryQuery {
+pub(crate) struct InventoryQuery {
     cursor: Option<Uuid>,
     limit: Option<i64>,
     lifecycle: Option<String>,
@@ -183,6 +183,21 @@ async fn connections(
 ) -> Result<Json<Value>, IntakeError> {
     inventory(&state.app, query, true).await
 }
+/// Read-only inventory reuses the existing keyset cursor and bounded audit
+/// projection on authenticated agent/session surfaces. It grants no maintenance writes.
+pub(crate) async fn audit_objects(
+    State(app): State<AppState>,
+    Query(query): Query<InventoryQuery>,
+) -> Result<Json<Value>, IntakeError> {
+    inventory(&app, query, false).await
+}
+pub(crate) async fn audit_connections(
+    State(app): State<AppState>,
+    Query(query): Query<InventoryQuery>,
+) -> Result<Json<Value>, IntakeError> {
+    inventory(&app, query, true).await
+}
+
 async fn inventory(
     app: &AppState,
     query: InventoryQuery,

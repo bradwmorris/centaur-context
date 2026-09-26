@@ -46,7 +46,7 @@ export function artifactDocuments(artifacts: Artifact[]): ArtifactDocument[] {
 
 export function artifactLabel(artifact: Artifact): string {
   if (artifact.title?.trim()) return artifact.title;
-  if (artifact.kind === "research_notes") return "Working notes";
+  if (artifact.kind === "research_notes") return "Research documents";
   return artifact.kind.replaceAll("_", " ");
 }
 

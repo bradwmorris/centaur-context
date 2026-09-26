@@ -156,3 +156,34 @@ Existing Memory dreaming excludes this actor until it has its own evidence adapt
 The ordinary human-message curator validator remains unchanged. CODEX_CURATE
 also gates Git outcome Memories. Missing baselines, rebases, older imported commits,
 empty/net-zero tree changes, non-UTF8/oversized objects and interruptions do not become verified Git outcomes.
+
+## Coverage and discovery summaries
+
+Registration alone is `registered`, not a captured conversation. Capture receipts,
+`GET /api/v2/codex/session`, Object reads and the Chat UI expose coverage and the
+recovery action. `text_messages` means visible text observed from activation;
+attachments and earlier history are excluded. Missing or replaced originals are
+`unavailable` pending verified identity/coverage reconciliation; no history is
+invented or rebound. Receipt-only Git batches preserve established coverage.
+
+The existing curator generates incremental Chat titles/descriptions from each
+bounded visible-message window. Metadata and its last-message checkpoint are
+journaled together; retrying unchanged input does not repeat summary inference.
+Protected or manually edited Chat metadata is preserved. Oversized summary windows
+produce a `chat_summary_deferred` trace with no summary model call. The original
+messages remain unchanged. Summary generation uses an additional bounded model
+request only when the window and metadata are eligible.
+
+Roll out the compatible server before updating host bridge/client packages: the
+bridge now includes optional `coverage` and the reader accepts `note_windows`.
+Keep routing, activation cursors and session identities unchanged during rollout.
+
+## Mixed-version capture destinations
+
+Upgrade each destination server before setting `capture_coverage: true` on its
+host bridge target configuration. The default is false for compatibility with
+older servers that reject unknown capture fields. Local coverage and queued
+payloads remain intact; only the additive wire field is omitted for legacy
+destinations. Keep repository bindings, activation cursors and destination
+identity unchanged. This allows one destination to adopt coverage reporting
+without upgrading other servers served by the same bridge.

@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         help='JSON object with "artifact_id" and optional "offset" and "limit".',
     )
+    parser.add_argument("--note-window", action="append", help='JSON object with "object_id" and optional "offset" and "limit".')
     return parser
 
 
@@ -41,6 +42,7 @@ def app(argv: list[str] | None = None) -> None:
         lambda: _client().context_read(
             values.object_ids,
             include=values.include,
+            note_windows=[json.loads(value) for value in values.note_window or []],
             artifact_windows=[
                 json.loads(value) for value in values.artifact_window or []
             ],

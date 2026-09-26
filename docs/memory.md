@@ -57,3 +57,25 @@ the whole run atomically; a newer edit causes a conflict rather than an overwrit
 Undo does not erase the journal. Capture's processed event key survives undo, so
 it cannot recreate the same retired event on its next tick. Pause maintenance
 with `MEMORY_DREAM_MODE=off` before investigating quality regressions.
+
+## Metadata and event policy v2
+
+The `metadata-events-v2` checkpoint reconsiders eligible legacy revisions once.
+Successful unchanged reviews make no further model call. Missing, oversized or
+incomplete evidence is recorded as `deferred`, never `reviewed`, with at most
+three attempts per revision and policy. Inspect those Run reasons before any
+claim of complete cleanup. A graph exceeding the bounded input is also deferred.
+Manual edits, protection and `memory_locked` still exclude a Memory.
+
+Task review/completion transitions require a new result reference in the committed
+brief and link the actual Task in the same transaction as the Memory. The event
+records submission or recorded completion, not inferred merge, deployment or
+acceptance. Later committed result references can supply evidence for an unchanged
+Task status. Unsupported Task events remain deferred receipts until a later
+supported update; an old immutable event is never rewritten into success.
+
+New Git receipts are technical Run evidence only. A legacy Git Memory is eligible
+only when its original completed capture Run identifies that exact Memory, actor,
+provenance and proof digest. The adapter supplies the verified observation's narrow
+meaning to maintenance; actor allowlisting alone cannot enable edits. Retirement
+retains receipts and supports the existing Run undo.

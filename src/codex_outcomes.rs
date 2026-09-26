@@ -110,7 +110,7 @@ pub async fn capture(
     chat: Uuid,
     receipt: &GitReceipt,
 ) -> Result<Option<Uuid>, DbError> {
-    let subject = verify(receipt)?;
+    verify(receipt)?;
     let last = &receipt.commits.last().expect("verified nonempty").oid;
     let key = format!("codex-git:{host}:{repository}:{last}");
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
@@ -127,7 +127,6 @@ pub async fn capture(
         return Ok(None);
     }
     let run = Uuid::new_v4();
-    let memory = Uuid::new_v4();
     let evidence = json!({"source_type":"codex_git_commit","repository":repository,"host_id":host,"turn_id":receipt.turn_id,"baseline":receipt.baseline,"commits":receipt.commits.iter().map(|c| &c.oid).collect::<Vec<_>>(),"observation":"allowlisted worktree HEAD advanced during the turn; no authorship or test claim"});
     // Retain identifiers and proof digest, not raw authors/emails/signatures/messages.
     let digest = format!(
@@ -136,31 +135,14 @@ pub async fn capture(
     );
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,chat_object_id,primary_object_id,input,result,completed_at) VALUES($1,'memory_capture','completed','system',$2,$3,$4,NULL,$5,'{}',now())")
         .bind(run).bind(&actor.actor_id).bind(key).bind(chat).bind(json!({"evidence":evidence,"proof_sha256":digest})).execute(&mut **tx).await?;
-    let title = format!("Recorded commit {} in {repository}", &last[..12]);
-    let description = format!(
-        "The {repository} worktree gained {} commit(s), ending at {} with subject “{subject}”.",
-        receipt.commits.len(),
-        &last[..12]
-    );
-    let description = crate::domain::object_description(&title, description)?;
-    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'memory',$2,$3,'system',$4,'system',$4,$5)")
-        .bind(memory).bind(title).bind(description).bind(&actor.actor_id).bind(&evidence).execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,now())")
-        .bind(memory)
-        .execute(&mut **tx)
-        .await?;
-    super::codex::journal(tx, actor, run, "object", memory).await?;
-    let connection = Uuid::new_v4();
-    sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,$2,'derived_from',$3,'The trusted desktop adapter observed this Git change during the linked Chat turn.','system',$4,'system',$4,$5)")
-        .bind(connection).bind(memory).bind(chat).bind(&actor.actor_id).bind(evidence).execute(&mut **tx).await?;
-    super::codex::journal(tx, actor, run, "connection", connection).await?;
-    sqlx::query("UPDATE runs SET primary_object_id=$2,result=$3 WHERE id=$1")
+    // Git movement is technical evidence, never a standalone semantic outcome.
+    // Keep the existing run kind/key so retries also recognise legacy receipts.
+    sqlx::query("UPDATE runs SET result=$2 WHERE id=$1")
         .bind(run)
-        .bind(memory)
-        .bind(json!({"memory_id":memory}))
+        .bind(json!({"evidence_only":true,"reason":"Git observation does not establish a contextual Task milestone"}))
         .execute(&mut **tx)
         .await?;
-    Ok(Some(memory))
+    Ok(None)
 }
 
 #[cfg(test)]

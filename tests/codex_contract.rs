@@ -325,7 +325,7 @@ async fn credentials_targets_and_system_objects_are_separate() {
 }
 
 #[tokio::test]
-async fn git_receipts_are_verified_deduplicated_and_reversible() {
+async fn git_receipts_are_verified_deduplicated_technical_evidence() {
     use sha1::{Digest, Sha1};
     let Some(pool) = pool().await else { return };
     let (app, cfg) = setup(pool.clone(), true).await;
@@ -351,20 +351,10 @@ async fn git_receipts_are_verified_deduplicated_and_reversible() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{result}");
-    let memory: Uuid = result["data"]["outcome_memory_ids"][0]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-    let (description, actor): (String, String) =
-        sqlx::query_as("SELECT description,created_by_id FROM objects WHERE id=$1")
-            .bind(memory)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(description.contains("Add capture recovery"));
-    assert!(actor.starts_with("codex-capture:"));
-    assert!(!description.contains("passed"));
+    assert_eq!(result["data"]["outcome_memory_ids"], json!([]));
+    let receipts: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE kind='memory_capture' AND actor_id=$1 AND result->>'evidence_only'='true' AND primary_object_id IS NULL")
+        .bind(format!("codex-capture:{}",cfg.host_id)).fetch_one(&pool).await.unwrap();
+    assert_eq!(receipts, 1);
     b["batch_id"] = json!(Uuid::new_v4());
     let (_, replayed) = response(
         app.clone(),
@@ -378,6 +368,10 @@ async fn git_receipts_are_verified_deduplicated_and_reversible() {
     )
     .await;
     assert_eq!(replayed["data"]["outcome_memory_ids"], json!([]));
+    assert_eq!(
+        replayed["data"]["capture_coverage"],
+        result["data"]["capture_coverage"]
+    );
     b["batch_id"] = json!(Uuid::new_v4());
     b["git_receipts"][0]["commits"][0]["raw"] = json!("Forged completion evidence");
     assert_eq!(
@@ -395,22 +389,6 @@ async fn git_receipts_are_verified_deduplicated_and_reversible() {
         .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let run: Uuid = sqlx::query_scalar(
-        "SELECT id FROM runs WHERE kind='memory_capture' AND primary_object_id=$1",
-    )
-    .bind(memory)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let undo = centaur_context::dreaming::undo(&pool, run).await.unwrap();
-    assert_eq!(undo["changes"], 2);
-    let archived: bool =
-        sqlx::query_scalar("SELECT archived_at IS NOT NULL FROM objects WHERE id=$1")
-            .bind(memory)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(archived);
 }
 
 #[tokio::test]
@@ -438,4 +416,115 @@ async fn long_codex_turns_queue_bounded_windows() {
     let counts:Vec<i32>=sqlx::query_scalar("SELECT (r.input->>'message_count')::integer FROM runs r JOIN chats c ON c.object_id=r.chat_object_id WHERE r.kind='curator' AND c.provider='codex' AND c.workspace_id=$1 AND c.thread_id=$2 ORDER BY r.created_at,r.id")
         .bind(cfg.host_id.to_string()).bind(sid.to_string()).fetch_all(&pool).await.unwrap();
     assert_eq!(counts, vec![100, 50]);
+}
+
+#[tokio::test]
+async fn curator_summarizes_new_visible_window_once_and_preserves_messages() {
+    let Some(admin) = pool().await else {
+        return;
+    };
+    let name = format!("centaur_context_test_summary_{}", Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let options = std::env::var("TEST_DATABASE_URL")
+        .unwrap()
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .unwrap()
+        .database(&name);
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    db::migrate(&pool).await.unwrap();
+    let (app, cfg) = setup(pool.clone(), true).await;
+    let sid = Uuid::new_v4();
+    let (_, captured) = response(
+        app,
+        request(
+            "/api/v2/codex/capture",
+            &cfg.capture_token,
+            sid,
+            "organization",
+            Some(batch()),
+        ),
+    )
+    .await;
+    let chat: Uuid = captured["data"]["chat_object_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let run: Uuid = captured["data"]["curator_run_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let mock=axum::Router::new().route("/",axum::routing::post(move |axum::Json(body):axum::Json<Value>| {
+        let counter=counter.clone(); async move {
+            counter.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            let summary=body["messages"][0]["content"].as_str().unwrap_or_default().starts_with("Summarize");
+            let output=if summary {json!({"title":"Release review decision","description":"The owner discussed release timing and recorded the review decision."})} else {json!({"create_objects":[],"create_connections":[],"update_objects":[],"update_connections":[]})};
+            axum::Json(json!({"choices":[{"message":{"content":output.to_string()}}]}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "test-token".into(),
+        model: "test-model".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_millis(30),
+        request_timeout: std::time::Duration::from_secs(3),
+    };
+    let worker = tokio::spawn(centaur_context::curator::run_worker(
+        pool.clone(),
+        None,
+        config,
+        TextSearchConfig::SIMPLE,
+        vec!["codex".into()],
+    ));
+    let mut status = String::new();
+    for _ in 0..100 {
+        status = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        if status == "completed" || status == "failed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    let result: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM runs r WHERE id=$1")
+        .bind(run)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "completed", "{result}");
+    let object = db::get_object(&pool, chat).await.unwrap();
+    assert_eq!(object.title, "Release review decision");
+    assert!(object.provenance["chat_summary_through_message_id"].is_string());
+    assert_eq!(db::list_chat_messages(&pool, chat).await.unwrap().len(), 2);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    worker.abort();
+    server.abort();
+}
+
+#[test]
+fn legacy_capture_hash_shape_does_not_gain_absent_coverage() {
+    let original = batch();
+    let decoded: centaur_context::codex::CaptureBatch = serde_json::from_value(original).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert!(encoded.get("coverage").is_none());
 }

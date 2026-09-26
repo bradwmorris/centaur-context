@@ -9,11 +9,14 @@ from .tool_common import print_json, read_json_object, run
 
 
 DESCRIPTION_EXAMPLES = {
-    "task": "Define and test the Object-description contract across every write path. Created from Issue #51 to keep retrieval summaries explicit and current.",
-    "entity": "Jane Lee, a researcher working on agent-memory evaluation. Relevant as the speaker in the Source supporting the retrieval design.",
-    "source": "A YouTube interview with Jane Lee about retrieval evaluation for agent memory. Added as evidence for the semantic-search design decision.",
+    "task": "Define and test concise Object descriptions across creation, capture and maintenance paths.",
+    "entity": "Jane Lee studies how agents retain and retrieve useful memories.",
+    "source": "An interview with Jane Lee comparing retrieval evaluation methods for agent memory.",
     "note": "The current embedding trigger already invalidates vectors after title or description changes. Recorded to prevent a redundant re-indexing subsystem.",
-    "theme": "Work concerning how canonical Objects are found and ranked. Used to group decisions, tests, and Sources about retrieval quality.",
+    "theme": "How canonical Objects are found and ranked using their titles, descriptions and relationships.",
+    "chat": "Alex and a research assistant compared retrieval methods and selected a metadata-only evaluation plan.",
+    "user": "A research assistant that helps review sources and prepare evidence-backed notes.",
+    "memory": "Alex approved the retrieval evaluation plan after reviewing its synthetic test cases."
 }
 
 EXAMPLE_DOCUMENT = {
@@ -30,7 +33,7 @@ EXAMPLE_DOCUMENT = {
     },
     "description_policy": {
         "max_unicode_characters_after_trimming": 600,
-        "guidance": "Current snapshot, not a log: say what the Object is and why it matters in this Context now.",
+        "guidance": "Current snapshot, not a log: identify the concrete subject and add concise distinguishing facts. Entity identity belongs in metadata; relationship context belongs on Connections.",
         "examples": DESCRIPTION_EXAMPLES,
     },
     "create_and_connect": {

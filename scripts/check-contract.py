@@ -125,9 +125,9 @@ def main() -> int:
         fail("canonical Object description maximum must be 600 Unicode characters")
     if contract["limits"]["description_characters"] != policy["max_characters"]:
         fail("description limit drifted from the canonical policy")
-    expected_examples = EXPECTED_WRITABLE
+    expected_examples = EXPECTED_TYPES
     if set(policy["examples"]) != expected_examples:
-        fail("description examples must cover every interactive Object type")
+        fail("description examples must cover every Object type")
     instructions = INSTRUCTIONS.read_text()
     if RUNTIME_INSTRUCTIONS.read_text() != instructions:
         fail("runtime Context instructions drifted from the generated fragment")

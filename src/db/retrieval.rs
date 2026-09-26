@@ -115,7 +115,9 @@ pub async fn context_subtypes(
                         'brief_markdown',t.brief_markdown,'execution_actor_id',t.execution_actor_id))
                     WHEN 'chat' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','chat','provider',ch.provider,'surface_kind',ch.surface_kind,
-                        'channel_name',ch.channel_name,'current_thread',o.id=$2))
+                        'channel_name',ch.channel_name,'current_thread',o.id=$2,
+                        'capture_coverage',CASE WHEN ch.provider='codex' THEN COALESCE(o.provenance->>'capture_coverage',CASE WHEN EXISTS(SELECT 1 FROM chat_messages captured WHERE captured.chat_object_id=o.id) THEN 'partial' ELSE 'registered' END) END,
+                        'capture_recovery_action',o.provenance->>'capture_recovery_action'))
                     WHEN 'user' THEN jsonb_strip_nulls(jsonb_build_object(
                         'kind','user','user_kind',u.user_kind,
                         'display_name',identity.display_name))
@@ -132,6 +134,9 @@ pub async fn context_subtypes(
                         'current_artifact_id',s.current_artifact_id))
                     WHEN 'note' THEN jsonb_build_object(
                         'kind','note','content_format',n.content_format,
+                        'intent',n.intent,'source_artifact_id',n.source_artifact_id,
+                        'source_locator',n.source_locator,'content_characters',char_length(n.content),
+                        'content_truncated',char_length(n.content)>400,
                         'content_excerpt',substring(n.content FROM 1 FOR 400))
                     WHEN 'theme' THEN jsonb_build_object(
                         'kind','theme','slug',th.slug)
@@ -169,6 +174,26 @@ pub async fn full_text_candidates(
     text_search_config: crate::config::TextSearchConfig,
     query_text: &str,
     kind: Option<&str>,
+    limit: i64,
+    with_connection_count: bool,
+) -> Result<Vec<SearchCandidate>, DbError> {
+    full_text_candidates_filtered(
+        pool,
+        text_search_config,
+        query_text,
+        &kind.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+        limit,
+        with_connection_count,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn full_text_candidates_filtered(
+    pool: &PgPool,
+    text_search_config: crate::config::TextSearchConfig,
+    query_text: &str,
+    kinds: &[String],
     limit: i64,
     with_connection_count: bool,
 ) -> Result<Vec<SearchCandidate>, DbError> {
@@ -212,8 +237,8 @@ pub async fn full_text_candidates(
             .push("::regconfig, coalesce(o.description,'')), 'B'))");
     }
     query.push(" @@ search_query.value");
-    if let Some(kind) = kind {
-        query.push(" AND o.kind=").push_bind(kind);
+    if !kinds.is_empty() {
+        query.push(" AND o.kind=ANY(").push_bind(kinds).push(")");
     }
     query
         .push(" ORDER BY relevance DESC, o.updated_at DESC, o.id LIMIT ")
@@ -299,6 +324,32 @@ pub async fn semantic_candidates(
     limit: i64,
     with_connection_count: bool,
 ) -> Result<Vec<SearchCandidate>, DbError> {
+    semantic_candidates_filtered(
+        pool,
+        vector,
+        model,
+        dimensions,
+        format_version,
+        input_mode,
+        &kind.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+        limit,
+        with_connection_count,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn semantic_candidates_filtered(
+    pool: &PgPool,
+    vector: &[f32],
+    model: &str,
+    dimensions: i32,
+    format_version: &str,
+    input_mode: &str,
+    kinds: &[String],
+    limit: i64,
+    with_connection_count: bool,
+) -> Result<Vec<SearchCandidate>, DbError> {
     let vector = vector_literal(vector);
     let mut query = QueryBuilder::<Postgres>::new(
         r#"SELECT o.id, o.kind, o.title, o.description, o.protected, CASE WHEN o.archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
@@ -341,8 +392,8 @@ pub async fn semantic_candidates(
         .push_bind(format_version)
         .push(" AND e.input_mode=")
         .push_bind(input_mode);
-    if let Some(kind) = kind {
-        query.push(" AND o.kind=").push_bind(kind);
+    if !kinds.is_empty() {
+        query.push(" AND o.kind=ANY(").push_bind(kinds).push(")");
     }
     query
         .push(" ORDER BY e.embedding::vector(")

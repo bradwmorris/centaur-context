@@ -22,7 +22,7 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
         .bind(Uuid::new_v4()).bind(CAPTURE_ACTOR).execute(&mut *tx).await?;
     let events: Vec<Value> = sqlx::query_scalar(
         "SELECT to_jsonb(e) FROM object_events e JOIN runs r ON r.id=e.run_id \
-         WHERE e.target_type='object' AND e.action='created' \
+         WHERE e.target_type='object' AND (e.action='created' OR (e.action IN ('updated','task_status_changed') AND e.after_state->>'kind'='task')) \
          AND e.after_state->>'kind' IN ('task','source','note') AND r.status='completed' \
          AND e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') \
          AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='memory_capture' AND done.idempotency_key=e.id::text) \
@@ -47,10 +47,14 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
         .await?;
         // Explicitly synthetic/imported traffic is not new human activity. Unknown
         // or legacy snapshots are safely skipped rather than fabricated.
-        if !active || !eligible_outcome(object) {
+        let milestone = task_milestone(&event);
+        if !active
+            || !eligible_outcome(object)
+            || (event["action"] != "created" && milestone.is_none())
+        {
             sqlx::query("UPDATE runs SET result=$2 WHERE id=$1")
                 .bind(run_id)
-                .bind(json!({"skipped":"ineligible, synthetic, imported or archived"}))
+                .bind(if active && eligible_outcome(object) && event["action"] != "created" {json!({"deferred":"Task event has no new committed result reference or supported review/completion milestone; preserve the event and wait for a later evidenced Task update"})} else {json!({"skipped":"ineligible, synthetic, imported or archived"})})
                 .execute(&mut *tx)
                 .await?;
             continue;
@@ -77,13 +81,27 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
         } else {
             "An agent".into()
         };
-        let verb = if kind == "task" { "created" } else { "added" };
+        let verb = milestone
+            .as_ref()
+            .map(|(verb, _)| *verb)
+            .unwrap_or(if kind == "task" { "created" } else { "added" });
         let memory_id = Uuid::new_v4();
-        let memory_title = format!("Added {}", title.chars().take(270).collect::<String>());
-        let description = format!("{actor_name} {verb} a {kind}: {title}.");
+        let memory_title = format!(
+            "{}: {}",
+            milestone
+                .as_ref()
+                .map(|(_, label)| *label)
+                .unwrap_or("Added"),
+            title.chars().take(260).collect::<String>()
+        );
+        let description = if milestone.is_some() {
+            format!("{actor_name} {verb}: {title}.")
+        } else {
+            format!("{actor_name} {verb} a {kind}: {title}.")
+        };
         let description = crate::domain::object_description(&memory_title, description)?;
         let provenance = json!({"source_type":"context_memory_event","source_event_id":event_id,
-            "source_run_id":event["run_id"],"actor_type":actor_type,"actor_id":actor_id});
+            "source_run_id":event["run_id"],"actor_type":actor_type,"actor_id":actor_id,"task_object_id":if kind=="task" {Some(target)} else {None},"event_action":event["action"]});
         sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance) VALUES($1,'memory',$2,$3,'system',$4,'system',$4,$5)")
             .bind(memory_id).bind(memory_title).bind(description).bind(CAPTURE_ACTOR).bind(provenance).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,$2::text::timestamptz)")
@@ -95,7 +113,10 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
         let mut links = vec![(
             target,
             "about",
-            format!("Records the committed creation of this {kind}."),
+            format!(
+                "Records the committed {} event for this {kind}.",
+                event["action"].as_str().unwrap_or("change")
+            ),
         )];
         if identities.len() == 1 {
             links.push((
@@ -121,6 +142,37 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
     }
     tx.commit().await?;
     Ok(count)
+}
+
+/// A committed transition proves the recorded milestone, not deployment or acceptance.
+/// Preserve its complete snapshot as evidence; unchanged status/unsupported states do not emit.
+fn task_milestone(event: &Value) -> Option<(&'static str, &'static str)> {
+    let after = &event["after_state"];
+    if after["kind"] != "task" || event["action"] == "created" {
+        return None;
+    }
+    let status = after["subtype"]["status"].as_str()?;
+    let brief = after["subtype"]["brief_markdown"].as_str()?;
+    // Outcome transitions without a committed result reference are deferred.
+    let prior = event["before_state"]["subtype"]["brief_markdown"]
+        .as_str()
+        .unwrap_or_default();
+    let new_reference = brief.split_whitespace().any(|word| {
+        (word.contains("https://") || word.contains("http://")) && !prior.contains(word)
+    });
+    if !new_reference {
+        return None;
+    }
+    let unchanged_status = event["before_state"]["subtype"]["status"] == status;
+    match status {
+        "review" | "done" if unchanged_status => Some((
+            "recorded new result evidence for the task",
+            "Result evidence recorded",
+        )),
+        "review" => Some(("submitted for review the task", "Submitted for review")),
+        "done" => Some(("recorded completion of the task", "Completion recorded")),
+        _ => None,
+    }
 }
 
 fn eligible_outcome(object: &Value) -> bool {
@@ -202,6 +254,23 @@ pub async fn run_capture_worker(pool: PgPool, enabled: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn task_milestones_require_changed_status_and_committed_evidence() {
+        let mut event = json!({"action":"updated","before_state":{"subtype":{"status":"doing"}},"after_state":{"kind":"task","subtype":{"status":"review","brief_markdown":"Result: https://example.invalid/pull/1"}}});
+        assert_eq!(task_milestone(&event).unwrap().1, "Submitted for review");
+        event["before_state"]["subtype"]["status"] = json!("review");
+        assert_eq!(
+            task_milestone(&event).unwrap().1,
+            "Result evidence recorded"
+        );
+        event["before_state"]["subtype"]["brief_markdown"] =
+            event["after_state"]["subtype"]["brief_markdown"].clone();
+        assert!(task_milestone(&event).is_none());
+        event["before_state"]["subtype"]["status"] = json!("doing");
+        event["after_state"]["subtype"]["brief_markdown"] = json!("No committed evidence");
+        assert!(task_milestone(&event).is_none());
+    }
+
     #[test]
     fn explicit_test_and_import_events_are_not_activity() {
         for title in ["TEST — saved source", "Synthetic example", "Fixture user"] {

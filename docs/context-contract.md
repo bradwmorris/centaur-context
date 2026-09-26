@@ -94,3 +94,29 @@ workflow-only listener now includes owner, due date and brief in its exact repla
 comparison. Rollback may restore a prior binary for unrelated reads, but writers
 must retain the required fields; do not remove constraints or overwrite history
 to make an incompatible producer succeed.
+
+## Metadata quality and explicit Note evidence
+
+Ordinary lexical and semantic discovery uses Object kind, title and description;
+body-only words in Notes, messages or Artifacts intentionally do not create
+matches. Requested kinds filter candidates before limits and hybrid ranking.
+Titles identify concrete subjects. Descriptions add concise, supported facts;
+Entity identity belongs in metadata and Source participation on Connections.
+The contract's examples cover every kind, including system-managed Objects.
+
+`context_read` returns Note intent, source Artifact and locator in `subtype`, plus
+an initial `note_content` window of at most 8,000 Unicode characters. Read the
+rest with `note_windows: [{"object_id":"…","offset":8000,"limit":20000}]`.
+The Object must also appear in `object_ids`. Each window reports offsets, total
+characters, `truncated`, `next_offset` and whether it is the complete body.
+Offsets count Unicode characters, not bytes. The CLI exposes `--note-window`.
+Research documents are working `research_notes` Artifacts attached to Sources;
+Notes remain canonical Idea/Excerpt/Fact Objects. Stored keys and versions do not change.
+
+Authenticated audit clients can use `GET /api/v2/audit/objects` and
+`GET /api/v2/audit/connections` with `limit` (1–200), UUID `cursor`, and optional
+`lifecycle=active|archived`. Follow `next_cursor` until null. These routes reuse
+the maintenance inventory reader on the agent/session-bound listener without
+granting maintenance writes. Inventory includes metadata/provenance, not original
+Note bodies or transcripts; use explicit reads for selected evidence. Record
+the collection interval because concurrent writes can change the live inventory.
