@@ -6,7 +6,7 @@ import { artifactPath, detailPath, interceptNavigation, navigate, workingDocumen
 import type { Artifact, SharedObject } from "./types";
 import "./artifactWorkspace.css";
 
-type ParentSection = "sources" | "notes";
+type ParentSection = "objects" | "sources" | "notes";
 type Target = { kind: "latest" | "exact"; id: string };
 const WINDOW_SIZE = 20_000;
 
@@ -160,7 +160,8 @@ export function ArtifactReader({ section, objectId, target, refreshKey }: { sect
   useEffect(() => { if (!dirty) void load(); }, [load, refreshKey]);
 
   const document = useMemo(() => snapshot?.artifacts ? artifactDocuments(snapshot.artifacts).find((item) => target.kind === "latest" ? item.key === target.id : item.history.some((artifact) => artifact.id === target.id)) : null, [snapshot, target.kind, target.id]);
-  const artifact = target.kind === "exact" ? document?.history.find((item) => item.id === target.id) : document?.latest;
+  const artifact = section === "objects" && snapshot && snapshot.object.kind !== "source" && snapshot.object.kind !== "note"
+    ? undefined : target.kind === "exact" ? document?.history.find((item) => item.id === target.id) : document?.latest;
   const latest = Boolean(artifact && document && artifact.id === document.latest.id && target.kind === "latest");
 
   useEffect(() => {

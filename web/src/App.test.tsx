@@ -1,3 +1,4 @@
+import { createHash, webcrypto } from "node:crypto";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -27,6 +28,36 @@ beforeEach(() => {
 });
 
 describe("minimal canonical UI", () => {
+  it.each(["source", "note"] as const)("opens %s artifacts from the canonical Objects collection and returns there", async (kind) => {
+    const object = { ...source, id: `${kind}-canonical`, kind, title: `Synthetic ${kind}` };
+    const content = `Complete ${kind} artifact body`;
+    const artifact = {
+      id: `${kind}-artifact`, object_id: object.id, kind: "transcript", title: `Synthetic ${kind} artifact`,
+      uri: null, media_type: "text/plain", language: "en", sha256: createHash("sha256").update(content).digest("hex"),
+      size_bytes: Buffer.byteLength(content), capture_outcome: "complete", capture_reason: null,
+      metadata: {}, supersedes_artifact_id: null, captured_at: null, created_at: now,
+    };
+    vi.stubGlobal("crypto", webcrypto);
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.includes("/api/v2/objects?")) return envelope([object]);
+      if (path === `/api/v2/objects/${object.id}`) return envelope(object);
+      if (path === `/api/v2/objects/${object.id}/artifacts`) return envelope([artifact]);
+      if (path.startsWith(`/api/v2/artifacts/${artifact.id}/content?`)) return envelope({ ...artifact, text: content, offset: 0, next_offset: null });
+      return defaultFetch(input, init);
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: `Open ${object.title}` }));
+    expect(await screen.findByRole("link", { name: /Synthetic .* artifact/ })).toHaveAttribute("href", `/objects/${object.id}/artifacts/${artifact.id}`);
+    fireEvent.click(screen.getByRole("link", { name: /Synthetic .* artifact/ }));
+    expect(await screen.findByText(content)).toBeInTheDocument();
+    expect(window.location.pathname).toBe(`/objects/${object.id}/artifacts/${artifact.id}`);
+    fireEvent.click(screen.getByRole("link", { name: "← Back to Object" }));
+    expect(window.location.pathname).toBe(`/objects/${object.id}`);
+    expect(await screen.findByRole("link", { name: /Synthetic .* artifact/ })).toBeInTheDocument();
+  });
+
   it("keeps Runs and adds Evals as a bottom navigation surface", async () => {
     render(<App />);
     expect(await screen.findByRole("button", { name: "Runs" })).toBeInTheDocument();

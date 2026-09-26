@@ -222,7 +222,7 @@ export default function App() {
             </div>
             </>}
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "objects" || section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}
         </div>
       </section>
@@ -712,6 +712,7 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
 
 function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; onChanged: () => Promise<void>; refreshKey: number }) {
   const [item, setItem] = useState<SharedObject | null>(null);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -720,7 +721,15 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
   const serialize = useSerializedSave();
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
-    try { const [nextItem, nextConnections, nextEvents] = await Promise.all([api.object(id), api.connections(id), api.events(id)]); if (generation !== loadGeneration.current) return; revision.current = nextItem.revision; setItem(nextItem); setConnections(nextConnections); setEvents(nextEvents); setError(null); }
+    try {
+      const nextItem = await api.object(id);
+      const [nextConnections, nextEvents, nextArtifacts] = await Promise.all([
+        api.connections(id), api.events(id),
+        nextItem.kind === "source" || nextItem.kind === "note" ? api.artifacts(id) : Promise.resolve([]),
+      ]);
+      if (generation !== loadGeneration.current) return;
+      revision.current = nextItem.revision; setItem(nextItem); setConnections(nextConnections); setEvents(nextEvents); setArtifacts(nextArtifacts); setError(null);
+    }
     catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
   }, [id, refreshKey]);
   useEffect(() => { void load(); }, [load]);
@@ -751,6 +760,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       {error && <p className="form-error">{error}</p>}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
+      {(item.kind === "source" || item.kind === "note") && <Artifacts section="objects" objectId={id} artifacts={artifacts} onCreated={load} />}
       <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} includeThread />
       <Provenance value={item.provenance} />
