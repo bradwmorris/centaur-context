@@ -104,6 +104,7 @@
     "protected_notes_allow_archive_with_exact_complete_research_notes_manifest": true,
     "protected_note_connections_must_archive_in_same_batch_before_note": true,
     "protected_sources_allow_note_derivation_and_task_about_connections": true,
+    "protected_sources_and_entities_allow_only_creation_of_involves_about_or_related_to_research_links": true,
     "source_canonical_artifact_promotion_is_ingestion_only": true,
     "exact_connection_repeat_is_replay": true,
     "different_connection_assertion_merges_provenance": true

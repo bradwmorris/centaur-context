@@ -1576,3 +1576,340 @@ async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations(
         );
     }
 }
+
+#[tokio::test]
+async fn protected_research_connections_are_creation_only_and_endpoint_scoped() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("skipping protected research Connection contract: TEST_DATABASE_URL is not set");
+        return;
+    };
+
+    let source_ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    let entity_ids = [
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    ];
+    let archived_entity = Uuid::new_v4();
+    let chat = Uuid::new_v4();
+    let mut seed = pool.begin().await.unwrap();
+    for (id, kind, protected) in [
+        (source_ids[0], "source", true),
+        (source_ids[1], "source", false),
+        (source_ids[2], "source", true),
+        (entity_ids[0], "entity", false),
+        (entity_ids[1], "entity", true),
+        (entity_ids[2], "entity", true),
+        (entity_ids[3], "entity", false),
+        (archived_entity, "entity", true),
+        (chat, "chat", true),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,'Protected-link synthetic fixture','Synthetic protected Connection boundary test.',$3,'system','protected-link-test','system','protected-link-test')")
+            .bind(id).bind(kind).bind(protected).execute(&mut *seed).await.unwrap();
+        if kind == "source" {
+            sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES($1,'article')")
+                .bind(id)
+                .execute(&mut *seed)
+                .await
+                .unwrap();
+        } else if kind == "entity" {
+            sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'person')")
+                .bind(id)
+                .execute(&mut *seed)
+                .await
+                .unwrap();
+        } else if kind == "chat" {
+            sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
+                .bind(id)
+                .execute(&mut *seed)
+                .await
+                .unwrap();
+        }
+    }
+    sqlx::query("UPDATE objects SET archived_at=now() WHERE id=$1")
+        .bind(archived_entity)
+        .execute(&mut *seed)
+        .await
+        .unwrap();
+    let protected_edge = Uuid::new_v4();
+    sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,'involves',$3,'A preexisting synthetic protected attribution.',true,'system','protected-link-test','system','protected-link-test')")
+        .bind(protected_edge).bind(source_ids[0]).bind(entity_ids[3]).execute(&mut *seed).await.unwrap();
+    seed.commit().await.unwrap();
+
+    let token = "p".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let send = |operation: Value, key: String, validate_only: bool| {
+        let app = app.clone();
+        let token = token.clone();
+        async move {
+            app.oneshot(request(
+                "POST",
+                "/api/v2/apply",
+                &token,
+                json!({
+                    "contract_version":"1.1.0", "idempotency_key":key,
+                    "validate_only":validate_only, "operations":[operation]
+                }),
+            ))
+            .await
+            .unwrap()
+        }
+    };
+    let connection = |source, kind: &str, target, description: &str| {
+        json!({
+            "operation":"create_connection", "source":{"object_id":source},
+            "kind":kind, "target":{"object_id":target}, "description":description
+        })
+    };
+
+    let tracked_objects = [
+        source_ids[0],
+        source_ids[1],
+        source_ids[2],
+        entity_ids[0],
+        entity_ids[1],
+        entity_ids[2],
+        entity_ids[3],
+    ];
+    let revisions_before: Vec<(Uuid, i64, String, String, bool)> = sqlx::query_as(
+        "SELECT id,revision,title,description,protected FROM objects WHERE id=ANY($1) ORDER BY id",
+    )
+    .bind(tracked_objects)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    // Each allowed shape works with either endpoint protected, and with both protected.
+    let allowed = [
+        (
+            source_ids[0],
+            "involves",
+            entity_ids[0],
+            "A protected Source involves a synthetic guest.",
+        ),
+        (
+            source_ids[1],
+            "about",
+            entity_ids[1],
+            "A synthetic publication is about a protected speaker.",
+        ),
+        (
+            source_ids[2],
+            "involves",
+            entity_ids[2],
+            "A protected Source involves a protected guest.",
+        ),
+        (
+            source_ids[0],
+            "about",
+            entity_ids[2],
+            "A protected publication is about a protected speaker.",
+        ),
+        (
+            entity_ids[0],
+            "related_to",
+            entity_ids[1],
+            "A synthetic guest is related to a protected host.",
+        ),
+        (
+            entity_ids[1],
+            "related_to",
+            entity_ids[2],
+            "A protected host is related to a protected guest.",
+        ),
+    ];
+    let mut first_edge = None;
+    for (index, (source, kind, target, description)) in allowed.into_iter().enumerate() {
+        let response = send(
+            connection(source, kind, target, description),
+            format!("protected-link-create-{index}-{}", Uuid::new_v4()),
+            false,
+        )
+        .await;
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {body}");
+        let edge = body["data"]["results"][0]["data"]["connection"].clone();
+        assert_eq!(edge["protected"], false);
+        if index == 0 {
+            first_edge = Some(edge);
+        }
+    }
+    let first_edge = first_edge.unwrap();
+    let first_edge_id = first_edge["id"].as_str().unwrap();
+
+    let first_edge_uuid = Uuid::parse_str(first_edge_id).unwrap();
+    let event_count_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE target_type='connection' AND target_id=$1",
+    )
+    .bind(first_edge_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Identical replay reuses the edge. A different assertion cannot alter it.
+    let replay = send(
+        connection(source_ids[0], "involves", entity_ids[0], allowed[0].3),
+        format!("protected-link-replay-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay = json_body(replay).await;
+    assert_eq!(replay["data"]["results"][0]["data"]["reused"], true);
+    let changed = send(
+        connection(
+            source_ids[0],
+            "involves",
+            entity_ids[0],
+            "A different synthetic attribution.",
+        ),
+        format!("protected-link-change-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(changed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let still_same: (i64, String) =
+        sqlx::query_as("SELECT revision,description FROM connections WHERE id=$1")
+            .bind(Uuid::parse_str(first_edge_id).unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        still_same,
+        (
+            first_edge["revision"].as_i64().unwrap(),
+            allowed[0].3.to_owned()
+        )
+    );
+    let event_count_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE target_type='connection' AND target_id=$1",
+    )
+    .bind(first_edge_uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_count_after, event_count_before);
+    let revisions_after: Vec<(Uuid, i64, String, String, bool)> = sqlx::query_as(
+        "SELECT id,revision,title,description,protected FROM objects WHERE id=ANY($1) ORDER BY id",
+    )
+    .bind(tracked_objects)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revisions_after, revisions_before);
+
+    let protected_edge_same = send(
+        connection(
+            source_ids[0],
+            "involves",
+            entity_ids[3],
+            "A preexisting synthetic protected attribution.",
+        ),
+        format!("protected-link-protected-replay-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(protected_edge_same.status(), StatusCode::OK);
+    let protected_edge_change = send(
+        connection(
+            source_ids[0],
+            "involves",
+            entity_ids[3],
+            "A conflicting synthetic attribution.",
+        ),
+        format!("protected-link-protected-change-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(
+        protected_edge_change.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let protected_edge_update = send(
+        json!({"operation":"update_connection","connection_id":protected_edge,"expected_revision":1,"description":"Attempted protected edge edit."}),
+        format!("protected-link-protected-update-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(
+        protected_edge_update.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let protected_edge_archive = send(
+        json!({"operation":"archive_connection","connection_id":protected_edge,"expected_revision":1}),
+        format!("protected-link-protected-archive-{}", Uuid::new_v4()),
+        false,
+    )
+    .await;
+    assert_eq!(
+        protected_edge_archive.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // Validation accepts the new shape while rolling back both the edge and its events.
+    let dry_source = source_ids[2];
+    let dry_target = entity_ids[3];
+    let dry_events_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE target_type='object' AND target_id=ANY($1)",
+    )
+    .bind([dry_source, dry_target])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let dry_run = send(
+        connection(
+            dry_source,
+            "about",
+            dry_target,
+            "A validate-only synthetic attribution.",
+        ),
+        format!("protected-link-dry-{}", Uuid::new_v4()),
+        true,
+    )
+    .await;
+    assert_eq!(dry_run.status(), StatusCode::OK);
+    let dry_count: i64 = sqlx::query_scalar("SELECT count(*) FROM connections WHERE source_object_id=$1 AND kind='about' AND target_object_id=$2 AND archived_at IS NULL")
+        .bind(dry_source).bind(dry_target).fetch_one(&pool).await.unwrap();
+    assert_eq!(dry_count, 0);
+    let dry_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE target_type='object' AND target_id=ANY($1)",
+    )
+    .bind([dry_source, dry_target])
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(dry_events, dry_events_before);
+
+    // The creation exception does not grant endpoint edits, edge edits, or other shapes.
+    let protected_update = send(json!({"operation":"update_object","object_id":source_ids[0],"expected_revision":1,"changes":{"description":"Attempted protected edit."}}), format!("protected-link-object-update-{}", Uuid::new_v4()), false).await;
+    assert_eq!(protected_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let edge_update = send(json!({"operation":"update_connection","connection_id":first_edge_id,"expected_revision":1,"description":"Attempted edge edit."}), format!("protected-link-edge-update-{}", Uuid::new_v4()), false).await;
+    assert_eq!(edge_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    for (source, kind, target) in [
+        (source_ids[0], "derived_from", entity_ids[3]),
+        (source_ids[0], "about", chat),
+        (entity_ids[3], "related_to", source_ids[0]),
+        (source_ids[0], "involves", archived_entity),
+    ] {
+        let rejected = send(
+            connection(source, kind, target, "Unsupported protected-link boundary."),
+            format!("protected-link-reject-{}", Uuid::new_v4()),
+            false,
+        )
+        .await;
+        assert_eq!(
+            rejected.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{kind}"
+        );
+    }
+}
