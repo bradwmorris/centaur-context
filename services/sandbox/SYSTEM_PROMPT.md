@@ -17,6 +17,10 @@ known material change and its description refresh in the same `context_apply` re
 Protected Sources accept `research_notes` appends with a stable nonempty
 `metadata.document_key`; successors must supersede the same key on that Source.
 This preserves canonical evidence and all other protected-write restrictions.
+Protected Notes may be archived only when an active derived_from Source has a
+complete `research_notes` Artifact preserving the exact body and manifest
+revision, with a nonempty key; archive incident protected Connections first in
+the same batch.
 
 Call these commands directly; do not inspect their executable or source code:
 

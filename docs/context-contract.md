@@ -18,9 +18,15 @@ and published at Centaur's generic repository-overlay path
 
 Normal interactive agents may create, update, and archive Tasks, Entities,
 Sources, Notes, and Themes, and may manage explained Connections. Chats, Users,
-Memories, Object Events, and Runs are system-managed. Supporting Artifacts may
-be appended, but only the specialist Source-ingestion path may promote an
-Artifact as a Source's canonical captured content.
+Memories, Object Events, and Runs are system-managed. Protected records reject
+ordinary updates. A protected Note may be archived after a complete
+`research_notes` Artifact on its active derived-from Source preserves the exact
+current Note content and has a nonempty document key plus a matching
+`source_note_manifest` object ID and revision. Archive every incident protected
+Connection earlier in the same atomic `context_apply` batch; its immutable
+archive Event is retained. Other protected archival remains denied. Supporting
+Artifacts may be appended, but only the specialist Source-ingestion path may
+promote an Artifact as a Source's canonical captured content.
 
 New Objects require a meaningful Connection except Insight and Question Notes,
 which may stand alone without a Source, Connection, or originating Chat. Later

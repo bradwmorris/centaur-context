@@ -244,6 +244,7 @@ async fn apply_with_authority(
     let mut event_ids = Vec::new();
     let mut results = Vec::new();
     let mut sequence = 1_i64;
+    let mut archived_connection_ids = BTreeSet::new();
     for operation in &request.operations {
         let before = if authority == WriteAuthority::ReviewedMaintenance {
             let target = match operation {
@@ -288,6 +289,7 @@ async fn apply_with_authority(
             (!request.validate_only).then_some(run_id),
             &mut sequence,
             &mut event_ids,
+            &mut archived_connection_ids,
             authority,
         )
         .await?;
@@ -483,6 +485,7 @@ async fn execute_operation(
     run_id: Option<Uuid>,
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
+    archived_connection_ids: &mut BTreeSet<Uuid>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
     match operation {
@@ -610,8 +613,15 @@ async fn execute_operation(
             object_id,
             expected_revision,
         } => {
-            let value =
-                archive_object(tx, actor, *object_id, *expected_revision, authority).await?;
+            let value = archive_object(
+                tx,
+                actor,
+                *object_id,
+                *expected_revision,
+                authority,
+                archived_connection_ids,
+            )
+            .await?;
             record_event(
                 tx,
                 run_id,
@@ -692,9 +702,16 @@ async fn execute_operation(
             connection_id,
             expected_revision,
         } => {
-            let value =
-                archive_connection(tx, actor, *connection_id, *expected_revision, authority)
-                    .await?;
+            let value = archive_connection(
+                tx,
+                actor,
+                *connection_id,
+                *expected_revision,
+                authority,
+                archived_connection_ids,
+            )
+            .await?;
+            archived_connection_ids.insert(*connection_id);
             record_event(
                 tx,
                 run_id,
@@ -1446,8 +1463,13 @@ async fn archive_object(
     id: Uuid,
     expected_revision: i64,
     authority: WriteAuthority,
+    archived_connection_ids: &BTreeSet<Uuid>,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id, authority, false).await?;
+    let current = if authority == WriteAuthority::Ordinary {
+        lock_archiveable_object(tx, id, authority).await?
+    } else {
+        lock_writable_object(tx, id, authority, false).await?
+    };
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1463,6 +1485,14 @@ async fn archive_object(
             "archive an Object's active Connections first, in the same batch if appropriate".into(),
         ));
     }
+    if current.protected
+        && authority == WriteAuthority::Ordinary
+        && !protected_note_has_preservation_witness(tx, id, archived_connection_ids, None).await?
+    {
+        return Err(DbError::Invalid(
+            "protected Objects cannot be archived through context_apply without a preserved research_notes Artifact".into(),
+        ));
+    }
     sqlx::query(
         r#"UPDATE objects SET archived_at=now(),revision=revision+1,updated_by_type=$3,
            updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2"#,
@@ -1474,6 +1504,96 @@ async fn archive_object(
     .execute(&mut **tx)
     .await?;
     db::target_snapshot(tx, "object", id).await
+}
+
+async fn lock_archiveable_object(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    authority: WriteAuthority,
+) -> Result<Object, DbError> {
+    let object: Object = sqlx::query_as(
+        r#"SELECT id,kind,title,description,protected,
+           CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
+           revision,created_by_type,created_by_id,updated_by_type,updated_by_id,
+           provenance,created_at,updated_at,archived_at
+           FROM objects WHERE id=$1 FOR UPDATE"#,
+    )
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(DbError::NotFound)?;
+    if object.lifecycle != "active" {
+        return Err(DbError::NotFound);
+    }
+    if object.protected && authority == WriteAuthority::Ordinary && object.kind != "note" {
+        return Err(DbError::Invalid(
+            "protected Objects cannot be archived through context_apply".into(),
+        ));
+    }
+    if authority == WriteAuthority::Ordinary {
+        if !contract::interactive_writable(&object.kind) {
+            return Err(DbError::Invalid(format!(
+                "{} Objects are system-managed",
+                object.kind
+            )));
+        }
+        crate::domain::validate_object_description(&object.title, &object.description)?;
+    }
+    Ok(object)
+}
+
+async fn protected_note_has_preservation_witness(
+    tx: &mut Transaction<'_, Postgres>,
+    note_id: Uuid,
+    archived_connection_ids: &BTreeSet<Uuid>,
+    required_source: Option<Uuid>,
+) -> Result<bool, DbError> {
+    let note: Option<(i64, String)> = sqlx::query_as(
+        r#"SELECT o.revision,n.content FROM objects o
+           JOIN notes n ON n.object_id=o.id
+           WHERE o.id=$1 AND o.kind='note' AND o.protected AND o.archived_at IS NULL
+           FOR UPDATE OF o"#,
+    )
+    .bind(note_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((revision, content)) = note else {
+        return Ok(false);
+    };
+    if content.trim().is_empty() {
+        return Ok(false);
+    }
+    let witnesses: Vec<(String, Value)> = sqlx::query_as(
+        r#"SELECT a.content,a.metadata FROM connections c
+           JOIN objects s ON s.id=c.target_object_id AND s.kind='source' AND s.archived_at IS NULL
+           JOIN artifacts a ON a.object_id=s.id AND a.kind='research_notes'
+             AND a.capture_outcome='complete' AND a.content IS NOT NULL
+           WHERE c.source_object_id=$1 AND c.target_object_id=s.id AND c.kind='derived_from'
+             AND (c.archived_at IS NULL OR c.id=ANY($2))
+             AND ($3::uuid IS NULL OR c.target_object_id=$3) AND a.content<>''"#,
+    )
+    .bind(note_id)
+    .bind(archived_connection_ids.iter().copied().collect::<Vec<_>>())
+    .bind(required_source)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(witnesses.into_iter().any(|(body, metadata)| {
+        let key = metadata
+            .get("document_key")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty() && value.trim() == value);
+        let manifested = metadata
+            .get("source_note_manifest")
+            .and_then(Value::as_array)
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry.get("object_id").and_then(Value::as_str)
+                        == Some(note_id.to_string().as_str())
+                        && entry.get("revision").and_then(Value::as_i64) == Some(revision)
+                })
+            });
+        key && manifested && body.contains(&content)
+    }))
 }
 
 async fn validate_endpoints(
@@ -1737,8 +1857,22 @@ async fn archive_connection(
     id: Uuid,
     expected_revision: i64,
     authority: WriteAuthority,
+    archived_connection_ids: &BTreeSet<Uuid>,
 ) -> Result<Connection, DbError> {
-    let current = lock_connection(tx, id, authority).await?;
+    let current: Connection =
+        sqlx::query_as("SELECT * FROM connections WHERE id=$1 AND archived_at IS NULL FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(DbError::NotFound)?;
+    if current.protected
+        && authority == WriteAuthority::Ordinary
+        && !protected_connection_has_note_witness(tx, &current, archived_connection_ids).await?
+    {
+        return Err(DbError::Invalid(
+            "protected Connections require separate authority".into(),
+        ));
+    }
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1752,6 +1886,31 @@ async fn archive_connection(
     .bind(&actor.actor_id)
     .fetch_one(&mut **tx)
     .await?)
+}
+
+async fn protected_connection_has_note_witness(
+    tx: &mut Transaction<'_, Postgres>,
+    connection: &Connection,
+    archived_connection_ids: &BTreeSet<Uuid>,
+) -> Result<bool, DbError> {
+    let note_ids: Vec<Uuid> = sqlx::query_scalar(
+        r#"SELECT id FROM objects WHERE id=ANY($1) AND kind='note' AND protected
+           AND archived_at IS NULL ORDER BY id FOR UPDATE"#,
+    )
+    .bind(vec![
+        connection.source_object_id,
+        connection.target_object_id,
+    ])
+    .fetch_all(&mut **tx)
+    .await?;
+    for note_id in note_ids {
+        if protected_note_has_preservation_witness(tx, note_id, archived_connection_ids, None)
+            .await?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
