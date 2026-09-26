@@ -17,26 +17,37 @@ provenance. Memory writes themselves are never recaptured.
 `MEMORY_DREAM_MODE=preview|apply|off` controls background maintenance. Default is
 `off`; a configured Curator model transport is required when enabled. Start with
 `preview`, inspect the recorded `memory_dream` Runs, then use `apply` after
-verification. `MEMORY_DREAM_INTERVAL_SECONDS` defaults to 3600 (minimum 60).
-There is no new deployment or persistent agent session. The subscription
-transport requires the compatible maintenance schema in the inference broker.
+verification. Review wakes after completed Runs commit (including later capture
+Runs inserted already completed), and after ordinary Object/Connection changes.
+There is no idle review timer. `MEMORY_DREAM_INTERVAL_SECONDS` remains accepted
+for deployment compatibility but no longer schedules review. Startup and listener
+reconnection scan durable pending versions before waiting. This worker runs inside
+Context independently of capture, Slack and Routine Tasks.
 
 One pass considers at most 25 changed generated Memories and 25 exact-event
-neighbors, with bounded evidence and graph reads. The serialized evidence input
-is capped at 24,000 bytes, shrinking the batch before inference. A single record
-that cannot fit is recorded as unchanged, with a reason, so it cannot starve
-later work. The model has one attempt per wake and a 60-second HTTP timeout.
-Subscription inference caps maintenance input at 28,000 bytes and output at
-8,000 bytes, with a 60-second model timeout. These are byte/time limits, not a
-claim of an exact tokenizer or reasoning-token cap. Existing usage accounting
-records reported tokens. A quiet/unchanged batch uses zero model calls, including
-an unchanged preview.
+neighbors, with bounded supporting messages, original Events, metadata search and
+graph reads. Nearby earlier Memories are read-only connection candidates. Input
+is capped at 24,000 bytes by reducing the batch; a single incomplete/oversized
+Memory is deferred so other rows can proceed. The reviewer requests exactly
+`gpt-6-luna` with `high` effort. Its HTTP timeout uses
+`CURATOR_MODEL_TIMEOUT_SECONDS` (default 210 seconds); measure actual latency before
+release. Subscription receipts must match the requested model and effort as well
+as the existing request/provider/harness/authentication/billing contract. A broker
+with the previous maintenance schema is incompatible: deploy a reviewed producer/
+consumer pair before enabling this worker. Never silently fall back.
 
-Review checkpoints reuse the existing Run ledger and exact Object revisions.
-Late commits are not lost behind a timestamp cursor. The worker's own final
-revisions are checkpointed, avoiding self-trigger loops. An advisory lease
-prevents overlapping passes and releases on process loss. Failed passes retry at
-the next scheduled wake; no immediate inference retry loop is used.
+Review checkpoints reuse Runs with a fingerprint of Memory revision, relevant
+connections, supporting Object revisions and origin-Chat message progress. The
+worker checkpoints its own final versions. Preview checkpoints are distinct from
+apply; an unchanged preview incurs no further inference. An advisory lease
+prevents overlapping workers. Transient failures retry after 30/60 seconds, at most
+three attempts for the same input. Missing evidence and invalid plans defer that
+input until it changes. Authentication/schema/attribution failures pause model
+calls for the same configuration. After repairing the broker, an operator can
+advance `CURATOR_PROMPT_VERSION` to the reviewed release version and restart;
+that explicitly starts a new configuration attempt without erasing failed Runs.
+Inspect `result.paused`, `result.deferred`, `result.retry_at` and the Run error.
+No-work passes make zero model calls.
 
 Maintenance permits only generated, unprotected Memories and Connections with a
 Memory endpoint. Human/interactive-agent edits and `memory_locked` provenance are excluded.
@@ -45,9 +56,14 @@ are validated and written atomically against the observed revisions. Preview run
 exercise the same checks in a rolled-back transaction.
 
 Merges require identical supporting event/message identities and event time.
-A surviving Memory retains evidence, while retired IDs retain a `merged_into`
-reference and full journal history. Optional relationships cannot silently vanish
-in a merge: they must already exist on the survivor, or be reviewed separately.
+The plan must supply the survivor’s final title and description; surviving links
+are transferred and deduplicated atomically. Retired IDs retain a `merged_into`
+reference and full journal history. A protected/manually edited link blocks the
+whole merge. A rewrite may also repair connections in the same transaction.
+Connection repair can change an existing generated description, or disconnect an
+optional relation and reconnect it with a corrected type. Required derivation
+links cannot be removed. Distinct events can use `related_to` when context
+establishes continuation; shared topics alone are insufficient.
 No age-based expiry or automatic physical purge occurs. Retired rows disappear
 from ordinary active retrieval. Ambiguous records stay unchanged.
 
@@ -58,12 +74,11 @@ Undo does not erase the journal. Capture's processed event key survives undo, so
 it cannot recreate the same retired event on its next tick. Pause maintenance
 with `MEMORY_DREAM_MODE=off` before investigating quality regressions.
 
-## Metadata and event policy v2
+## Event review policy v3
 
-The `metadata-events-v2` checkpoint reconsiders eligible legacy revisions once.
+The `event-review-v3` checkpoint reconsiders eligible legacy revisions once.
 Successful unchanged reviews make no further model call. Missing, oversized or
-incomplete evidence is recorded as `deferred`, never `reviewed`, with at most
-three attempts per revision and policy. Inspect those Run reasons before any
+incomplete evidence is recorded as `deferred`, never `reviewed`, until the supporting version changes. Inspect those Run reasons before any
 claim of complete cleanup. A graph exceeding the bounded input is also deferred.
 Manual edits, protection and `memory_locked` still exclude a Memory.
 

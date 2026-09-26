@@ -2094,6 +2094,34 @@ pub(crate) async fn request_json_model(
     schema: Value,
     idempotency_id: String,
 ) -> Result<Value, CuratorError> {
+    request_json_model_with_effort(
+        pool,
+        client,
+        config,
+        run_id,
+        chat_id,
+        system,
+        input,
+        schema,
+        idempotency_id,
+        "low",
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_json_model_with_effort(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    config: &CuratorModelConfig,
+    run_id: Uuid,
+    chat_id: Option<Uuid>,
+    system: &str,
+    input: String,
+    schema: Value,
+    idempotency_id: String,
+    effort: &str,
+) -> Result<Value, CuratorError> {
     let attempt_id = Uuid::new_v4().to_string();
     let request_body = match config.transport {
         CuratorModelTransport::CentaurSubscription => json!({
@@ -2101,17 +2129,23 @@ pub(crate) async fn request_json_model(
             "system_prompt": system,
             "input": input,
             "output_schema": schema,
-            "reasoning_effort": "low"
+            "reasoning_effort": effort,
+            "model": config.model
         }),
-        CuratorModelTransport::DirectApi => json!({
-            "model": config.model,
-            "messages": [
-                {"role":"system","content":system},
-                {"role":"user","content":input}
-            ],
-            "response_format":{"type":"json_object"},
-            "temperature":0
-        }),
+        CuratorModelTransport::DirectApi => {
+            let mut body = json!({
+                "model": config.model,
+                "messages": [{"role":"system","content":system},{"role":"user","content":input}],
+                "response_format":{"type":"json_object"}
+            });
+            if effort == "high" {
+                body["reasoning_effort"] = json!(effort);
+            } else {
+                // Preserve the existing direct extraction/summary contract.
+                body["temperature"] = json!(0);
+            }
+            body
+        }
     };
     let response = match client
         .post(&config.endpoint)
@@ -2122,7 +2156,7 @@ pub(crate) async fn request_json_model(
     {
         Ok(response) => response,
         Err(error) => {
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2140,7 +2174,7 @@ pub(crate) async fn request_json_model(
     };
     let status = response.status();
     if !status.is_success() {
-        let attribution = default_usage_attribution(config, &attempt_id);
+        let attribution = default_usage_attribution(config, &attempt_id, effort);
         record_curator_usage(
             pool,
             run_id,
@@ -2158,7 +2192,7 @@ pub(crate) async fn request_json_model(
     let body: Value = match response.json().await {
         Ok(body) => body,
         Err(error) => {
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2179,7 +2213,7 @@ pub(crate) async fn request_json_model(
             let response: CentaurInferenceResponse = match serde_json::from_value(body) {
                 Ok(response) => response,
                 Err(error) => {
-                    let attribution = default_usage_attribution(config, &attempt_id);
+                    let attribution = default_usage_attribution(config, &attempt_id, effort);
                     record_curator_usage(
                         pool,
                         run_id,
@@ -2196,14 +2230,15 @@ pub(crate) async fn request_json_model(
                 }
             };
             if response.request_id != idempotency_id
-                || response.model != "gpt-5.6-luna"
+                || response.model != config.model
+                || response.reasoning_effort != effort
                 || response.provider != "openai"
                 || response.harness != "codex"
                 || response.authentication_mode != "chatgpt_subscription"
                 || response.billing_basis != "chatgpt_subscription"
                 || response.upstream != "chatgpt.com"
             {
-                let attribution = default_usage_attribution(config, &attempt_id);
+                let attribution = default_usage_attribution(config, &attempt_id, effort);
                 record_curator_usage(
                     pool,
                     run_id,
@@ -2252,7 +2287,7 @@ pub(crate) async fn request_json_model(
             let response: ModelResponse = match serde_json::from_value(body) {
                 Ok(response) => response,
                 Err(error) => {
-                    let attribution = default_usage_attribution(config, &attempt_id);
+                    let attribution = default_usage_attribution(config, &attempt_id, effort);
                     record_curator_usage(
                         pool,
                         run_id,
@@ -2268,7 +2303,7 @@ pub(crate) async fn request_json_model(
                     )));
                 }
             };
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2348,6 +2383,7 @@ fn reconciliation_plan_schema() -> Value {
 fn default_usage_attribution<'a>(
     config: &CuratorModelConfig,
     attempt_id: &'a str,
+    effort: &'a str,
 ) -> UsageAttribution<'a> {
     match config.transport {
         CuratorModelTransport::CentaurSubscription => UsageAttribution {
@@ -2356,7 +2392,7 @@ fn default_usage_attribution<'a>(
             auth_mode: "chatgpt_subscription",
             upstream_service: "chatgpt.com",
             billing_mode: "subscription_allowance",
-            reasoning_effort: Some("low"),
+            reasoning_effort: Some(effort),
             source_execution_id: attempt_id,
         },
         CuratorModelTransport::DirectApi => UsageAttribution {
@@ -2365,7 +2401,7 @@ fn default_usage_attribution<'a>(
             auth_mode: "api_key",
             upstream_service: "api.openai.com",
             billing_mode: "metered_api",
-            reasoning_effort: None,
+            reasoning_effort: (effort == "high").then_some(effort),
             source_execution_id: attempt_id,
         },
     }
@@ -2846,7 +2882,7 @@ mod tests {
             poll_interval: std::time::Duration::from_secs(1),
             request_timeout: std::time::Duration::from_secs(210),
         };
-        let attribution = default_usage_attribution(&config, "attempt-1");
+        let attribution = default_usage_attribution(&config, "attempt-1", "low");
         assert_eq!(attribution.execution_type, "direct_api");
         assert_eq!(attribution.auth_mode, "api_key");
         assert_eq!(attribution.billing_mode, "metered_api");
@@ -2863,7 +2899,7 @@ mod tests {
             poll_interval: std::time::Duration::from_secs(1),
             request_timeout: std::time::Duration::from_secs(210),
         };
-        let attribution = default_usage_attribution(&config, "attempt-1");
+        let attribution = default_usage_attribution(&config, "attempt-1", "low");
         assert_eq!(attribution.execution_type, "codex_harness");
         assert_eq!(attribution.auth_mode, "chatgpt_subscription");
         assert_eq!(attribution.billing_mode, "subscription_allowance");

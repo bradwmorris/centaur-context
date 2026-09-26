@@ -132,6 +132,8 @@ async fn memory_maintenance_preserves_boundaries_revisions_and_recovery() {
             changes: vec![Change::Merge {
                 object_id: b,
                 survivor_id: a,
+                title: "Research decision".into(),
+                description: "Alex chose weekly research reviews to reduce interruptions.".into(),
                 reason: "Same event time and exact supporting message.".into(),
             }],
         },
@@ -217,6 +219,9 @@ async fn memory_maintenance_preserves_boundaries_revisions_and_recovery() {
                 changes: vec![Change::Merge {
                     object_id: b,
                     survivor_id: c,
+                    title: "Research decision".into(),
+                    description: "Alex chose weekly research reviews to reduce interruptions."
+                        .into(),
                     reason: "Same topic is not enough.".into()
                 }]
             }
@@ -454,7 +459,7 @@ async fn missing_evidence_defers_with_bounded_retries_and_policy_review_is_versi
         poll_interval: std::time::Duration::from_secs(1),
         request_timeout: std::time::Duration::from_secs(1),
     };
-    for _ in 0..3 {
+    for _ in 0..1 {
         let deferred = dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
             .await
             .unwrap()
@@ -574,4 +579,456 @@ async fn task_milestones_link_exact_task_atomically_and_keep_distinct_events() {
     .await
     .unwrap();
     assert_eq!(count, 2);
+}
+
+async fn evidenced_memory(pool: &PgPool) -> Uuid {
+    let id = fixture(pool, "memory", json!({})).await;
+    let evidence = Uuid::new_v4();
+    let r = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'mutation','completed','human','synthetic-owner',$2)")
+        .bind(r).bind(r.to_string()).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) VALUES($1,$2,1,'object',$3,'created','human','synthetic-owner',1,$4,true,now())")
+        .bind(evidence).bind(r).bind(id).bind(json!({"id":id,"kind":"task","title":"Research review","description":"Alex requested a research review."})).execute(pool).await.unwrap();
+    sqlx::query("UPDATE objects SET provenance=$2,revision=revision+1 WHERE id=$1")
+        .bind(id)
+        .bind(json!({"source_event_id":evidence}))
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+async fn edge(pool: &PgPool, source: Uuid, target: Uuid, kind: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO connections(id,source_object_id,target_object_id,kind,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,$3,$4,'Explains the recorded event.','system','context-curator','system','context-curator')")
+        .bind(id).bind(source).bind(target).bind(kind).execute(pool).await.unwrap();
+    id
+}
+
+#[tokio::test]
+async fn run_signals_are_committed_and_maintenance_does_not_wake_itself() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let mut listener = sqlx::postgres::PgListener::connect_with(&pool)
+        .await
+        .unwrap();
+    listener.listen("context_memory_review").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'memory_capture','completed','system','context-memory-capture',$2)").bind(id).bind(id.to_string()).execute(&mut *tx).await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), listener.recv())
+            .await
+            .is_err()
+    );
+    tx.rollback().await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), listener.recv())
+            .await
+            .is_err()
+    );
+    let id = run(&pool).await;
+    sqlx::query("UPDATE runs SET status='completed' WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(30), listener.recv())
+            .await
+            .is_err()
+    );
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'memory_capture','completed','system','context-memory-capture',$2)").bind(id).bind(id.to_string()).execute(&pool).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'mutation','running','system','synthetic',$2)").bind(id).bind(id.to_string()).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE runs SET status='completed' WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn source_and_connection_changes_invalidate_checkpoints_and_rewrite_can_connect() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let a = evidenced_memory(&pool).await;
+    let earlier = evidenced_memory(&pool).await;
+    let source = fixture(&pool, "source", json!({})).await;
+    edge(&pool, a, source, "about").await;
+    edge(&pool, earlier, source, "about").await;
+    let batch = dreaming::read_batch(&pool).await.unwrap();
+    dreaming::apply_plan(&pool, run(&pool).await, &batch, &Plan { changes: vec![] })
+        .await
+        .unwrap();
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    sqlx::query("UPDATE objects SET description='Alex clarified the source context.',revision=revision+1 WHERE id=$1").bind(source).execute(&pool).await.unwrap();
+    let batch = dreaming::read_batch(&pool).await.unwrap();
+    assert_eq!(batch.memories.len(), 2);
+    // Another pending event is also a valid connection target. The model need
+    // not wait until that event was reviewed in a separate pass.
+    let r = run(&pool).await;
+    dreaming::apply_plan(&pool,r,&batch,&Plan{changes:vec![rewrite(a),Change::Connect{object_id:a,target_id:earlier,kind:"related_to".into(),description:"Continues the earlier research event.".into(),reason:"Both events reference the same source and the context establishes continuation.".into()}]}).await.unwrap();
+    assert_eq!(snapshot(&pool, a).await["title"], "Research decision");
+    assert_eq!(snapshot(&pool, earlier).await["title"], "Research event");
+    dreaming::undo(&pool, r).await.unwrap();
+    assert_eq!(snapshot(&pool, a).await["title"], "Research event");
+}
+
+#[tokio::test]
+async fn reviewer_drains_sixty_curator_memories_without_capture_worker_and_requires_luna_high() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    for _ in 0..60 {
+        evidenced_memory(&pool).await;
+    }
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let router=axum::Router::new().route("/",axum::routing::post(move |axum::Json(body):axum::Json<Value>| {
+        let count=count.clone(); async move {
+            assert_eq!(body["model"],"gpt-6-luna");
+            assert_eq!(body["reasoning_effort"],"high");
+            count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+            axum::Json(json!({"request_id":body["request_id"],"execution_id":Uuid::new_v4(),"model":"gpt-6-luna","provider":"openai","harness":"codex","authentication_mode":"chatgpt_subscription","billing_basis":"chatgpt_subscription","upstream":"chatgpt.com","reasoning_effort":"high","output":{"changes":[]},"usage":{"input_tokens":100,"output_tokens":20}}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::CentaurSubscription,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-5.6-luna".into(),
+        prompt_version: "synthetic".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    // No memory-capture or Slack worker is running: this covers a Codex-only
+    // installation with capture disabled and an existing curator backlog.
+    let worker = tokio::spawn(dreaming::run_worker(
+        pool.clone(),
+        Some(config.clone()),
+        "apply".into(),
+        std::time::Duration::from_secs(3600),
+    ));
+    let competing_worker = tokio::spawn(dreaming::run_worker(
+        pool.clone(),
+        Some(config),
+        "apply".into(),
+        std::time::Duration::from_secs(3600),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            let completed: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='completed'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if completed >= 3 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    let before = calls.load(std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("SELECT pg_notify('context_memory_review','')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), before);
+    // Drop both dedicated LISTEN sessions. The durable scan after reconnection
+    // must recover changes committed while the notification stream is absent.
+    let disconnected:i64=sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN%' AND pid<>pg_backend_pid()")
+        .fetch_one(&pool).await.unwrap();
+    assert!(disconnected >= 1);
+    sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE 'LISTEN%' AND pid<>pg_backend_pid()")
+        .execute(&pool).await.unwrap();
+    let later = evidenced_memory(&pool).await;
+    tokio::time::timeout(std::time::Duration::from_secs(15),async {
+        loop {
+            let reviewed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='memory_dream' AND status='completed' AND result->'reviewed' ? $1)")
+                .bind(later.to_string()).fetch_one(&pool).await.unwrap();
+            if reviewed {break}
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+    let runs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='completed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        runs as usize
+    );
+    worker.abort();
+    competing_worker.abort();
+    server.abort();
+}
+
+#[tokio::test]
+async fn merge_rewrites_survivor_transfers_links_and_undo_restores_both() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let evidence = json!({"source_event_id":Uuid::new_v4()});
+    let b = fixture(&pool, "memory", evidence.clone()).await;
+    let reviewed = dreaming::read_batch(&pool).await.unwrap();
+    dreaming::apply_plan(
+        &pool,
+        run(&pool).await,
+        &reviewed,
+        &Plan { changes: vec![] },
+    )
+    .await
+    .unwrap();
+    let a = fixture(&pool, "memory", evidence).await;
+    let source = fixture(&pool, "source", json!({})).await;
+    let old_edge = edge(&pool, a, source, "about").await;
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    let r = run(&pool).await;
+    dreaming::apply_plan(
+        &pool,
+        r,
+        &input,
+        &Plan {
+            changes: vec![Change::Merge {
+                object_id: a,
+                survivor_id: b,
+                title: "Alex chose weekly reviews".into(),
+                description: "Alex chose weekly research reviews to reduce interruptions.".into(),
+                reason: "Both generated accounts describe the same committed event.".into(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        snapshot(&pool, b).await["title"],
+        "Alex chose weekly reviews"
+    );
+    let moved:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM connections WHERE source_object_id=$1 AND target_object_id=$2 AND archived_at IS NULL)").bind(b).bind(source).fetch_one(&pool).await.unwrap();
+    assert!(moved);
+    assert!(
+        dreaming::read_batch(&pool)
+            .await
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    dreaming::undo(&pool, r).await.unwrap();
+    assert_eq!(snapshot(&pool, b).await["title"], "Research event");
+    assert!(snapshot(&pool, a).await["archived_at"].is_null());
+    let restored: bool =
+        sqlx::query_scalar("SELECT archived_at IS NULL FROM connections WHERE id=$1")
+            .bind(old_edge)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(restored);
+    // A manual link blocks the entire merge, including the survivor rewrite.
+    sqlx::query("UPDATE connections SET updated_by_type='human',updated_by_id='synthetic-owner',revision=revision+1 WHERE id=$1").bind(old_edge).execute(&pool).await.unwrap();
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    let before = snapshot(&pool, b).await;
+    assert!(dreaming::apply_plan(&pool,run(&pool).await,&input,&Plan{changes:vec![Change::Merge{object_id:a,survivor_id:b,title:"Must roll back".into(),description:"This rewrite cannot commit because the link is manually maintained.".into(),reason:"Same event, but manual link requires deferral.".into()}]}).await.is_err());
+    assert_eq!(snapshot(&pool, b).await, before);
+    assert!(snapshot(&pool, a).await["archived_at"].is_null());
+}
+
+#[tokio::test]
+async fn one_oversized_memory_does_not_defer_the_valid_batch() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let good = evidenced_memory(&pool).await;
+    let large = evidenced_memory(&pool).await;
+    let oversized_event = Uuid::new_v4();
+    sqlx::query("INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) SELECT $1,e.run_id,2,e.target_type,e.target_id,e.action,e.actor_type,e.actor_id,e.to_revision,jsonb_set(e.after_state,'{description}',to_jsonb($2::text)),e.reversible,e.created_at FROM object_events e WHERE e.id::text=(SELECT provenance->>'source_event_id' FROM objects WHERE id=$3)")
+        .bind(oversized_event).bind("A very long event. ".repeat(4000)).bind(large).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE objects SET provenance=jsonb_build_object('source_event_id',$2::text),revision=revision+1 WHERE id=$1").bind(large).bind(oversized_event.to_string()).execute(&pool).await.unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let router = axum::Router::new().route(
+        "/",
+        axum::routing::post(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::Json(json!({"choices":[{"message":{"content":"{\"changes\":[]}"}}]}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    for _ in 0..3 {
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap();
+    }
+    let reviewed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE status='completed' AND result->'reviewed' ? $1)",
+    )
+    .bind(good.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(reviewed);
+    let deferred: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE status='failed' AND result->'deferred' ? $1)",
+    )
+    .bind(large.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(deferred);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn wrong_model_receipt_pauses_inference_without_silent_fallback() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    evidenced_memory(&pool).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let router=axum::Router::new().route("/",axum::routing::post(move |axum::Json(body):axum::Json<Value>|{let count=count.clone();async move{count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);axum::Json(json!({"request_id":body["request_id"],"execution_id":Uuid::new_v4(),"model":"gpt-5.6-luna","provider":"openai","harness":"codex","authentication_mode":"chatgpt_subscription","billing_basis":"chatgpt_subscription","upstream":"chatgpt.com","reasoning_effort":"low","output":{"changes":[]}}))}}));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::CentaurSubscription,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-5.6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .is_err()
+    );
+    evidenced_memory(&pool).await;
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let paused: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE result->>'paused'='true')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(paused);
+    let mut repaired_configuration = config.clone();
+    repaired_configuration.prompt_version = "new-reviewed-release".into();
+    assert!(
+        dreaming::pass(
+            &pool,
+            &reqwest::Client::new(),
+            &repaired_configuration,
+            false
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let retried:i64=sqlx::query_scalar("SELECT jsonb_array_length(input->'memory_ids')::bigint FROM runs WHERE kind='memory_dream' AND status='failed' ORDER BY created_at DESC LIMIT 1").fetch_one(&pool).await.unwrap();
+    assert_eq!(retried, 2); // Configuration change retries previously paused versions.
+    server.abort();
+}
+
+#[tokio::test]
+async fn transient_failures_back_off_and_stop_after_three_attempts() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    evidenced_memory(&pool).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let router = axum::Router::new().route(
+        "/",
+        axum::routing::post(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    for expected in 1..=3 {
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .is_err()
+        );
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), expected);
+        // Advance only this disposable test clock state; no wall-clock wait.
+        sqlx::query("UPDATE runs SET result=jsonb_set(result,'{retry_at}',to_jsonb((now()-interval '1 second')::text)) WHERE kind='memory_dream'").execute(&pool).await.unwrap();
+    }
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    server.abort();
 }
