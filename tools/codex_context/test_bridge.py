@@ -271,3 +271,19 @@ def test_desktop_final_answer_phase_is_captured_without_analysis(setup):
     b.capture(s,event(repo,sid,path,'Stop',turn))
     assert [m['content'] for x in pending(s) for m in x['messages']]==['commentary message','final_answer message']
     assert pending(s)[-1]['finished_turn_id']==turn
+
+
+def test_empty_registration_and_missing_original_report_coverage(setup, monkeypatch):
+    s, repo, sid, path = setup
+    b.capture(s, event(repo, sid, path))
+    assert pending(s)[0]['coverage'] == 'registered'
+    path.unlink()
+    monkeypatch.setattr(b.SessionClient, '_request', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('offline')))
+    b.flush(s)
+    assert pending(s)[-1]['coverage'] == 'unavailable'
+    assert pending(s)[-1]['messages'] == []
+    with b.database(s) as db:
+        assert db.execute('SELECT coverage FROM sessions').fetchone()[0] == 'unavailable'
+    count = len(pending(s))
+    b.flush(s)
+    assert len(pending(s)) == count

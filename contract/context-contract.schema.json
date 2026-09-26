@@ -38,13 +38,16 @@
         "examples": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["task", "entity", "source", "note", "theme"],
+          "required": ["task", "entity", "source", "note", "theme", "chat", "user", "memory"],
           "properties": {
             "task": {"type": "string", "minLength": 1},
             "entity": {"type": "string", "minLength": 1},
             "source": {"type": "string", "minLength": 1},
             "note": {"type": "string", "minLength": 1},
-            "theme": {"type": "string", "minLength": 1}
+            "theme": {"type": "string", "minLength": 1},
+            "chat": {"type": "string", "minLength": 1},
+            "user": {"type": "string", "minLength": 1},
+            "memory": {"type": "string", "minLength": 1}
           }
         }
       }

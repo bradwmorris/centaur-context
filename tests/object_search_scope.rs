@@ -310,3 +310,76 @@ async fn object_discovery_excludes_artifact_candidates_in_search_and_context() {
             .all(|object| object.evidence.is_none())
     );
 }
+
+#[tokio::test]
+async fn requested_kinds_filter_before_candidate_limits() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    db::migrate(&pool).await.unwrap();
+    let marker = format!("identity{}", Uuid::new_v4().simple());
+    let user = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'user',$2,'Alex researches evaluation methods.','system','filter-test','system','filter-test')").bind(user).bind(format!("Alex {marker}")).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO users(object_id,user_kind,identities) VALUES($1,'human','[]')")
+        .bind(user)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for _ in 0..150 {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,'memory',$2,$3,'system','filter-test','system','filter-test')").bind(id).bind(format!("Alex {marker} {marker}")).bind(format!("Alex discussed {marker} evaluation." )).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,now())")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let model = format!("filter-model-{marker}");
+    sqlx::query("INSERT INTO embeddings(object_id,model,dimensions,source_hash,format_version,input_mode,status,embedding,completed_at) SELECT id,$1,3,object_embedding_source_hash($2,kind,title,description),$2,'shared','completed',CASE WHEN kind='user' THEN '[0.8,0.6,0]'::vector ELSE '[1,0,0]'::vector END,now() FROM objects WHERE title LIKE $3")
+        .bind(&model).bind(embeddings::OBJECT_EMBEDDING_FORMAT).bind(format!("%{marker}%")).execute(&pool).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/embed",
+                post(|| async { Json(json!({"data":[{"embedding":[1.0,0.0,0.0]}]})) }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let client = embeddings::EmbeddingClient::new(&EmbeddingConfig {
+        endpoint: format!("http://{address}/embed"),
+        api_token: "synthetic-token".into(),
+        model,
+        dimensions: 3,
+        input_mode: EmbeddingInputMode::Shared,
+        poll_interval: Duration::from_secs(1),
+    })
+    .unwrap();
+    for kinds in [vec!["user".into()], vec!["user".into(), "source".into()]] {
+        let result =
+            search::search_filtered(&pool, None, TextSearchConfig::SIMPLE, &marker, &kinds, 1)
+                .await
+                .unwrap();
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(result.objects[0].id, user);
+        let hybrid = search::search_filtered(
+            &pool,
+            Some(&client),
+            TextSearchConfig::SIMPLE,
+            &marker,
+            &kinds,
+            1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(hybrid.retrieval, "hybrid");
+        assert_eq!(hybrid.objects[0].id, user);
+    }
+    server.abort();
+}

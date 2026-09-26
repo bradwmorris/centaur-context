@@ -134,6 +134,11 @@ pub fn agent_router(state: AppState, token: String) -> Router {
             "/api/v2",
             Router::new()
                 .route("/contract", get(read_contract))
+                .route("/audit/objects", get(crate::maintenance::audit_objects))
+                .route(
+                    "/audit/connections",
+                    get(crate::maintenance::audit_connections),
+                )
                 .route(
                     "/tasks/{id}/routine",
                     get(read_routine).put(configure_routine),
@@ -396,7 +401,7 @@ pub(crate) async fn universal_search(
         }
     }
     let limit = input.limit.unwrap_or(20).clamp(1, 100);
-    let mut packet = search::search(
+    let packet = search::search_filtered(
         &state.pool,
         if input.lexical_only {
             None
@@ -405,16 +410,10 @@ pub(crate) async fn universal_search(
         },
         state.text_search_config,
         &query,
-        None,
-        if object_types.is_empty() { limit } else { 100 },
+        &object_types,
+        limit,
     )
     .await?;
-    if !object_types.is_empty() {
-        packet
-            .objects
-            .retain(|object| object_types.contains(&object.kind));
-        packet.objects.truncate(limit as usize);
-    }
     let mut data = json!(packet);
     data["contract_version"] = json!(crate::contract::version());
     data["tool_version"] = json!(crate::contract::tool_version());
@@ -441,6 +440,8 @@ pub(crate) struct UniversalReadRequest {
     include: Vec<String>,
     #[serde(default)]
     artifact_windows: Vec<UniversalArtifactWindow>,
+    #[serde(default)]
+    note_windows: Vec<UniversalNoteWindow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,6 +451,25 @@ struct UniversalArtifactWindow {
     #[serde(default)]
     offset: i64,
     limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UniversalNoteWindow {
+    object_id: Uuid,
+    #[serde(default)]
+    offset: usize,
+    limit: Option<usize>,
+}
+
+fn note_window(note: &db::Note, offset: usize, limit: usize) -> Value {
+    let total = note.content.chars().count();
+    let content: String = note.content.chars().skip(offset).take(limit).collect();
+    let end = offset.saturating_add(content.chars().count()).min(total);
+    json!({"object_id":note.object_id,"revision":note.revision,"content":content,"content_format":note.content_format,
+        "intent":note.intent,"source_artifact_id":note.source_artifact_id,"source_locator":note.source_locator,
+        "offset":offset,"end_offset":end,"total_characters":total,"complete":offset==0 && end==total,
+        "truncated":end<total,"next_offset":if end<total {Some(end)} else {None}})
 }
 
 pub(crate) async fn universal_read(
@@ -469,19 +489,29 @@ pub(crate) async fn universal_read(
             )));
         }
     }
+    if input.note_windows.len() > 20 {
+        return Err(ApiError::BadRequest(
+            "note_windows may contain at most 20 entries".into(),
+        ));
+    }
     if input.artifact_windows.len() > 20 {
         return Err(ApiError::BadRequest(
             "artifact_windows may contain at most 20 entries".into(),
         ));
     }
     let mut values = Vec::new();
-    for id in input.object_ids {
+    for id in &input.object_ids {
+        let id = *id;
         let object = db::get_object(&state.pool, id).await?;
         let mut subtypes = db::context_subtypes(&state.pool, &[id], None).await?;
         let mut value = json!({
             "object": object,
             "subtype": subtypes.remove(&id),
         });
+        if object.kind == "note" {
+            let note = db::get_note(&state.pool, id).await?;
+            value["note_content"] = note_window(&note, 0, 8000);
+        }
         if input.include.iter().any(|item| item == "connections") {
             value["connections"] = json!(db::list_connections(&state.pool, id).await?);
         }
@@ -501,6 +531,22 @@ pub(crate) async fn universal_read(
         }
         values.push(value);
     }
+    let mut note_windows = Vec::new();
+    for window in input.note_windows {
+        let limit = window.limit.unwrap_or(8000);
+        if !(1..=20_000).contains(&limit) || !input.object_ids.contains(&window.object_id) {
+            return Err(ApiError::BadRequest(
+                "Note windows require a requested Object and limits between 1 and 20000".into(),
+            ));
+        }
+        let note = db::get_note(&state.pool, window.object_id).await?;
+        if window.offset > note.content.chars().count() {
+            return Err(ApiError::BadRequest(
+                "Note offset exceeds content length".into(),
+            ));
+        }
+        note_windows.push(note_window(&note, window.offset, limit));
+    }
     let mut artifact_windows = Vec::new();
     for window in input.artifact_windows {
         let limit = window.limit.unwrap_or(8000);
@@ -519,6 +565,7 @@ pub(crate) async fn universal_read(
         "data":{
             "objects":values,
             "artifact_windows":artifact_windows,
+            "note_windows":note_windows,
             "contract_version":crate::contract::version(),
             "tool_version":crate::contract::tool_version()
         }

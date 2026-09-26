@@ -45,7 +45,7 @@ def test_apply_example_is_local_and_validation_only(monkeypatch, capsys):
     document = json.loads(capsys.readouterr().out)
     assert document["description_policy"]["max_unicode_characters_after_trimming"] == 600
     assert set(document["description_policy"]["examples"]) == {
-        "task", "entity", "source", "note", "theme"
+        "task", "entity", "source", "note", "theme", "chat", "user", "memory"
     }
     create = document["create_and_connect"]
     assert create["contract_version"] == "1.1.0"

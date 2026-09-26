@@ -262,7 +262,7 @@ def capture(settings: Settings, event: dict) -> dict:
                 (session,alias,target,str(path) if path else None,cursor,inode,
                  f"Codex: {alias}","capture_from_activation",now,now,event["cwd"]))
             queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),"bootstrap")),
-                "title":f"Codex: {alias}","messages":[],"finished_turn_id":None})
+                "title":f"Codex: {alias}","messages":[],"finished_turn_id":None,"coverage":"registered" if path else "unavailable"})
             prior = db.execute("SELECT * FROM sessions WHERE id=?", (session,)).fetchone()
         if path and prior["transcript"] is None:
             runtime_metadata(settings,path,session)
@@ -289,7 +289,10 @@ def capture(settings: Settings, event: dict) -> dict:
                 queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),"git:"+receipt["commits"][-1]["oid"])),
                     "title":prior["title"],"messages":[],"finished_turn_id":None,"git_receipts":[receipt]})
         if not path:
-            db.execute("UPDATE sessions SET error='No transcript: full Chat capture unavailable',updated=? WHERE id=?", (now,session))
+            if prior["coverage"] != "unavailable":
+                queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),f"unavailable:{prior['cursor']}")),
+                    "title":prior["title"],"messages":[],"finished_turn_id":None,"coverage":"unavailable"})
+            db.execute("UPDATE sessions SET coverage='unavailable',error='No transcript: full Chat capture unavailable',updated=? WHERE id=?", (now,session))
             return {"bound":alias,"coverage":"unavailable"}
         messages, cursor, coverage, finish = extract_messages(settings,path,session,prior["cursor"],prior["transcript_identity"])
         # task_complete follows the Stop hook. The next drain sees it, avoiding
@@ -297,7 +300,7 @@ def capture(settings: Settings, event: dict) -> dict:
         if messages or finish:
             key = f"{prior['cursor']}:{cursor}:{finish or ''}"
             queue_batch(db,session,{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(session),key)),
-                "title":prior["title"],"messages":messages,"finished_turn_id":finish})
+                "title":prior["title"],"messages":messages,"finished_turn_id":finish,"coverage":coverage})
         db.execute("UPDATE sessions SET cursor=?,coverage=?,error=NULL,updated=? WHERE id=?",(cursor,coverage,now,session))
     return {"bound":alias,"coverage":coverage}
 
@@ -365,7 +368,10 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                     capture(settings,{"hook_event_name":"SessionEnd","session_id":row["id"],"cwd":row["cwd"],"transcript_path":row["transcript"]})
                 except (RuntimeError,ValueError,OSError,KeyError,subprocess.SubprocessError) as error:
                     with database(settings) as db,db:
-                        db.execute("UPDATE sessions SET error=?,updated=? WHERE id=?",(str(error),time.time(),row["id"]))
+                        db.execute("UPDATE sessions SET coverage='unavailable',error=?,updated=? WHERE id=?",(str(error),time.time(),row["id"]))
+                        if row["coverage"] != "unavailable":
+                            queue_batch(db,row["id"],{"version":1,"batch_id":str(uuid.uuid5(uuid.UUID(row["id"]),f"unavailable:{row['cursor']}")),
+                                "title":row["title"],"messages":[],"finished_turn_id":None,"coverage":"unavailable"})
         with database(settings) as db:
             rows = db.execute("SELECT b.* FROM batches b WHERE (? IS NULL OR session_id=?) AND next_attempt<=? AND NOT EXISTS(SELECT 1 FROM batches older WHERE older.session_id=b.session_id AND older.rowid<b.rowid) ORDER BY rowid LIMIT ?",
                 (session_id,session_id,time.time(),limit)).fetchall()

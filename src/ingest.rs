@@ -1019,6 +1019,10 @@ pub(crate) async fn ensure_participant_connection(
     user_object_id: Uuid,
     display_name: &str,
 ) -> Result<(), DbError> {
+    let provider: String = sqlx::query_scalar("SELECT provider FROM chats WHERE object_id=$1")
+        .bind(chat_object_id)
+        .fetch_one(&mut **tx)
+        .await?;
     let id = Uuid::new_v4();
     let inserted: Option<Uuid> = sqlx::query_scalar(
         r#"INSERT INTO connections
@@ -1032,10 +1036,12 @@ pub(crate) async fn ensure_participant_connection(
     .bind(id)
     .bind(chat_object_id)
     .bind(user_object_id)
-    .bind(format!("This Slack conversation includes {display_name}."))
+    .bind(format!(
+        "This {provider} conversation includes {display_name}."
+    ))
     .bind(actor.actor_type)
     .bind(&actor.actor_id)
-    .bind(json!({"source_type": "slack_ingestion"}))
+    .bind(json!({"source_type": format!("{provider}_ingestion")}))
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_some() {
@@ -1048,7 +1054,7 @@ pub(crate) async fn ensure_participant_connection(
             chat_object_id,
             "connected",
             Some(&format!(
-                "slack-participant:{chat_object_id}:{user_object_id}"
+                "{provider}-participant:{chat_object_id}:{user_object_id}"
             )),
             json!({"kind": "involves", "target_object_id": user_object_id}),
         )

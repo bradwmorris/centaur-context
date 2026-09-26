@@ -401,6 +401,7 @@ class CentaurContextClient:
         *,
         include: list[str] | None = None,
         artifact_windows: list[dict[str, Any]] | None = None,
+        note_windows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Read one or more canonical Objects through the universal API."""
         ids = [_required(value, "object_id") for value in object_ids]
@@ -414,6 +415,7 @@ class CentaurContextClient:
                 "object_ids": ids,
                 "include": includes,
                 "artifact_windows": artifact_windows or [],
+                **({"note_windows": note_windows} if note_windows else {}),
             },
         )
 

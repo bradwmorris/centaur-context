@@ -81,13 +81,32 @@ pub async fn search(
     kind: Option<&str>,
     limit: i64,
 ) -> Result<SearchPacket, DbError> {
+    search_filtered(
+        pool,
+        embeddings,
+        text_search_config,
+        query,
+        &kind.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+        limit,
+    )
+    .await
+}
+
+pub async fn search_filtered(
+    pool: &PgPool,
+    embeddings: Option<&EmbeddingClient>,
+    text_search_config: TextSearchConfig,
+    query: &str,
+    kinds: &[String],
+    limit: i64,
+) -> Result<SearchPacket, DbError> {
     let limit = limit.clamp(1, 100);
     let (retrieval, mut fused) = retrieve(
         pool,
         embeddings,
         text_search_config,
         query,
-        kind,
+        kinds,
         limit,
         false,
     )
@@ -119,7 +138,7 @@ pub async fn context(
         embeddings,
         text_search_config,
         query,
-        kind,
+        &kind.map(str::to_owned).into_iter().collect::<Vec<_>>(),
         limit,
         true,
     )
@@ -237,30 +256,30 @@ async fn retrieve(
     embeddings: Option<&EmbeddingClient>,
     text_search_config: TextSearchConfig,
     query: &str,
-    kind: Option<&str>,
+    kinds: &[String],
     limit: i64,
     context_builder: bool,
 ) -> Result<(String, Vec<Fused>), DbError> {
     let candidate_limit = (limit * 4).clamp(20, 100);
-    let fts = db::full_text_candidates(
+    let fts = db::full_text_candidates_filtered(
         pool,
         text_search_config,
         query,
-        kind,
+        kinds,
         candidate_limit,
         context_builder,
     )
     .await?;
     let semantic = if let Some(client) = embeddings {
         match client.embed_query(query).await {
-            Ok(vector) => db::semantic_candidates(
+            Ok(vector) => db::semantic_candidates_filtered(
                 pool,
                 &vector,
                 client.model(),
                 client.dimensions(),
                 OBJECT_EMBEDDING_FORMAT,
                 client.document_mode(),
-                kind,
+                kinds,
                 candidate_limit,
                 context_builder,
             )
@@ -295,7 +314,13 @@ async fn retrieve(
             .take(6)
             .map(|item| item.object.id)
             .collect::<Vec<_>>();
-        let neighbors = db::one_hop_neighbors(pool, &seed_ids, kind, candidate_limit).await?;
+        let neighbors = db::one_hop_neighbors(
+            pool,
+            &seed_ids,
+            kinds.first().map(String::as_str),
+            candidate_limit,
+        )
+        .await?;
         for neighbor in neighbors {
             if fused.iter().any(|item| item.object.id == neighbor.id) {
                 continue;

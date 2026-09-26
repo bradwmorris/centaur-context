@@ -111,7 +111,7 @@ describe("artifact reader", () => {
   it("reconciles an uncertain working-notes creation without a duplicate", async () => {
     const { posts } = server([], 4, false, true);
     render(<Artifacts section="sources" objectId={objectId} artifacts={[]} onCreated={async () => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "+ Add working notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Add research document" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "New notes" } });
     fireEvent.change(screen.getByRole("textbox", { name: "Artifact body" }), { target: { value: "Synthetic draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -140,16 +140,16 @@ describe("artifact reader", () => {
     const notes = fixture("base", "research_notes", original, "doc");
     const { posts } = server([notes]);
     render(<ArtifactReader section="sources" objectId={objectId} target={{ kind: "latest", id: "doc" }} refreshKey={0} />);
-    expect(await screen.findByText(/TAIL END/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/TAIL END/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("textbox", { name: "Working notes" });
+    const editor = screen.getByRole("textbox", { name: "Research documents" });
     expect(editor).toHaveValue(original);
     fireEvent.change(editor, { target: { value: original.replace("# Start", "# Revised") } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toMatchObject({ expected_revision: 4, supersedes_artifact_id: "base", media_type: notes.media_type });
     expect(posts[0].content).toBe(original.replace("# Start", "# Revised"));
-    expect(await screen.findByText(/TAIL END/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/TAIL END/)).toBeInTheDocument());
   });
 
   it("keeps a draft when a later content window fails", async () => {
@@ -165,11 +165,11 @@ describe("artifact reader", () => {
     const { advance, posts } = server([notes]);
     render(<ArtifactReader section="sources" objectId={objectId} target={{ kind: "latest", id: "doc" }} refreshKey={0} />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Working notes" }), { target: { value: "My draft" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Research documents" }), { target: { value: "My draft" } });
     advance();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("changed while you were editing");
-    expect(screen.getByRole("textbox", { name: "Working notes" })).toHaveValue("My draft");
+    expect(screen.getByRole("textbox", { name: "Research documents" })).toHaveValue("My draft");
     expect(posts).toHaveLength(0);
   });
 
@@ -181,12 +181,12 @@ describe("artifact reader", () => {
     vi.stubGlobal("confirm", confirm);
     const { rerender } = render(<ArtifactReader section="sources" objectId={objectId} target={{ kind: "latest", id: "doc" }} refreshKey={0} />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Working notes" }), { target: { value: "Unsaved" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Research documents" }), { target: { value: "Unsaved" } });
     fireEvent.click(screen.getByRole("link", { name: /Back to Object/ }));
     expect(confirm).toHaveBeenCalledOnce();
     expect(window.location.pathname).toBe(`/sources/${objectId}/working/doc`);
     rerender(<ArtifactReader section="sources" objectId={objectId} target={{ kind: "latest", id: "doc" }} refreshKey={1} />);
-    expect(screen.getByRole("textbox", { name: "Working notes" })).toHaveValue("Unsaved");
+    expect(screen.getByRole("textbox", { name: "Research documents" })).toHaveValue("Unsaved");
   });
 
   it("shows unsupported and URI-only fallbacks, and suppresses raw HTML", async () => {

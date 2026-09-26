@@ -1913,3 +1913,156 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
         );
     }
 }
+
+#[tokio::test]
+async fn explicit_note_windows_preserve_unicode_and_report_continuation() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let token = "w".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool,
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let content = format!("{}exact tail", "東京 evidence ".repeat(1000));
+    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("long-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Long evidence note","description":"A synthetic long Note for explicit content access.","fields":{"intent":"idea","content":content}}]});
+    let created = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, body))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = json_body(created).await;
+    let id = &created["data"]["results"][0]["data"]["id"];
+    let read = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v2/read",
+            &token,
+            json!({"object_ids":[id]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(read.status(), StatusCode::OK);
+    let read = json_body(read).await;
+    assert_eq!(read["data"]["objects"][0]["subtype"]["intent"], "idea");
+    let first = &read["data"]["objects"][0]["note_content"];
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["next_offset"], 8000);
+    let tail=app.clone().oneshot(request("POST","/api/v2/read",&token,json!({"object_ids":[id],"note_windows":[{"object_id":id,"offset":8000,"limit":20000}]}))).await.unwrap();
+    let tail = json_body(tail).await;
+    let last = &tail["data"]["note_windows"][0];
+    assert_eq!(last["truncated"], false);
+    assert!(last["next_offset"].is_null());
+    assert_eq!(
+        format!(
+            "{}{}",
+            first["content"].as_str().unwrap(),
+            last["content"].as_str().unwrap()
+        ),
+        content
+    );
+    let invalid = app
+        .oneshot(request(
+            "POST",
+            "/api/v2/read",
+            &token,
+            json!({"object_ids":[id],"note_windows":[{"object_id":id,"offset":1000000}]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn authenticated_audit_is_bounded_and_includes_archived_objects() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let token = "a".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool,
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("audit-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Inventory boundary","description":"A synthetic archived Object for audit pagination.","fields":{"intent":"idea","content":"Preserve original evidence."}}]});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let data = json_body(response).await;
+    let id = &data["data"]["results"][0]["data"]["id"];
+    let archive = json!({"contract_version":"1.1.0","idempotency_key":format!("audit-archive-{}",Uuid::new_v4()),"operations":[{"operation":"archive_object","object_id":id,"expected_revision":1}]});
+    assert_eq!(
+        app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, archive))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let mut cursor = None;
+    let mut found = false;
+    loop {
+        let url = format!(
+            "/api/v2/audit/objects?limit=2&lifecycle=archived{}",
+            cursor
+                .as_ref()
+                .map(|c| format!("&cursor={c}"))
+                .unwrap_or_default()
+        );
+        let response = app
+            .clone()
+            .oneshot(request("GET", &url, &token, json!(null)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page = json_body(response).await;
+        assert!(page["data"].as_array().unwrap().len() <= 2);
+        found |= page["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == *id && !o["archived_at"].is_null());
+        cursor = page["next_cursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(found);
+    assert_eq!(
+        app.clone()
+            .oneshot(request(
+                "GET",
+                "/api/v2/audit/objects?limit=201",
+                &token,
+                json!(null)
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.oneshot(request(
+            "GET",
+            "/api/v2/audit/connections",
+            "wrong",
+            json!(null)
+        ))
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
