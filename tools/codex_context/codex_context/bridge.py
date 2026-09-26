@@ -86,6 +86,8 @@ class Settings:
             if repo["target"] not in self.targets:
                 raise ValueError("Unknown repository target")
         for target in self.targets.values():
+            if not isinstance(target.get("capture_coverage", False), bool):
+                raise ValueError("capture_coverage must be a boolean")
             u = urlparse(target["url"])
             if u.username or u.password or u.query or u.fragment or u.path not in ("", "/"):
                 raise ValueError("Context URL must be an origin without credentials")
@@ -382,7 +384,13 @@ def flush(settings: Settings, session_id: str | None = None, limit: int = 20) ->
                 session = db.execute("SELECT * FROM sessions WHERE id=?", (batch["session_id"],)).fetchone()
                 try:
                     client = SessionClient(settings,session,capture_token=True)
-                    response = client._request("POST","/api/v2/codex/capture",json=json.loads(batch["payload"]))
+                    payload = json.loads(batch["payload"])
+                    # Older servers reject unknown fields. Enable the additive
+                    # wire field only after this exact destination is upgraded;
+                    # retain local coverage and the immutable queued payload.
+                    if not settings.targets[session["target"]].get("capture_coverage", False):
+                        payload.pop("coverage", None)
+                    response = client._request("POST","/api/v2/codex/capture",json=payload)
                     with db:
                         db.execute("INSERT OR REPLACE INTO receipts VALUES(?,?,?,?)",(batch["id"],session["id"],canonical(response),time.time()))
                         db.execute("UPDATE sessions SET chat_id=?,updated=? WHERE id=?",(response["chat_object_id"],time.time(),session["id"]))

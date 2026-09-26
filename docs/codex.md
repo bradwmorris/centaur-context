@@ -177,3 +177,13 @@ request only when the window and metadata are eligible.
 Roll out the compatible server before updating host bridge/client packages: the
 bridge now includes optional `coverage` and the reader accepts `note_windows`.
 Keep routing, activation cursors and session identities unchanged during rollout.
+
+## Mixed-version capture destinations
+
+Upgrade each destination server before setting `capture_coverage: true` on its
+host bridge target configuration. The default is false for compatibility with
+older servers that reject unknown capture fields. Local coverage and queued
+payloads remain intact; only the additive wire field is omitted for legacy
+destinations. Keep repository bindings, activation cursors and destination
+identity unchanged. This allows one destination to adopt coverage reporting
+without upgrading other servers served by the same bridge.
