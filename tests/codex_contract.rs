@@ -368,6 +368,10 @@ async fn git_receipts_are_verified_deduplicated_technical_evidence() {
     )
     .await;
     assert_eq!(replayed["data"]["outcome_memory_ids"], json!([]));
+    assert_eq!(
+        replayed["data"]["capture_coverage"],
+        result["data"]["capture_coverage"]
+    );
     b["batch_id"] = json!(Uuid::new_v4());
     b["git_receipts"][0]["commits"][0]["raw"] = json!("Forged completion evidence");
     assert_eq!(

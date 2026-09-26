@@ -1951,6 +1951,9 @@ async fn apply_request_aware_candidate_policy(
     candidates: &mut crate::search::SearchPacket,
 ) -> Result<(), CuratorError> {
     let direct_ids = referenced_object_ids(query);
+    if direct_ids.len() > 100 {
+        return Err(CuratorError::Invalid("More than 100 explicit Object references in the bounded window; defer for a smaller evidence window".into()));
+    }
     if let Some(kinds) = requested_mutation_kinds(query) {
         candidates.objects.retain(|object| {
             direct_ids.contains(&object.id)
