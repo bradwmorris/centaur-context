@@ -1042,6 +1042,7 @@ async fn lock_writable_object(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     authority: WriteAuthority,
+    allow_protected_source_research_notes: bool,
 ) -> Result<Object, DbError> {
     let object: Object = sqlx::query_as(
         r#"SELECT id,kind,title,description,protected,
@@ -1057,7 +1058,10 @@ async fn lock_writable_object(
     if object.lifecycle != "active" {
         return Err(DbError::NotFound);
     }
-    if object.protected && authority == WriteAuthority::Ordinary {
+    if object.protected
+        && authority == WriteAuthority::Ordinary
+        && !(allow_protected_source_research_notes && object.kind == "source")
+    {
         return Err(DbError::Invalid(
             "protected Objects cannot be changed through context_apply".into(),
         ));
@@ -1092,7 +1096,7 @@ async fn update_object(
     changes: &Map<String, Value>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id, authority).await?;
+    let current = lock_writable_object(tx, id, authority, false).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1203,7 +1207,7 @@ async fn promote_source_artifact(
             "expected_sha256 must be 64 lowercase hexadecimal characters".into(),
         ));
     }
-    let current = lock_writable_object(tx, source_id, authority).await?;
+    let current = lock_writable_object(tx, source_id, authority, false).await?;
     if current.kind != "source" {
         return Err(DbError::Invalid(
             "promote_source_artifact requires a Source Object".into(),
@@ -1443,7 +1447,7 @@ async fn archive_object(
     expected_revision: i64,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id, authority).await?;
+    let current = lock_writable_object(tx, id, authority, false).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1768,7 +1772,15 @@ async fn append_artifact(
     supersedes_artifact_id: Option<Uuid>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let object = lock_writable_object(tx, object_id, authority).await?;
+    let allow_protected_source_research_notes =
+        authority == WriteAuthority::Ordinary && kind == "research_notes";
+    let object = lock_writable_object(
+        tx,
+        object_id,
+        authority,
+        allow_protected_source_research_notes,
+    )
+    .await?;
     if object.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1782,19 +1794,64 @@ async fn append_artifact(
             "Artifact metadata must be an object".into(),
         ));
     }
+    let protected_source_research_notes = object.protected
+        && object.kind == "source"
+        && authority == WriteAuthority::Ordinary
+        && kind == "research_notes";
+    if protected_source_research_notes
+        && (content.is_none() || uri.is_some() || capture_outcome != "complete")
+    {
+        return Err(DbError::Invalid(
+            "protected Source research_notes must contain complete Artifact text".into(),
+        ));
+    }
+    let document_key = metadata
+        .get("document_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.trim().is_empty() && key.trim() == *key);
+    if protected_source_research_notes && document_key.is_none() {
+        return Err(DbError::Invalid(
+            "protected Source research_notes require a nonempty metadata.document_key".into(),
+        ));
+    }
     if let Some(predecessor) = supersedes_artifact_id {
-        let same_object: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=$1 AND object_id=$2)",
-        )
-        .bind(predecessor)
-        .bind(object_id)
-        .fetch_one(&mut **tx)
-        .await?;
-        if !same_object {
+        let predecessor_row: Option<(String, Value)> =
+            sqlx::query_as("SELECT kind,metadata FROM artifacts WHERE id=$1 AND object_id=$2")
+                .bind(predecessor)
+                .bind(object_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+        let Some((predecessor_kind, predecessor_metadata)) = predecessor_row else {
             return Err(DbError::Invalid(
                 "superseded Artifact belongs to another Object".into(),
             ));
+        };
+        if protected_source_research_notes {
+            let predecessor_key = predecessor_metadata
+                .get("document_key")
+                .and_then(Value::as_str);
+            let canonical_artifact: Option<Uuid> =
+                sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
+                    .bind(object_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+            let metadata_predecessor = metadata.get("predecessor_artifact_id");
+            if predecessor_kind != "research_notes"
+                || predecessor_key != document_key
+                || canonical_artifact == Some(predecessor)
+                || metadata_predecessor.is_some_and(|value| {
+                    value.as_str().and_then(|id| Uuid::parse_str(id).ok()) != Some(predecessor)
+                })
+            {
+                return Err(DbError::Invalid(
+                    "protected Source research_notes may supersede only the prior revision for the same document_key".into(),
+                ));
+            }
         }
+    } else if protected_source_research_notes && metadata.get("predecessor_artifact_id").is_some() {
+        return Err(DbError::Invalid(
+            "metadata.predecessor_artifact_id requires supersedes_artifact_id".into(),
+        ));
     }
     allowed(
         capture_outcome.to_owned(),

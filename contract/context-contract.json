@@ -100,6 +100,7 @@
     "updates_require_expected_revision": true,
     "unknown_fields_fail": true,
     "protected_records_are_not_interactively_writable": true,
+    "protected_sources_allow_research_notes_append": true,
     "protected_sources_allow_note_derivation_and_task_about_connections": true,
     "source_canonical_artifact_promotion_is_ingestion_only": true,
     "exact_connection_repeat_is_replay": true,
