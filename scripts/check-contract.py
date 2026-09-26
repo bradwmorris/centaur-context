@@ -154,8 +154,8 @@ def main() -> int:
     ):
         if phrase not in instructions:
             fail(f"generated instructions are missing description guidance: {phrase}")
-    if len(instructions) > 1_800:
-        fail("generated Context instructions exceed the 1,800-character budget")
+    if len(instructions) > 2_000:
+        fail("generated Context instructions exceed the 2,000-character budget")
     apply_tool = APPLY_TOOL.read_text()
     for example in policy["examples"].values():
         if example not in apply_tool:

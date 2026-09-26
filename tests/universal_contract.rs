@@ -1202,6 +1202,280 @@ async fn protected_source_research_notes_are_versioned_without_changing_source_e
 }
 
 #[tokio::test]
+async fn protected_preserved_notes_and_their_connections_can_be_archived_atomically() {
+    use sha2::{Digest, Sha256};
+    let Some(pool) = test_pool().await else {
+        eprintln!(
+            "skipping protected preserved-Note archival contract: TEST_DATABASE_URL is not set"
+        );
+        return;
+    };
+
+    let token = "p".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let note = Uuid::new_v4();
+    let source = Uuid::new_v4();
+    let content = "Synthetic preserved Note content for archival verification.";
+    let document_key = format!("preserved-note-{}", Uuid::new_v4());
+    let artifact = Uuid::new_v4();
+    let derived = Uuid::new_v4();
+    let related = Uuid::new_v4();
+    let mut seed = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,'note','Synthetic preserved Note','A disposable protected Note for archival tests.',true,'system','test','system','test'),($2,'source','Synthetic preservation Source','A disposable protected Source carrying exact test notes.',true,'system','test','system','test')")
+        .bind(note).bind(source).execute(&mut *seed).await.unwrap();
+    sqlx::query("INSERT INTO notes(object_id,content,intent) VALUES ($1,$2,'idea')")
+        .bind(note)
+        .bind(content)
+        .execute(&mut *seed)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO sources(object_id,source_kind,canonical_uri) VALUES ($1,'article','https://example.invalid/preserved-note')")
+        .bind(source).execute(&mut *seed).await.unwrap();
+    let artifact_body = format!("Complete consolidated text.\n\n{content}\n\nEnd of capture.");
+    sqlx::query("INSERT INTO artifacts(id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,metadata) VALUES ($1,$2,'research_notes',$3,'text/markdown',$4,$5,'complete',$6)")
+        .bind(artifact).bind(source).bind(&artifact_body)
+        .bind(format!("{:x}", Sha256::digest(artifact_body.as_bytes())))
+        .bind(artifact_body.len() as i64)
+        .bind(json!({"document_key":document_key,"source_note_manifest":[{"object_id":note,"revision":1}]}))
+        .execute(&mut *seed).await.unwrap();
+    for (id, kind) in [(derived, "derived_from"), (related, "related_to")] {
+        sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,$2,$3,$4,'Synthetic preserved-Note connection.',true,'system','test','system','test')")
+            .bind(id).bind(note).bind(kind).bind(source).execute(&mut *seed).await.unwrap();
+    }
+    seed.commit().await.unwrap();
+
+    let apply_request = json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("archive-preserved-note-{}",Uuid::new_v4()),
+        "operations":[
+            {"operation":"archive_connection","connection_id":related,"expected_revision":1},
+            {"operation":"archive_connection","connection_id":derived,"expected_revision":1},
+            {"operation":"archive_object","object_id":note,"expected_revision":1}
+        ]
+    });
+    let mut dry_run_request = apply_request.clone();
+    dry_run_request["validate_only"] = json!(true);
+    dry_run_request["idempotency_key"] =
+        json!(format!("validate-preserved-note-{}", Uuid::new_v4()));
+    let dry_run = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, dry_run_request))
+        .await
+        .unwrap();
+    let dry_status = dry_run.status();
+    let dry_body = json_body(dry_run).await;
+    assert_eq!(dry_status, StatusCode::OK, "{dry_body}");
+    assert_eq!(dry_body["data"]["validated_only"], true);
+    assert_eq!(dry_body["data"]["run_id"], Value::Null);
+    assert_eq!(dry_body["data"]["event_ids"], json!([]));
+    let before_commit: (Option<time::OffsetDateTime>, Option<time::OffsetDateTime>) =
+        sqlx::query_as(
+            "SELECT n.archived_at,c.archived_at FROM objects n CROSS JOIN connections c WHERE n.id=$1 AND c.id=$2",
+        )
+        .bind(note)
+        .bind(derived)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(before_commit.0.is_none());
+    assert!(before_commit.1.is_none());
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, apply_request))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["results"].as_array().unwrap().len(), 3);
+    let state: (Option<time::OffsetDateTime>, i64, Option<time::OffsetDateTime>, i64) = sqlx::query_as(
+        "SELECT n.archived_at,n.revision,c.archived_at,c.revision FROM objects n CROSS JOIN connections c WHERE n.id=$1 AND c.id=$2",
+    ).bind(note).bind(derived).fetch_one(&pool).await.unwrap();
+    assert!(state.0.is_some());
+    assert_eq!(state.1, 2);
+    assert!(state.2.is_some());
+    assert_eq!(state.3, 2);
+    let event_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM object_events WHERE run_id=$1 AND action='archived'",
+    )
+    .bind(
+        body["data"]["run_id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap(),
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_count, 3);
+
+    // A mismatched manifest cannot authorize either the protected link or the Note.
+    let bad_note = Uuid::new_v4();
+    let bad_source = Uuid::new_v4();
+    let bad_connection = Uuid::new_v4();
+    let bad_artifact = Uuid::new_v4();
+    let mut seed = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,'note','Mismatched manifest Note','A disposable protected Note with no matching manifest entry.',true,'system','test','system','test'),($2,'source','Mismatched manifest Source','A disposable protected Source.',true,'system','test','system','test')")
+        .bind(bad_note).bind(bad_source).execute(&mut *seed).await.unwrap();
+    sqlx::query("INSERT INTO notes(object_id,content,intent) VALUES ($1,'Unpreserved synthetic content.','idea')")
+        .bind(bad_note).execute(&mut *seed).await.unwrap();
+    sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES ($1,'article')")
+        .bind(bad_source)
+        .execute(&mut *seed)
+        .await
+        .unwrap();
+    let bad_artifact_body = "Different complete capture.";
+    sqlx::query("INSERT INTO artifacts(id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,metadata) VALUES ($1,$2,'research_notes',$3,'text/plain',$4,$5,'complete',$6)")
+        .bind(bad_artifact).bind(bad_source).bind(bad_artifact_body)
+        .bind(format!("{:x}", Sha256::digest(bad_artifact_body.as_bytes())))
+        .bind(bad_artifact_body.len() as i64)
+        .bind(json!({"document_key":"mismatch","source_note_manifest":[{"object_id":Uuid::new_v4(),"revision":1}]}))
+        .execute(&mut *seed).await.unwrap();
+    sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,$2,'derived_from',$3,'Synthetic invalid preservation link.',true,'system','test','system','test')")
+        .bind(bad_connection).bind(bad_note).bind(bad_source).execute(&mut *seed).await.unwrap();
+    seed.commit().await.unwrap();
+    let denied = app.clone().oneshot(request("POST","/api/v2/apply",&token,json!({
+        "contract_version":"1.1.0",
+        "idempotency_key":format!("deny-unpreserved-note-{}",Uuid::new_v4()),
+        "operations":[
+            {"operation":"archive_connection","connection_id":bad_connection,"expected_revision":1},
+            {"operation":"archive_object","object_id":bad_note,"expected_revision":1}
+        ]
+    }))).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let still_active: (Option<time::OffsetDateTime>, Option<time::OffsetDateTime>) = sqlx::query_as(
+        "SELECT o.archived_at,c.archived_at FROM objects o CROSS JOIN connections c WHERE o.id=$1 AND c.id=$2",
+    ).bind(bad_note).bind(bad_connection).fetch_one(&pool).await.unwrap();
+    assert!(still_active.0.is_none());
+    assert!(still_active.1.is_none());
+
+    async fn seed_invalid_case(pool: &PgPool, case: &str) -> (Uuid, Uuid, bool) {
+        use sha2::{Digest, Sha256};
+        let note = Uuid::new_v4();
+        let source = Uuid::new_v4();
+        let artifact_source = if case == "wrong-source" {
+            Uuid::new_v4()
+        } else {
+            source
+        };
+        let connection = Uuid::new_v4();
+        let artifact = Uuid::new_v4();
+        let note_content = if case == "wrong-body" {
+            "Different content absent from the Artifact."
+        } else {
+            "Synthetic boundary Note content."
+        };
+        let artifact_body = "Boundary capture containing Synthetic boundary Note content.";
+        let manifest_revision = if case == "stale-revision" { 2 } else { 1 };
+        let manifest = match case {
+            "missing-manifest" => None,
+            "wrong-manifest" => Some(json!([{"object_id":Uuid::new_v4(),"revision":1}])),
+            _ => Some(json!([{"object_id":note,"revision":manifest_revision}])),
+        };
+        let metadata = match case {
+            "missing-key" => json!({"source_note_manifest":manifest.unwrap()}),
+            "missing-manifest" => json!({"document_key":"boundary-capture"}),
+            _ => {
+                json!({"document_key":"boundary-capture","source_note_manifest":manifest.unwrap()})
+            }
+        };
+        let capture_outcome = if case == "incomplete" {
+            "incomplete"
+        } else {
+            "complete"
+        };
+        let mut seed = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,'note','Boundary Note','Disposable protected Note for archive denial coverage.',true,'system','test','system','test'),($2,'source','Boundary Source','Disposable Source for archive denial coverage.',true,'system','test','system','test')")
+            .bind(note).bind(source).execute(&mut *seed).await.unwrap();
+        sqlx::query("INSERT INTO notes(object_id,content,intent) VALUES ($1,$2,'idea')")
+            .bind(note)
+            .bind(note_content)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES ($1,'article')")
+            .bind(source)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+        if artifact_source != source {
+            sqlx::query("INSERT INTO objects(id,kind,title,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,'source','Other Boundary Source','Source that does not back the Note link.',true,'system','test','system','test')")
+                .bind(artifact_source).execute(&mut *seed).await.unwrap();
+            sqlx::query("INSERT INTO sources(object_id,source_kind) VALUES ($1,'article')")
+                .bind(artifact_source)
+                .execute(&mut *seed)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO artifacts(id,object_id,kind,content,media_type,sha256,size_bytes,capture_outcome,capture_reason,metadata) VALUES ($1,$2,'research_notes',$3,'text/plain',$4,$5,$6,$7,$8)")
+            .bind(artifact).bind(artifact_source).bind(artifact_body)
+            .bind(format!("{:x}",Sha256::digest(artifact_body.as_bytes())))
+            .bind(artifact_body.len() as i64).bind(capture_outcome)
+            .bind((capture_outcome != "complete").then_some("Synthetic incomplete capture"))
+            .bind(metadata).execute(&mut *seed).await.unwrap();
+        sqlx::query("INSERT INTO connections(id,source_object_id,kind,target_object_id,description,protected,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES ($1,$2,'derived_from',$3,'Synthetic boundary Note link.',true,'system','test','system','test')")
+            .bind(connection).bind(note).bind(source).execute(&mut *seed).await.unwrap();
+        if case == "prior-archive" {
+            sqlx::query("UPDATE connections SET archived_at=now(),revision=revision+1 WHERE id=$1")
+                .bind(connection)
+                .execute(&mut *seed)
+                .await
+                .unwrap();
+        }
+        seed.commit().await.unwrap();
+        (note, connection, case == "prior-archive")
+    }
+
+    for case in [
+        "stale-revision",
+        "missing-manifest",
+        "missing-key",
+        "wrong-manifest",
+        "wrong-body",
+        "wrong-source",
+        "incomplete",
+        "prior-archive",
+    ] {
+        let (case_note, case_connection, prior_archive) = seed_invalid_case(&pool, case).await;
+        let operations = if prior_archive {
+            json!([{"operation":"archive_object","object_id":case_note,"expected_revision":1}])
+        } else {
+            json!([{"operation":"archive_connection","connection_id":case_connection,"expected_revision":1}])
+        };
+        let denied = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/apply",
+                &token,
+                json!({
+                    "contract_version":"1.1.0",
+                    "idempotency_key":format!("deny-{case}-{}",Uuid::new_v4()),
+                    "operations":operations
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY, "{case}");
+        let archived: Option<time::OffsetDateTime> =
+            sqlx::query_scalar("SELECT archived_at FROM objects WHERE id=$1")
+                .bind(case_note)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(archived.is_none(), "{case}");
+    }
+}
+
+#[tokio::test]
 async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations() {
     let Some(pool) = test_pool().await else {
         return;
