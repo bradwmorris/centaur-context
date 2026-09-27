@@ -163,3 +163,6 @@ retain history but this surface offers **no unarchive or automatic rollback**.
 Archive reversal requires separate supported owner recovery. Failed batches save
 nothing. Remove maintenance configuration and credentials after reconciliation;
 remove intake configuration too when no other owner operation needs that listener.
+
+
+`POST /api/v2/maintenance/memory-review` validates or applies an exact saved Memory preview through the same token, allowed principal/thread and `MAINTENANCE_APPROVED_REQUEST_SHA256` authority. Keep the worker in preview for initial cleanup; validate the saved Run, approve its returned hash, then apply that exact Run without model inference. See [the procedure](memory.md#apply-an-exact-reviewed-preview). Autonomous apply is a separate ongoing-review enablement.

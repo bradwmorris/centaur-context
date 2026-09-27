@@ -2094,6 +2094,127 @@ pub(crate) async fn request_json_model(
     schema: Value,
     idempotency_id: String,
 ) -> Result<Value, CuratorError> {
+    request_json_model_with_effort(
+        pool,
+        client,
+        config,
+        run_id,
+        chat_id,
+        system,
+        input,
+        schema,
+        idempotency_id,
+        "low",
+    )
+    .await
+}
+
+// Error responses are an untrusted diagnostic boundary: never retain raw bodies,
+// provider messages, prompts, stderr or arbitrary strings from the broker.
+const INFERENCE_FAILURE_BYTES: usize = 16 * 1024;
+
+fn safe_inference_failure(
+    body: &Value,
+    request_id: &str,
+    model: &str,
+    effort: &str,
+) -> Option<Value> {
+    if body["code"] != "curator_inference_failed" {
+        return None;
+    }
+    let d = &body["diagnostics"];
+    let classification = d["classification"].as_str()?;
+    if !matches!(
+        classification,
+        "authentication"
+            | "unsupported_model"
+            | "quota"
+            | "rate_limit"
+            | "transport"
+            | "timeout"
+            | "malformed_output"
+            | "prohibited_tool"
+            | "invalid_request"
+            | "output_limit"
+            | "model_failure"
+    ) {
+        return None;
+    }
+    if d["request_id"] != request_id || request_id.len() > 128 {
+        return None;
+    }
+    let execution_id = Uuid::parse_str(d["execution_id"].as_str()?).ok()?;
+    let actual_model = d["model"].as_str()?;
+    let actual_effort = d["reasoning_effort"].as_str()?;
+    if actual_model != model
+        && !(actual_model == "unsupported"
+            && matches!(classification, "unsupported_model" | "invalid_request"))
+    {
+        return None;
+    }
+    if actual_effort != effort
+        && !(actual_effort == "unsupported" && classification == "invalid_request")
+    {
+        return None;
+    }
+    let retryable = d["retryable"].as_bool()?;
+    let duration_ms = d["duration_ms"].as_u64()?;
+    if duration_ms > 86_400_000 {
+        return None;
+    }
+    let provider_status = d["provider_status"]
+        .as_u64()
+        .filter(|s| (100..=599).contains(s));
+    let provider_code = d["provider_code"].as_str().filter(|s| {
+        matches!(
+            *s,
+            "unsupported_model"
+                | "rate_limit_exceeded"
+                | "insufficient_quota"
+                | "authentication_error"
+        )
+    });
+    Some(
+        json!({"request_id":request_id,"execution_id":execution_id,"model":actual_model,"reasoning_effort":actual_effort,"classification":classification,"provider_status":provider_status,"provider_code":provider_code,"retryable":retryable,"duration_ms":duration_ms}),
+    )
+}
+
+async fn read_inference_failure(
+    mut response: reqwest::Response,
+    request_id: &str,
+    model: &str,
+    effort: &str,
+) -> Option<Value> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > INFERENCE_FAILURE_BYTES as u64)
+    {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > INFERENCE_FAILURE_BYTES {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let value = serde_json::from_slice(&body).ok()?;
+    safe_inference_failure(&value, request_id, model, effort)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_json_model_with_effort(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    config: &CuratorModelConfig,
+    run_id: Uuid,
+    chat_id: Option<Uuid>,
+    system: &str,
+    input: String,
+    schema: Value,
+    idempotency_id: String,
+    effort: &str,
+) -> Result<Value, CuratorError> {
     let attempt_id = Uuid::new_v4().to_string();
     let request_body = match config.transport {
         CuratorModelTransport::CentaurSubscription => json!({
@@ -2101,17 +2222,23 @@ pub(crate) async fn request_json_model(
             "system_prompt": system,
             "input": input,
             "output_schema": schema,
-            "reasoning_effort": "low"
+            "reasoning_effort": effort,
+            "model": config.model
         }),
-        CuratorModelTransport::DirectApi => json!({
-            "model": config.model,
-            "messages": [
-                {"role":"system","content":system},
-                {"role":"user","content":input}
-            ],
-            "response_format":{"type":"json_object"},
-            "temperature":0
-        }),
+        CuratorModelTransport::DirectApi => {
+            let mut body = json!({
+                "model": config.model,
+                "messages": [{"role":"system","content":system},{"role":"user","content":input}],
+                "response_format":{"type":"json_object"}
+            });
+            if effort == "high" {
+                body["reasoning_effort"] = json!(effort);
+            } else {
+                // Preserve the existing direct extraction/summary contract.
+                body["temperature"] = json!(0);
+            }
+            body
+        }
     };
     let response = match client
         .post(&config.endpoint)
@@ -2122,7 +2249,7 @@ pub(crate) async fn request_json_model(
     {
         Ok(response) => response,
         Err(error) => {
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2140,7 +2267,28 @@ pub(crate) async fn request_json_model(
     };
     let status = response.status();
     if !status.is_success() {
-        let attribution = default_usage_attribution(config, &attempt_id);
+        let diagnostics = if matches!(config.transport, CuratorModelTransport::CentaurSubscription)
+        {
+            read_inference_failure(response, &idempotency_id, &config.model, effort).await
+        } else {
+            None
+        };
+        let message = match diagnostics.as_ref() {
+            Some(d) => format!(
+                "curator model returned HTTP {status}; {}",
+                d["classification"].as_str().unwrap()
+            ),
+            None => format!("curator model returned HTTP {status}"),
+        };
+        if let Some(diagnostics) = &diagnostics {
+            sqlx::query("UPDATE runs SET result=result || jsonb_build_object('inference_failure',$2::jsonb) WHERE id=$1")
+                .bind(run_id).bind(diagnostics).execute(pool).await?;
+        }
+        let execution_id = diagnostics
+            .as_ref()
+            .and_then(|d| d["execution_id"].as_str())
+            .unwrap_or(&attempt_id);
+        let attribution = default_usage_attribution(config, execution_id, effort);
         record_curator_usage(
             pool,
             run_id,
@@ -2148,17 +2296,15 @@ pub(crate) async fn request_json_model(
             &config.model,
             &attribution,
             None,
-            Some(&format!("HTTP {status}")),
+            Some(&message),
         )
         .await;
-        return Err(CuratorError::Invalid(format!(
-            "curator model returned HTTP {status}"
-        )));
+        return Err(CuratorError::Invalid(message));
     }
     let body: Value = match response.json().await {
         Ok(body) => body,
         Err(error) => {
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2179,7 +2325,7 @@ pub(crate) async fn request_json_model(
             let response: CentaurInferenceResponse = match serde_json::from_value(body) {
                 Ok(response) => response,
                 Err(error) => {
-                    let attribution = default_usage_attribution(config, &attempt_id);
+                    let attribution = default_usage_attribution(config, &attempt_id, effort);
                     record_curator_usage(
                         pool,
                         run_id,
@@ -2196,14 +2342,15 @@ pub(crate) async fn request_json_model(
                 }
             };
             if response.request_id != idempotency_id
-                || response.model != "gpt-5.6-luna"
+                || response.model != config.model
+                || response.reasoning_effort != effort
                 || response.provider != "openai"
                 || response.harness != "codex"
                 || response.authentication_mode != "chatgpt_subscription"
                 || response.billing_basis != "chatgpt_subscription"
                 || response.upstream != "chatgpt.com"
             {
-                let attribution = default_usage_attribution(config, &attempt_id);
+                let attribution = default_usage_attribution(config, &attempt_id, effort);
                 record_curator_usage(
                     pool,
                     run_id,
@@ -2252,7 +2399,7 @@ pub(crate) async fn request_json_model(
             let response: ModelResponse = match serde_json::from_value(body) {
                 Ok(response) => response,
                 Err(error) => {
-                    let attribution = default_usage_attribution(config, &attempt_id);
+                    let attribution = default_usage_attribution(config, &attempt_id, effort);
                     record_curator_usage(
                         pool,
                         run_id,
@@ -2268,7 +2415,7 @@ pub(crate) async fn request_json_model(
                     )));
                 }
             };
-            let attribution = default_usage_attribution(config, &attempt_id);
+            let attribution = default_usage_attribution(config, &attempt_id, effort);
             record_curator_usage(
                 pool,
                 run_id,
@@ -2348,6 +2495,7 @@ fn reconciliation_plan_schema() -> Value {
 fn default_usage_attribution<'a>(
     config: &CuratorModelConfig,
     attempt_id: &'a str,
+    effort: &'a str,
 ) -> UsageAttribution<'a> {
     match config.transport {
         CuratorModelTransport::CentaurSubscription => UsageAttribution {
@@ -2356,7 +2504,7 @@ fn default_usage_attribution<'a>(
             auth_mode: "chatgpt_subscription",
             upstream_service: "chatgpt.com",
             billing_mode: "subscription_allowance",
-            reasoning_effort: Some("low"),
+            reasoning_effort: Some(effort),
             source_execution_id: attempt_id,
         },
         CuratorModelTransport::DirectApi => UsageAttribution {
@@ -2365,7 +2513,7 @@ fn default_usage_attribution<'a>(
             auth_mode: "api_key",
             upstream_service: "api.openai.com",
             billing_mode: "metered_api",
-            reasoning_effort: None,
+            reasoning_effort: (effort == "high").then_some(effort),
             source_execution_id: attempt_id,
         },
     }
@@ -2846,7 +2994,7 @@ mod tests {
             poll_interval: std::time::Duration::from_secs(1),
             request_timeout: std::time::Duration::from_secs(210),
         };
-        let attribution = default_usage_attribution(&config, "attempt-1");
+        let attribution = default_usage_attribution(&config, "attempt-1", "low");
         assert_eq!(attribution.execution_type, "direct_api");
         assert_eq!(attribution.auth_mode, "api_key");
         assert_eq!(attribution.billing_mode, "metered_api");
@@ -2863,7 +3011,7 @@ mod tests {
             poll_interval: std::time::Duration::from_secs(1),
             request_timeout: std::time::Duration::from_secs(210),
         };
-        let attribution = default_usage_attribution(&config, "attempt-1");
+        let attribution = default_usage_attribution(&config, "attempt-1", "low");
         assert_eq!(attribution.execution_type, "codex_harness");
         assert_eq!(attribution.auth_mode, "chatgpt_subscription");
         assert_eq!(attribution.billing_mode, "subscription_allowance");
@@ -2888,5 +3036,31 @@ mod tests {
             referenced_object_ids(&format!("Update object {id}, please")),
             std::collections::BTreeSet::from([id])
         );
+    }
+    #[test]
+    fn inference_error_allowlist_rejects_wrong_receipts_and_unsafe_fields() {
+        let valid = json!({"code":"curator_inference_failed","diagnostics":{
+            "request_id":"dream-test","execution_id":Uuid::new_v4(),"model":"gpt-6-luna","reasoning_effort":"high",
+            "classification":"timeout","retryable":true,"provider_status":504,"provider_code":"secret-token", "duration_ms":100,
+            "stderr":"secret-token","prompt":"secret-token"},"body":"secret-token"});
+        let safe = safe_inference_failure(&valid, "dream-test", "gpt-6-luna", "high").unwrap();
+        assert!(!safe.to_string().contains("secret-token"));
+        assert!(safe["provider_code"].is_null());
+        for (field, value) in [
+            ("request_id", json!("other")),
+            ("execution_id", json!("not-a-uuid")),
+            ("model", json!("wrong-model")),
+            ("reasoning_effort", json!("low")),
+            ("classification", json!("secret-token")),
+            ("retryable", json!("true")),
+            ("duration_ms", json!(86_400_001)),
+        ] {
+            let mut bad = valid.clone();
+            bad["diagnostics"][field] = value;
+            assert!(
+                safe_inference_failure(&bad, "dream-test", "gpt-6-luna", "high").is_none(),
+                "{field}"
+            );
+        }
     }
 }
