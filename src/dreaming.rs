@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 const ACTOR: &str = "context-memory-dream";
 const BATCH: i64 = 25;
-const POLICY_VERSION: &str = "event-review-v3";
+const POLICY_VERSION: &str = "event-review-v4";
 const INPUT_BYTES: usize = 24_000;
 const MAX_CHANGES: usize = 20;
 
@@ -165,8 +165,16 @@ async fn read_batch_mode(
             .bind(&ids).fetch_all(&mut *tx).await?;
         ids.extend(neighbors);
     }
+    tx.commit().await?;
+    read_selected_batch(pool, &ids).await
+}
+
+/// Rebuild every contextual input from this exact selection. A shrunken batch
+/// must not retain targets or Chat evidence belonging only to removed Memories.
+async fn read_selected_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Batch, db::DbError> {
+    let mut tx = pool.begin().await?;
     let mut memories = Vec::new();
-    for id in &ids {
+    for id in ids {
         let mut memory = db::target_snapshot(&mut tx, "object", *id).await?;
         adapt_git_evidence(&mut tx, &mut memory).await?;
         memory["review_fingerprint"] = json!(
@@ -179,15 +187,15 @@ async fn read_batch_mode(
     }
     // Keep graph input bounded; large/ambiguous clusters are left untouched.
     let connections:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(c) FROM connections c WHERE c.archived_at IS NULL AND (c.source_object_id=ANY($1) OR c.target_object_id=ANY($1)) ORDER BY c.id LIMIT 101")
-        .bind(&ids).fetch_all(&mut *tx).await?;
+        .bind(ids).fetch_all(&mut *tx).await?;
     let mut evidence:Vec<Value>=sqlx::query_scalar(
         "SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'truncated',false,'at',m.source_created_at) \
          FROM chat_messages m JOIN objects o ON o.id=m.sender_user_object_id WHERE m.id::text IN \
           (SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(provenance->'supporting_message_ids')='array' THEN provenance->'supporting_message_ids' ELSE '[]'::jsonb END) FROM objects WHERE id=ANY($1)) \
          ORDER BY m.ingestion_sequence LIMIT 50")
-        .bind(&ids).fetch_all(&mut *tx).await?;
+        .bind(ids).fetch_all(&mut *tx).await?;
     let committed: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',e.id,'type','committed_event','actor_id',e.actor_id,'actor_type',e.actor_type,'at',e.created_at,'object',e.after_state - 'search_document' - 'artifacts') FROM object_events e WHERE e.id::text IN (SELECT provenance->>'source_event_id' FROM objects WHERE id=ANY($1)) LIMIT 25")
-        .bind(&ids).fetch_all(&mut *tx).await?;
+        .bind(ids).fetch_all(&mut *tx).await?;
     evidence.extend(committed);
     evidence.extend(
         memories
@@ -204,7 +212,7 @@ async fn read_batch_mode(
     // Follow two graph hops from referenced Objects to existing origin Chats,
     // people and related events. These are read-only candidates, never authority.
     let connected: Vec<Uuid> = sqlx::query_scalar("WITH direct AS (SELECT source_object_id AS id FROM connections WHERE archived_at IS NULL AND target_object_id=ANY($1) UNION SELECT target_object_id FROM connections WHERE archived_at IS NULL AND source_object_id=ANY($1)) SELECT id FROM direct UNION SELECT c.source_object_id FROM connections c JOIN direct d ON c.target_object_id=d.id WHERE c.archived_at IS NULL UNION SELECT c.target_object_id FROM connections c JOIN direct d ON c.source_object_id=d.id WHERE c.archived_at IS NULL LIMIT 100")
-        .bind(&ids).fetch_all(&mut *tx).await?;
+        .bind(ids).fetch_all(&mut *tx).await?;
     let origin_messages: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'truncated',false,'at',m.source_created_at,'context_only',true) FROM chat_messages m JOIN objects o ON o.id=m.sender_user_object_id WHERE m.chat_object_id=ANY($1) ORDER BY m.ingestion_sequence LIMIT 50")
         .bind(&connected).fetch_all(&mut *tx).await?;
     for message in origin_messages {
@@ -231,7 +239,7 @@ async fn read_batch_mode(
         .join(" OR ");
     let targets:Vec<Value>=sqlx::query_scalar(
         "SELECT jsonb_build_object('id',o.id,'kind',o.kind,'title',o.title,'description',o.description,'revision',o.revision,'metadata',CASE WHEN o.kind='source' THEN (SELECT to_jsonb(s) FROM sources s WHERE s.object_id=o.id) ELSE '{}'::jsonb END) FROM objects o WHERE o.archived_at IS NULL AND NOT(o.id=ANY($1)) AND (o.id=ANY($2) OR ($3<>'' AND o.search_document @@ websearch_to_tsquery('simple',$3))) ORDER BY (o.id=ANY($2)) DESC,o.id LIMIT 100")
-        .bind(&ids).bind(&candidate_ids).bind(terms).fetch_all(&mut *tx).await?;
+        .bind(ids).bind(&candidate_ids).bind(terms).fetch_all(&mut *tx).await?;
     // Expose the bounded graph path so matching names alone are not grounding.
     let context_links: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',id,'type','context_connection','revision',revision,'source_object_id',source_object_id,'target_object_id',target_object_id,'kind',kind,'description',description) FROM connections WHERE archived_at IS NULL AND source_object_id=ANY($1) AND target_object_id=ANY($1) ORDER BY id LIMIT 100")
         .bind(&candidate_ids).fetch_all(&mut *tx).await?;
@@ -1104,28 +1112,12 @@ pub async fn pass(
         && batch.memories.len() > 1
     {
         batch.memories.pop();
-        let ids: HashSet<ValueKey> = batch
+        let ids = batch
             .memories
             .iter()
-            .filter_map(|m| m["id"].as_str().map(|s| ValueKey(s.into())))
-            .collect();
-        batch.connections.retain(|c| {
-            ids.contains(&ValueKey(
-                c["source_object_id"].as_str().unwrap_or_default().into(),
-            )) || ids.contains(&ValueKey(
-                c["target_object_id"].as_str().unwrap_or_default().into(),
-            ))
-        });
-        let evidence: HashSet<String> = batch.memories.iter().flat_map(evidence_keys).collect();
-        batch.evidence.retain(|e| {
-            e["context_only"] == true
-                || e["type"] == "context_connection"
-                || e["id"].as_str().is_some_and(|id| {
-                    evidence.contains(&format!("message:{id}"))
-                        || evidence.contains(&format!("event:{id}"))
-                        || evidence.contains(&format!("receipt:{id}"))
-                })
-        });
+            .map(|m| uuid(m, "id"))
+            .collect::<Result<Vec<_>, _>>()?;
+        batch = read_selected_batch(pool, &ids).await?;
     }
     let input = serde_json::to_string(&model_input(&batch)).map_err(|e| invalid(&e.to_string()))?;
     let run = Uuid::new_v4();
@@ -1229,9 +1221,6 @@ pub async fn pass(
     lease.commit().await?;
     Ok(Some(run))
 }
-
-#[derive(Hash, Eq, PartialEq)]
-struct ValueKey(String);
 
 /// Exact-run recovery, exposed only through the existing owner HTTP surface.
 /// Any subsequent user/worker revision makes the whole undo fail atomically.

@@ -108,9 +108,13 @@ Only enable autonomous `apply` after separate approval of ongoing automatic
 review. Remove consumed hashes when they are no longer needed. This endpoint
 uses the existing maintenance authority; ordinary agent listeners do not expose it.
 
-## Event review policy v3
+## Event review policy v4
 
-The `event-review-v3` checkpoint reconsiders eligible legacy revisions once.
+The `event-review-v4` checkpoint reconsiders eligible revisions, including v3
+records wrongly deferred when a shrinking batch retained another Memory’s large
+context. Each shrink rebuilds supporting context and candidates for only the
+remaining IDs; evidence requirements and size limits remain unchanged. Previous
+saved previews require regeneration under the current policy.
 Successful unchanged reviews make no further model call. Missing, oversized or
 incomplete evidence is recorded as `deferred`, never `reviewed`, until the supporting version changes. Inspect those Run reasons before any
 claim of complete cleanup. A graph exceeding the bounded input is also deferred.

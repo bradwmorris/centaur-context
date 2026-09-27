@@ -55,6 +55,20 @@ async fn fixture(pool: &PgPool, kind: &str, provenance: Value) -> Uuid {
             .await
             .unwrap();
     }
+    if kind == "chat" {
+        sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    if kind == "user" {
+        sqlx::query("INSERT INTO users(object_id,user_kind) VALUES($1,'human')")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
     tx.commit().await.unwrap();
     id
 }
@@ -1076,7 +1090,7 @@ async fn interrupted_attempts_consume_the_same_durable_retry_budget() {
     };
     for _ in 0..3 {
         let interrupted = Uuid::new_v4();
-        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'memory_dream','running','system','context-memory-dream',$1::text,$2)").bind(interrupted).bind(json!({"policy_version":"event-review-v3","preview":false,"fingerprints":{id.to_string():fingerprint}})).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'memory_dream','running','system','context-memory-dream',$1::text,$2)").bind(interrupted).bind(json!({"policy_version":"event-review-v4","preview":false,"fingerprints":{id.to_string():fingerprint}})).execute(&pool).await.unwrap();
         assert!(
             dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
                 .await
@@ -1088,7 +1102,7 @@ async fn interrupted_attempts_consume_the_same_durable_retry_budget() {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(result["policy_version"], "event-review-v3");
+        assert_eq!(result["policy_version"], "event-review-v4");
         assert!(result["retry_at"].is_string());
         sqlx::query("UPDATE runs SET result=jsonb_set(result,'{retry_at}',to_jsonb((now()-interval '1 second')::text)) WHERE kind='memory_dream'").execute(&pool).await.unwrap();
     }
@@ -1229,7 +1243,7 @@ async fn approved_saved_preview_is_exact_authenticated_idempotent_and_does_not_i
         format!("context-memory-preview-apply:{preview}:{hash}").as_bytes(),
     );
     sqlx::query("INSERT INTO runs(id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,input,error) VALUES($1,$2,'memory_dream','failed','centaur_agent','synthetic-reviewer',$3,$4,'synthetic interrupted attempt')")
-        .bind(interrupted).bind(preview).bind(format!("memory-preview:{preview}:{hash}")).bind(json!({"preview_run_id":preview,"approval_sha256":hash,"policy_version":"event-review-v3"})).execute(&pool).await.unwrap();
+        .bind(interrupted).bind(preview).bind(format!("memory-preview:{preview}:{hash}")).bind(json!({"preview_run_id":preview,"approval_sha256":hash,"policy_version":"event-review-v4"})).execute(&pool).await.unwrap();
     let approved = reviewed_memory_app(&pool, vec![hash]);
     let (first, second) = tokio::join!(
         review_call(
@@ -1522,6 +1536,127 @@ async fn broker_failure_receipts_are_safe_persisted_and_control_retries() {
                 .is_none()
         );
         assert_eq!(snapshot(&pool, memory).await, before);
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn shrinking_reloads_context_and_retries_prior_policy_deferrals() {
+    let _guard = LOCK.lock().await;
+    for oversized_kind in ["target", "chat"] {
+        let Some(pool) = pool().await else { return };
+        let good = evidenced_memory(&pool).await;
+        let bad = evidenced_memory(&pool).await;
+        let source = fixture(&pool, "source", json!({})).await;
+        sqlx::query("UPDATE objects SET title='Budget approved',description='Alex approved the budget.',updated_at='2026-09-20T00:00:00Z' WHERE id=$1").bind(good).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE objects SET title='Zygomatic',description='A separate event.',updated_at='2026-09-21T00:00:00Z' WHERE id=$1").bind(bad).execute(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE objects SET title='Zygomatic',description='A separate source.' WHERE id=$1",
+        )
+        .bind(source)
+        .execute(&pool)
+        .await
+        .unwrap();
+        edge(&pool, bad, source, "about").await;
+        if oversized_kind == "target" {
+            // Many individually valid candidates can exceed the input budget.
+            for _ in 0..40 {
+                let target = fixture(&pool, "source", json!({})).await;
+                sqlx::query("UPDATE objects SET title='Zygomatic',description=$2 WHERE id=$1")
+                    .bind(target)
+                    .bind("Unrelated source details. ".repeat(20))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                edge(&pool, source, target, "related_to").await;
+            }
+        } else {
+            let chat = fixture(&pool, "chat", json!({})).await;
+            let sender = fixture(&pool, "user", json!({})).await;
+            edge(&pool, source, chat, "derived_from").await;
+            for index in 0..2 {
+                sqlx::query("INSERT INTO chat_messages(id,chat_object_id,provider_message_id,sender_user_object_id,content,source_created_at) VALUES($1,$2,$3,$4,$5,now())")
+                    .bind(Uuid::new_v4()).bind(chat).bind(format!("synthetic-{index}")).bind(sender).bind("Unrelated conversation. ".repeat(750)).execute(&pool).await.unwrap();
+            }
+        }
+        let before = snapshot(&pool, good).await;
+        let fingerprint: String = sqlx::query_scalar("SELECT memory_review_fingerprint($1)")
+            .bind(good)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let prior = Uuid::new_v4();
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,completed_at) VALUES($1,'memory_dream','failed','system','context-memory-dream',$1::text,$2,$3,now())")
+            .bind(prior).bind(json!({"preview":true,"fingerprints":{good.to_string():fingerprint}}))
+            .bind(json!({"policy_version":"event-review-v3","retryable":false,"deferred":{good.to_string():before["revision"]},"model_calls":0})).execute(&pool).await.unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let router = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let count = count.clone();
+                async move {
+                    let input: Value =
+                        serde_json::from_str(body["messages"][1]["content"].as_str().unwrap())
+                            .unwrap();
+                    assert_eq!(input["memories"].as_array().unwrap().len(), 1);
+                    assert_eq!(input["memories"][0]["id"], good.to_string());
+                    assert!(
+                        !input["targets"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|t| t["id"] == source.to_string())
+                    );
+                    assert!(!input["evidence"].as_array().unwrap().iter().any(
+                            |e| e["context_only"] == true || e["type"] == "context_connection"
+                        ));
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    axum::Json(json!({"choices":[{"message":{"content":"{\"changes\":[]}"}}]}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config = centaur_context::config::CuratorModelConfig {
+            transport: centaur_context::config::CuratorModelTransport::DirectApi,
+            endpoint: format!("http://{addr}/"),
+            api_token: "synthetic".into(),
+            model: "gpt-6-luna".into(),
+            prompt_version: "test".into(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(5),
+        };
+        let reviewed = dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+            .bind(reviewed)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "preview", "{oversized_kind}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let deferred = dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+            .bind(deferred)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(result["deferred"].get(bad.to_string()).is_some());
+        assert_eq!(result["model_calls"], 0);
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshot(&pool, good).await, before);
         server.abort();
     }
 }
