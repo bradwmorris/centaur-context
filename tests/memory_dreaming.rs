@@ -1739,3 +1739,95 @@ async fn optional_context_pressure_preserves_original_evidence_and_relevant_cand
     assert!(!budget["missing_required_evidence"].as_bool().unwrap());
     server.abort();
 }
+
+#[tokio::test]
+async fn content_failures_defer_one_batch_without_pausing_other_memories() {
+    let _guard = LOCK.lock().await;
+    for classification in ["output_limit", "malformed_output", "prohibited_tool"] {
+        let Some(pool) = pool().await else { return };
+        for _ in 0..26 {
+            evidenced_memory(&pool).await;
+        }
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let router=axum::Router::new().route("/",axum::routing::post(move |axum::Json(body):axum::Json<Value>| {
+            let count=count.clone();
+            async move {
+                if count.fetch_add(1,std::sync::atomic::Ordering::SeqCst)==0 {
+                    (axum::http::StatusCode::SERVICE_UNAVAILABLE,axum::Json(json!({"code":"curator_inference_failed","diagnostics":{
+                        "request_id":body["request_id"],"execution_id":Uuid::new_v4(),"model":"gpt-6-luna","reasoning_effort":"high",
+                        "classification":classification,"retryable":false,"provider_status":null,"provider_code":null,"duration_ms":100
+                    }})))
+                } else {
+                    (axum::http::StatusCode::OK,axum::Json(json!({"request_id":body["request_id"],"execution_id":Uuid::new_v4(),"model":"gpt-6-luna","reasoning_effort":"high",
+                        "provider":"openai","harness":"codex","authentication_mode":"chatgpt_subscription","billing_basis":"chatgpt_subscription","upstream":"chatgpt.com",
+                        "output":{"changes":[]},"usage":null})))
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config = centaur_context::config::CuratorModelConfig {
+            transport: centaur_context::config::CuratorModelTransport::CentaurSubscription,
+            endpoint: format!("http://{addr}/"),
+            api_token: "synthetic".into(),
+            model: "gpt-6-luna".into(),
+            prompt_version: "test".into(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(5),
+        };
+        let deferred = dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+            .bind(deferred)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(result["paused"], false);
+        assert_eq!(result["retryable"], false);
+        assert_eq!(
+            result["inference_failure"]["classification"],
+            classification
+        );
+        let remaining = dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+            .await
+            .unwrap()
+            .unwrap();
+        let status: String = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+            .bind(remaining)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "preview");
+        for _ in 0..26 {
+            if dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+                .await
+                .unwrap()
+                .is_none()
+            {
+                break;
+            }
+        }
+        let failed: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='failed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            failed, 1,
+            "content failure must not retry or block other rows"
+        );
+        assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        server.abort();
+    }
+}

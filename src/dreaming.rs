@@ -1299,15 +1299,24 @@ pub async fn pass(
                 || message.contains("HTTP 502")
                 || message.contains("HTTP 429"),
         );
-        let paused = broker_retryable.map(|retryable| !retryable).unwrap_or(
-            message.contains("HTTP 401")
-                || message.contains("HTTP 403")
-                || message.contains("HTTP 404")
-                || message.contains("HTTP 400")
-                || message.contains("HTTP 422")
-                || message.contains("subscription contract")
-                || message.contains("invalid Centaur inference response"),
-        );
+        let paused = broker_failure
+            .as_ref()
+            .map(|failure| {
+                failure["retryable"] == false
+                    && matches!(
+                        failure["classification"].as_str(),
+                        Some("authentication" | "unsupported_model" | "quota" | "invalid_request")
+                    )
+            })
+            .unwrap_or(
+                message.contains("HTTP 401")
+                    || message.contains("HTTP 403")
+                    || message.contains("HTTP 404")
+                    || message.contains("HTTP 400")
+                    || message.contains("HTTP 422")
+                    || message.contains("subscription contract")
+                    || message.contains("invalid Centaur inference response"),
+            );
         let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='failed' AND input->'fingerprints'=$1 AND input->'preview'=$2 AND result->>'configuration_key'=$3")
             .bind(json!(fingerprints)).bind(json!(preview)).bind(&configuration_key).fetch_one(pool).await?;
         let delay = 30_i32 * 2_i32.pow(attempts.min(2) as u32);
@@ -1315,6 +1324,12 @@ pub async fn pass(
             .bind(run).bind(message.chars().take(1000).collect::<String>())
             .bind(json!({"policy_version":POLICY_VERSION,"retryable":retryable && attempts < 2,"paused":paused,"configuration_key":configuration_key,"deferred":revisions}))
             .bind(delay as f64).execute(pool).await?;
+        if !retryable && !paused {
+            // A content-specific failure finishes this batch, not the whole
+            // worker. Its durable deferral lets the next pending batch advance.
+            lease.commit().await?;
+            return Ok(Some(run));
+        }
         return Err(error);
     }
     lease.commit().await?;

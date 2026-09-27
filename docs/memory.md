@@ -161,3 +161,9 @@ context prefers messages closest to the selected events. Run `context_budget`
 records byte/count breakdowns without copying content; deferral distinguishes
 required evidence over budget from incomplete evidence. Policy v5 retries prior
 v3/v4 deferrals after these context-budget corrections.
+
+Only configuration-wide broker failures (authentication, unsupported model,
+quota or invalid request) pause the reviewer. Nonretryable content failures such
+as output limits, malformed output or prohibited tools defer the affected batch;
+the worker immediately continues with other pending Memories. Transient failure
+backoff and the three-attempt budget are unchanged.
