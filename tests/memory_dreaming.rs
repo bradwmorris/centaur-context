@@ -1052,3 +1052,355 @@ async fn peer_memory_wording_does_not_requeue_unchanged_original_evidence() {
     assert!(pending.memories.iter().any(|m| m["id"] == b.to_string()));
     assert!(!pending.memories.iter().any(|m| m["id"] == a.to_string()));
 }
+
+#[tokio::test]
+async fn interrupted_attempts_consume_the_same_durable_retry_budget() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let id = evidenced_memory(&pool).await;
+    let batch = dreaming::read_batch(&pool).await.unwrap();
+    let fingerprint = batch
+        .memories
+        .iter()
+        .find(|m| m["id"] == id.to_string())
+        .unwrap()["review_fingerprint"]
+        .clone();
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: "http://127.0.0.1:1/must-not-call".into(),
+        api_token: "synthetic".into(),
+        model: "gpt-6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(1),
+    };
+    for _ in 0..3 {
+        let interrupted = Uuid::new_v4();
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input) VALUES($1,'memory_dream','running','system','context-memory-dream',$1::text,$2)").bind(interrupted).bind(json!({"policy_version":"event-review-v3","preview":false,"fingerprints":{id.to_string():fingerprint}})).execute(&pool).await.unwrap();
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+            .bind(interrupted)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(result["policy_version"], "event-review-v3");
+        assert!(result["retry_at"].is_string());
+        sqlx::query("UPDATE runs SET result=jsonb_set(result,'{retry_at}',to_jsonb((now()-interval '1 second')::text)) WHERE kind='memory_dream'").execute(&pool).await.unwrap();
+    }
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn saved_preview_fixture(pool: &PgPool, ids: &[Uuid]) -> Uuid {
+    let response = serde_json::to_string(&Plan {
+        changes: ids.iter().copied().map(rewrite).collect(),
+    })
+    .unwrap();
+    let router = axum::Router::new().route(
+        "/",
+        axum::routing::post(move || {
+            let response = response.clone();
+            async move { axum::Json(json!({"choices":[{"message":{"content":response}}]})) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    };
+    let id = dreaming::pass(pool, &reqwest::Client::new(), &config, true)
+        .await
+        .unwrap()
+        .unwrap();
+    server.abort(); // Exact application must work with inference unavailable.
+    id
+}
+fn reviewed_memory_app(pool: &PgPool, hashes: Vec<String>) -> axum::Router {
+    centaur_context::intake::router_with_maintenance(
+        centaur_context::api::AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: centaur_context::config::TextSearchConfig::SIMPLE,
+        },
+        "synthetic-intake".into(),
+        None,
+        Some(centaur_context::maintenance::MaintenanceConfig {
+            api_token: "synthetic-maintenance".into(),
+            allowed_principal: "synthetic-reviewer".into(),
+            approved_request_hashes: hashes.into_iter().collect(),
+        }),
+    )
+}
+async fn review_call(
+    app: &axum::Router,
+    body: Value,
+    token: &str,
+    principal: &str,
+) -> (axum::http::StatusCode, Value) {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/v2/maintenance/memory-review")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .header("x-centaur-principal-id", principal)
+                .header("x-centaur-thread-key", "synthetic-review-thread")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+#[tokio::test]
+async fn approved_saved_preview_is_exact_authenticated_idempotent_and_does_not_infer() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let a = evidenced_memory(&pool).await;
+    let before = snapshot(&pool, a).await;
+    let preview = saved_preview_fixture(&pool, &[a]).await;
+    let unapproved = evidenced_memory(&pool).await;
+    let app = reviewed_memory_app(&pool, vec![]);
+    let validate = json!({"preview_run_id":preview,"validate_only":true});
+    assert_eq!(
+        review_call(&app, validate.clone(), "wrong", "synthetic-reviewer")
+            .await
+            .0,
+        axum::http::StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        review_call(&app, validate.clone(), "synthetic-maintenance", "wrong")
+            .await
+            .0,
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let (status, validated) = review_call(
+        &app,
+        validate,
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{validated}");
+    assert_eq!(snapshot(&pool, a).await, before);
+    let commit = json!({"preview_run_id":preview,"validate_only":false});
+    assert_eq!(
+        review_call(
+            &app,
+            commit.clone(),
+            "synthetic-maintenance",
+            "synthetic-reviewer"
+        )
+        .await
+        .0,
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let hash = validated["data"]["approval_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let interrupted = Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("context-memory-preview-apply:{preview}:{hash}").as_bytes(),
+    );
+    sqlx::query("INSERT INTO runs(id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,input,error) VALUES($1,$2,'memory_dream','failed','centaur_agent','synthetic-reviewer',$3,$4,'synthetic interrupted attempt')")
+        .bind(interrupted).bind(preview).bind(format!("memory-preview:{preview}:{hash}")).bind(json!({"preview_run_id":preview,"approval_sha256":hash,"policy_version":"event-review-v3"})).execute(&pool).await.unwrap();
+    let approved = reviewed_memory_app(&pool, vec![hash]);
+    let (first, second) = tokio::join!(
+        review_call(
+            &approved,
+            commit.clone(),
+            "synthetic-maintenance",
+            "synthetic-reviewer"
+        ),
+        review_call(
+            &approved,
+            commit.clone(),
+            "synthetic-maintenance",
+            "synthetic-reviewer"
+        )
+    );
+    assert!([first.0, second.0].contains(&axum::http::StatusCode::OK));
+    assert!([first.0, second.0].iter().all(|s| matches!(
+        *s,
+        axum::http::StatusCode::OK | axum::http::StatusCode::CONFLICT
+    )));
+    let (status, replayed) = review_call(
+        &approved,
+        commit.clone(),
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{replayed}");
+    assert_eq!(replayed["data"]["replayed"], true);
+    assert_eq!(snapshot(&pool, a).await["title"], "Research decision");
+    assert_eq!(
+        snapshot(&pool, a).await["revision"].as_i64(),
+        before["revision"].as_i64().map(|r| r + 1)
+    );
+    assert_eq!(snapshot(&pool, unapproved).await["title"], "Research event");
+    let applied = Uuid::parse_str(replayed["data"]["run_id"].as_str().unwrap()).unwrap();
+    let prior_error: String =
+        sqlx::query_scalar("SELECT result->>'previous_error' FROM runs WHERE id=$1")
+            .bind(applied)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(prior_error, "synthetic interrupted attempt");
+    dreaming::undo(&pool, applied).await.unwrap();
+    assert_eq!(snapshot(&pool, a).await["title"], "Research event");
+    assert_eq!(
+        review_call(
+            &approved,
+            commit,
+            "synthetic-maintenance",
+            "synthetic-reviewer"
+        )
+        .await
+        .0,
+        axum::http::StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn saved_preview_rejects_stale_snapshot_and_tampered_plan_atomically() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let a = evidenced_memory(&pool).await;
+    let b = evidenced_memory(&pool).await;
+    let preview = saved_preview_fixture(&pool, &[a, b]).await;
+    let hash: String =
+        sqlx::query_scalar("SELECT result->>'approval_sha256' FROM runs WHERE id=$1")
+            .bind(preview)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let app = reviewed_memory_app(&pool, vec![hash]);
+    let before = snapshot(&pool, a).await;
+    sqlx::query("UPDATE objects SET revision=revision+1 WHERE id=$1")
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = review_call(
+        &app,
+        json!({"preview_run_id":preview,"validate_only":false}),
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+    assert_eq!(snapshot(&pool, a).await, before);
+    sqlx::query("UPDATE runs SET result=jsonb_set(result,'{plan,changes,0,title}',to_jsonb('Unapproved wording'::text)) WHERE id=$1").bind(preview).execute(&pool).await.unwrap();
+    let (status, body) = review_call(
+        &app,
+        json!({"preview_run_id":preview,"validate_only":false}),
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(snapshot(&pool, a).await, before);
+}
+
+#[tokio::test]
+async fn saved_preview_rejects_new_graph_context_even_from_maintenance() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let a = evidenced_memory(&pool).await;
+    let before = snapshot(&pool, a).await;
+    let preview = saved_preview_fixture(&pool, &[a]).await;
+    let hash: String =
+        sqlx::query_scalar("SELECT result->>'approval_sha256' FROM runs WHERE id=$1")
+            .bind(preview)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let source = fixture(&pool, "source", json!({})).await;
+    let new_edge = edge(&pool, a, source, "about").await;
+    sqlx::query("UPDATE connections SET updated_by_id='context-memory-dream' WHERE id=$1")
+        .bind(new_edge)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = reviewed_memory_app(&pool, vec![hash]);
+    let (status, body) = review_call(
+        &app,
+        json!({"preview_run_id":preview,"validate_only":false}),
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+    assert_eq!(snapshot(&pool, a).await, before);
+}
+
+#[tokio::test]
+async fn saved_preview_rejects_changed_candidate_graph_evidence() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let memory = evidenced_memory(&pool).await;
+    let first = fixture(&pool, "source", json!({})).await;
+    let second = fixture(&pool, "source", json!({})).await;
+    edge(&pool, memory, first, "about").await;
+    let context_edge = edge(&pool, first, second, "about").await;
+    sqlx::query("UPDATE connections SET updated_by_id='context-memory-dream' WHERE id=$1")
+        .bind(context_edge)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let preview = saved_preview_fixture(&pool, &[memory]).await;
+    let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+        .bind(preview)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        result["approval_batch"]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["id"] == context_edge.to_string() && e["type"] == "context_connection")
+    );
+    let before = snapshot(&pool, memory).await;
+    sqlx::query("UPDATE connections SET description='Changed supporting relationship',revision=revision+1 WHERE id=$1").bind(context_edge).execute(&pool).await.unwrap();
+    let app = reviewed_memory_app(
+        &pool,
+        vec![result["approval_sha256"].as_str().unwrap().into()],
+    );
+    let (status, body) = review_call(
+        &app,
+        json!({"preview_run_id":preview,"validate_only":false}),
+        "synthetic-maintenance",
+        "synthetic-reviewer",
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+    assert_eq!(snapshot(&pool, memory).await, before);
+}

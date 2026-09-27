@@ -74,6 +74,40 @@ Undo does not erase the journal. Capture's processed event key survives undo, so
 it cannot recreate the same retired event on its next tick. Pause maintenance
 with `MEMORY_DREAM_MODE=off` before investigating quality regressions.
 
+## Apply an exact reviewed preview
+
+Keep `MEMORY_DREAM_MODE=preview` for initial cleanup. Switching to autonomous
+`apply` runs new model proposals; it is not an exact application of saved wording.
+For an approved initial batch, use the existing authenticated maintenance listener:
+
+```json
+{"preview_run_id":"<saved-memory-dream-preview-UUID>","validate_only":true}
+```
+
+Send this to `POST /api/v2/maintenance/memory-review` with the existing maintenance
+bearer token, allowed principal and thread headers. Validation returns the saved
+plan, exact Memory IDs/revisions and `approval_sha256`. It validates by rollback
+and changes no Memory. The hash binds the originating preview, policy, compact
+snapshot and exact plan. Original message/Note bodies are not duplicated.
+
+After the owner approves that specific result, an operator adds the returned hash
+to `MAINTENANCE_APPROVED_REQUEST_SHA256` using the existing deployment process.
+Send the same preview ID with `validate_only:false`. The server applies only that
+saved plan; it makes no model call and selects no new rows. Changed Memory,
+connection, supporting-context or candidate revisions reject the whole batch.
+The application creates a deterministic child Run: repeated successful requests
+return that Run, concurrent requests either replay or receive a retryable conflict,
+and its normal Memory undo restores the changes. An interrupted/failed attempt
+with no committed Events can retry the same saved plan after full revalidation;
+the Run retains the prior error and retry count. A reversed child requires a
+fresh preview: approval cannot redo an undone plan. Old previews without a
+saved approval snapshot also require a fresh preview. No caller-supplied approval
+flag can bypass the server's configured exact-hash list.
+
+Only enable autonomous `apply` after separate approval of ongoing automatic
+review. Remove consumed hashes when they are no longer needed. This endpoint
+uses the existing maintenance authority; ordinary agent listeners do not expose it.
+
 ## Event review policy v3
 
 The `event-review-v3` checkpoint reconsiders eligible legacy revisions once.

@@ -41,6 +41,7 @@ pub(crate) fn router(app: AppState, config: MaintenanceConfig) -> Router {
     };
     Router::new()
         .route("/api/v2/maintenance/apply", post(apply))
+        .route("/api/v2/maintenance/memory-review", post(memory_review))
         .route(
             "/api/v2/maintenance/tables",
             get(crate::reviewed_purge::catalog),
@@ -161,6 +162,36 @@ async fn apply(
     }
     let result = universal::apply_maintenance(&state.app.pool, &actor, request).await?;
     Ok(Json(json!({"data":result,"approval_sha256":hash})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryReviewRequest {
+    preview_run_id: Uuid,
+    validate_only: bool,
+}
+
+async fn memory_review(
+    State(state): State<MaintenanceState>,
+    Extension(actor): Extension<ActorContext>,
+    Json(request): Json<MemoryReviewRequest>,
+) -> Result<Json<Value>, IntakeError> {
+    let (_, _, hash) =
+        crate::dreaming::saved_preview(&state.app.pool, request.preview_run_id).await?;
+    if !request.validate_only && !state.config.approved_request_hashes.contains(&hash) {
+        return Err(IntakeError::Forbidden(
+            "exact saved Memory preview has not been approved".into(),
+        ));
+    }
+    let result = crate::dreaming::apply_saved_preview(
+        &state.app.pool,
+        request.preview_run_id,
+        &hash,
+        request.validate_only,
+        &actor,
+    )
+    .await?;
+    Ok(Json(json!({"data":result})))
 }
 
 #[derive(Deserialize)]

@@ -277,3 +277,6 @@ The human API supports the same configuration/read/result paths and can accept a
 Schedules contain `timezone` and either `every_minutes` (1–525600), or `local_time` (`HH:MM`) with `weekdays` (Monday 1 through Sunday 7). PostgreSQL timezone rules apply: a missing local time shifts by the DST gap; an ambiguous time uses standard time. Claiming advances to the next future occurrence and skips catch-up. The unique active occurrence prevents overlapping work. Task edits pause its schedule. Due dates are unrelated to scheduling.
 
 Occurrence statuses are pending, running, completed (uneventful success), review (substantive output), blocked and skipped. Execution results belong to the occurrence, not the parent Task. Only its bound thread can report a result, with at most 20000 bytes of text. A blocked result needs a reason. Runtime fallback to Review never overwrites an explicit terminal result.
+
+
+The authenticated maintenance listener also exposes `POST /api/v2/maintenance/memory-review` for exact saved Memory-preview validation/application. It reuses server-configured approval hashes, accepts only a preview Run ID and explicit `validate_only`, and never re-infers. See [Memory review](memory.md#apply-an-exact-reviewed-preview).

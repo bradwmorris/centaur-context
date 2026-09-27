@@ -233,7 +233,7 @@ async fn read_batch_mode(
         "SELECT jsonb_build_object('id',o.id,'kind',o.kind,'title',o.title,'description',o.description,'revision',o.revision,'metadata',CASE WHEN o.kind='source' THEN (SELECT to_jsonb(s) FROM sources s WHERE s.object_id=o.id) ELSE '{}'::jsonb END) FROM objects o WHERE o.archived_at IS NULL AND NOT(o.id=ANY($1)) AND (o.id=ANY($2) OR ($3<>'' AND o.search_document @@ websearch_to_tsquery('simple',$3))) ORDER BY (o.id=ANY($2)) DESC,o.id LIMIT 100")
         .bind(&ids).bind(&candidate_ids).bind(terms).fetch_all(&mut *tx).await?;
     // Expose the bounded graph path so matching names alone are not grounding.
-    let context_links: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',id,'type','context_connection','source_object_id',source_object_id,'target_object_id',target_object_id,'kind',kind,'description',description) FROM connections WHERE archived_at IS NULL AND source_object_id=ANY($1) AND target_object_id=ANY($1) ORDER BY id LIMIT 100")
+    let context_links: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',id,'type','context_connection','revision',revision,'source_object_id',source_object_id,'target_object_id',target_object_id,'kind',kind,'description',description) FROM connections WHERE archived_at IS NULL AND source_object_id=ANY($1) AND target_object_id=ANY($1) ORDER BY id LIMIT 100")
         .bind(&candidate_ids).fetch_all(&mut *tx).await?;
     evidence.extend(context_links);
     for memory in &mut memories {
@@ -442,7 +442,7 @@ async fn apply_plan_mode(
     if status.as_deref() == Some("completed") {
         return Ok(());
     }
-    if status.as_deref() != Some("running") {
+    if status.as_deref() != Some("running") && !(preview && status.as_deref() == Some("preview")) {
         return Err(invalid("dream run is not running"));
     }
     // Lock and revalidate the full input in stable order before any mutation.
@@ -454,6 +454,17 @@ async fn apply_plan_mode(
     ids.sort();
     for id in ids {
         lock_memory(&mut tx, batch, id).await?;
+        if let Some(expected) = batch
+            .memories
+            .iter()
+            .find(|m| m["id"] == id.to_string())
+            .and_then(|m| m.get("approved_connection_versions"))
+        {
+            let actual:Value=sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_array(id,revision) ORDER BY id),'[]'::jsonb) FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1)").bind(id).fetch_one(&mut *tx).await?;
+            if actual != *expected {
+                return Err(db::DbError::Conflict);
+            }
+        }
         let snapshot = batch
             .memories
             .iter()
@@ -479,6 +490,32 @@ async fn apply_plan_mode(
         .await?;
         if revision != connection["revision"].as_i64() {
             return Err(db::DbError::Conflict);
+        }
+    }
+    if batch
+        .memories
+        .iter()
+        .any(|m| m.get("approved_connection_versions").is_some())
+    {
+        for evidence in &batch.evidence {
+            if evidence["type"] == "context_connection" {
+                let revision: Option<i64> = sqlx::query_scalar("SELECT revision FROM connections WHERE id=$1 AND archived_at IS NULL FOR SHARE")
+                    .bind(uuid(evidence, "id")?).fetch_optional(&mut *tx).await?;
+                if revision != evidence["revision"].as_i64() {
+                    return Err(db::DbError::Conflict);
+                }
+            }
+        }
+        for target in &batch.targets {
+            let revision: Option<i64> = sqlx::query_scalar(
+                "SELECT revision FROM objects WHERE id=$1 AND archived_at IS NULL FOR SHARE",
+            )
+            .bind(uuid(target, "id")?)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if revision != target["revision"].as_i64() {
+                return Err(db::DbError::Conflict);
+            }
         }
     }
     let mut touched = HashSet::new();
@@ -677,7 +714,7 @@ async fn apply_plan_mode(
             ),
         );
     }
-    sqlx::query("UPDATE runs SET status='completed',result=$2,completed_at=now(),updated_at=now() WHERE id=$1")
+    sqlx::query("UPDATE runs SET status='completed',result=result || $2,completed_at=now(),updated_at=now() WHERE id=$1")
         .bind(run).bind(json!({"policy_version":POLICY_VERSION,"reviewed":reviewed,"fingerprints":fingerprints,"plan":plan,"change_count":seq-1})).execute(&mut *tx).await?;
     if preview {
         tx.rollback().await?;
@@ -844,6 +881,129 @@ Substantial interactions, including adding a Source, are useful events even befo
 Use context and judgment to select details and connections; there is no required person/title/author/organisation checklist or link count. Candidates from metadata search are suggestions, not evidence by themselves. Use related_to to connect separate Memories only when supplied context supports a meaningful continuation; shared topics, authors or organisations alone are insufficient. Keep distinct events separate.
 Merge only the same event with identical source evidence and event time. Supply the survivor's final title and description preserving all useful supported information. Existing eligible links and provenance are preserved atomically. If distinct facts cannot fit, keep both. Do not combine a merge/retire with another edit of its Memories. A rewrite and connection repair may be combined. Preserve required provenance and manual/protected links. Use disconnect only for an incorrect generated optional relation; reconnect can repair its type/description. Never edit other Object contents. Leave ambiguous or incomplete items unchanged. Reasons explain specific evidence, not generic confidence."#;
 
+/// Keep only the authorization snapshot needed for exact saved-plan application.
+/// Original private message/note bodies are not duplicated into approval records.
+fn approval_batch(batch: &Batch) -> Batch {
+    Batch {
+        memories: batch.memories.iter().map(|m| json!({
+            "id":m["id"],"kind":m["kind"],"revision":m["revision"],"archived_at":m["archived_at"],"protected":m["protected"],
+            "created_by_type":m["created_by_type"],"created_by_id":m["created_by_id"],"updated_by_type":m["updated_by_type"],"updated_by_id":m["updated_by_id"],
+            "review_fingerprint":m["review_fingerprint"],"approved_connection_versions":batch.connections.iter().filter(|c|c["source_object_id"] == m["id"] || c["target_object_id"] == m["id"]).map(|c|json!([c["id"],c["revision"]])).collect::<Vec<_>>(),"subtype":{"happened_at":m["subtype"]["happened_at"]},
+            "provenance":{"source_event_id":m["provenance"]["source_event_id"],"supporting_message_ids":m["provenance"]["supporting_message_ids"],"chat_object_id":m["provenance"]["chat_object_id"],"memory_locked":m["provenance"]["memory_locked"]},
+            "verified_git_receipt":if m["verified_git_receipt"].is_object(){json!({"id":m["verified_git_receipt"]["id"]})}else{Value::Null}
+        })).collect(),
+        connections: batch.connections.iter().map(|c|json!({"id":c["id"],"revision":c["revision"],"source_object_id":c["source_object_id"],"target_object_id":c["target_object_id"]})).collect(),
+        evidence: batch.evidence.iter().map(|e|json!({"id":e["id"],"type":e["type"],"revision":e["revision"],"object":{"id":e["object"]["id"]}})).collect(),
+        targets: batch.targets.iter().map(|t|json!({"id":t["id"],"kind":t["kind"],"revision":t["revision"]})).collect(),
+    }
+}
+
+fn preview_hash(id: Uuid, batch: &Batch, plan: &Plan) -> Result<String, db::DbError> {
+    use sha2::{Digest, Sha256};
+    let bytes=serde_json::to_vec(&json!({"purpose":"context-memory-review-approval-v1","preview_run_id":id,"policy_version":POLICY_VERSION,"batch":batch,"plan":plan})).map_err(|e|invalid(&e.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+pub(crate) async fn saved_preview(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<(Batch, Plan, String), db::DbError> {
+    let result: Option<Value> = sqlx::query_scalar(
+        "SELECT result FROM runs WHERE id=$1 AND kind='memory_dream' AND status='preview'",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let result = result.ok_or_else(|| invalid("a saved Memory preview is required"))?;
+    if result["policy_version"] != POLICY_VERSION {
+        return Err(invalid("preview policy changed; prepare a fresh preview"));
+    }
+    let batch: Batch = serde_json::from_value(result["approval_batch"].clone())
+        .map_err(|_| invalid("preview lacks exact approval snapshot; prepare a fresh preview"))?;
+    let plan: Plan = serde_json::from_value(result["plan"].clone())
+        .map_err(|_| invalid("invalid saved preview plan"))?;
+    let hash = preview_hash(id, &batch, &plan)?;
+    if result["approval_sha256"] != hash {
+        return Err(invalid("saved preview approval hash mismatch"));
+    }
+    Ok((batch, plan, hash))
+}
+
+/// Called only behind the existing maintenance token/principal/hash gate.
+/// No selection or inference takes place here: the saved plan is the whole scope.
+pub(crate) async fn apply_saved_preview(
+    pool: &PgPool,
+    id: Uuid,
+    expected_hash: &str,
+    validate_only: bool,
+    actor: &ActorContext,
+) -> Result<Value, db::DbError> {
+    let mut lease = pool.begin().await?;
+    let claimed: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(7818002)")
+        .fetch_one(&mut *lease)
+        .await?;
+    if !claimed {
+        return Err(db::DbError::Conflict);
+    }
+    let (batch, plan, hash) = saved_preview(pool, id).await?;
+    if hash != expected_hash {
+        return Err(db::DbError::Conflict);
+    }
+    if validate_only {
+        apply_plan_mode(pool, id, &batch, &plan, true).await?;
+        return Ok(
+            json!({"preview_run_id":id,"validate_only":true,"approval_sha256":hash,"policy_version":POLICY_VERSION,"plan":plan,"memories":batch.memories.iter().map(|m|json!({"id":m["id"],"revision":m["revision"]})).collect::<Vec<_>>()}),
+        );
+    }
+    let run = Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!("context-memory-preview-apply:{id}:{hash}").as_bytes(),
+    );
+    let previous: Option<String> = sqlx::query_scalar("SELECT status FROM runs WHERE id=$1")
+        .bind(run)
+        .fetch_optional(pool)
+        .await?;
+    if previous.as_deref() == Some("completed") {
+        return Ok(
+            json!({"preview_run_id":id,"run_id":run,"approval_sha256":hash,"replayed":true}),
+        );
+    }
+    if previous.as_deref() == Some("reversed") {
+        return Err(invalid(
+            "approved application was reversed; prepare a fresh preview",
+        ));
+    }
+    if previous.as_deref() == Some("failed") {
+        let changed: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM object_events WHERE run_id=$1)")
+                .bind(run)
+                .fetch_one(pool)
+                .await?;
+        if changed {
+            return Err(invalid(
+                "failed approved application already has changes; operator reconciliation required",
+            ));
+        }
+        sqlx::query("UPDATE runs SET status='running',result=jsonb_build_object('previous_error',error,'approved_retry_count',COALESCE((result->>'approved_retry_count')::bigint,0)+1),error=NULL,completed_at=NULL WHERE id=$1")
+            .bind(run).execute(pool).await?;
+    }
+    if previous.is_none() {
+        sqlx::query("INSERT INTO runs(id,parent_run_id,kind,status,actor_type,actor_id,idempotency_key,input,started_at) VALUES($1,$2,'memory_dream','running',$3,$4,$5,$6,now())")
+            .bind(run).bind(id).bind(actor.actor_type).bind(&actor.actor_id).bind(format!("memory-preview:{id}:{hash}"))
+            .bind(json!({"preview_run_id":id,"approval_sha256":hash,"policy_version":POLICY_VERSION,"centaur_thread_key":actor.centaur_thread_key,"centaur_execution_id":actor.centaur_execution_id})).execute(pool).await?;
+    }
+    if let Err(error) = apply_plan_mode(pool, run, &batch, &plan, false).await {
+        sqlx::query("UPDATE runs SET status='failed',error=$2,completed_at=now() WHERE id=$1")
+            .bind(run)
+            .bind(error.to_string().chars().take(1000).collect::<String>())
+            .execute(pool)
+            .await?;
+        return Err(error);
+    }
+    lease.commit().await?;
+    Ok(json!({"preview_run_id":id,"run_id":run,"approval_sha256":hash,"replayed":false}))
+}
+
 pub async fn run_worker(
     pool: PgPool,
     config: Option<CuratorModelConfig>,
@@ -916,7 +1076,7 @@ pub async fn pass(
     // Owning the only worker lease proves any prior running attempt was
     // interrupted. Preserve its input/history, but do not leave a false active
     // dependency behind after a process crash or lost database connection.
-    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
+    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',result=result || jsonb_strip_nulls(jsonb_build_object('policy_version',input->'policy_version','configuration_key',input->'configuration_key','retryable',true,'retry_at',now()+interval '30 seconds')),completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
         .execute(pool).await?;
     use sha2::{Digest, Sha256};
     let configuration_key = format!(
@@ -996,7 +1156,7 @@ pub async fn pass(
     let exclusions: Value = sqlx::query_scalar("SELECT jsonb_build_object('protected',count(*) FILTER(WHERE protected),'manual_or_human',count(*) FILTER(WHERE created_by_type<>'system' OR updated_by_type<>'system'),'memory_locked',count(*) FILTER(WHERE provenance->>'memory_locked'='true')) FROM objects WHERE kind='memory' AND archived_at IS NULL")
         .fetch_one(pool).await?;
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at) VALUES($1,'memory_dream','running','system',$2,$3,$4,'{}',now())")
-        .bind(run).bind(ACTOR).bind(run.to_string()).bind(json!({"policy_version":POLICY_VERSION,"preview":preview,"revisions":revisions,"fingerprints":fingerprints,"excluded_counts":exclusions,"memory_ids":batch.memories.iter().map(|m|m["id"].clone()).collect::<Vec<_>>()})).execute(pool).await?;
+        .bind(run).bind(ACTOR).bind(run.to_string()).bind(json!({"policy_version":POLICY_VERSION,"preview":preview,"configuration_key":configuration_key,"revisions":revisions,"fingerprints":fingerprints,"excluded_counts":exclusions,"memory_ids":batch.memories.iter().map(|m|m["id"].clone()).collect::<Vec<_>>()})).execute(pool).await?;
     let result = async {
         let value = crate::curator::request_json_model_with_effort(
             pool,
@@ -1019,7 +1179,7 @@ pub async fn pass(
                 "UPDATE runs SET status='preview',result=$2,completed_at=now() WHERE id=$1",
             )
             .bind(run)
-            .bind(json!({"plan":plan,"policy_version":POLICY_VERSION,"fingerprints":fingerprints}))
+            .bind(json!({"plan":plan,"policy_version":POLICY_VERSION,"fingerprints":fingerprints,"approval_batch":approval_batch(&batch),"approval_sha256":preview_hash(run,&approval_batch(&batch),&plan)?}))
             .execute(pool)
             .await?;
         } else {
