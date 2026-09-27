@@ -108,9 +108,13 @@ Only enable autonomous `apply` after separate approval of ongoing automatic
 review. Remove consumed hashes when they are no longer needed. This endpoint
 uses the existing maintenance authority; ordinary agent listeners do not expose it.
 
-## Event review policy v3
+## Event review policy v5
 
-The `event-review-v3` checkpoint reconsiders eligible legacy revisions once.
+The `event-review-v5` checkpoint reconsiders eligible revisions, including v3
+records wrongly deferred when a shrinking batch retained another Memory’s large
+context. Each shrink rebuilds supporting context and candidates for only the
+remaining IDs; evidence requirements and size limits remain unchanged. Previous
+saved previews require regeneration under the current policy.
 Successful unchanged reviews make no further model call. Missing, oversized or
 incomplete evidence is recorded as `deferred`, never `reviewed`, until the supporting version changes. Inspect those Run reasons before any
 claim of complete cleanup. A graph exceeding the bounded input is also deferred.
@@ -147,3 +151,19 @@ still use the same three-attempt budget. Unknown, malformed or oversized error
 responses retain only the HTTP status and bounded legacy retry behavior. No raw
 provider body, stderr, prompt or arbitrary error message is saved. Existing
 configuration-version changes resume paused work after the operator fixes it.
+
+Advisory candidate objects, connecting paths and nearby Chat messages share the
+remaining input budget after required original evidence. Oversized optional
+entries are omitted whole; required events/messages are never truncated.
+Candidate lookup uses supporting Object titles/descriptions and committed-event
+metadata, ranking direct relationships before lexical relevance. Conversation
+context prefers messages closest to the selected events. Run `context_budget`
+records byte/count breakdowns without copying content; deferral distinguishes
+required evidence over budget from incomplete evidence. Policy v5 retries prior
+v3/v4 deferrals after these context-budget corrections.
+
+Only configuration-wide broker failures (authentication, unsupported model,
+quota or invalid request) pause the reviewer. Nonretryable content failures such
+as output limits, malformed output or prohibited tools defer the affected batch;
+the worker immediately continues with other pending Memories. Transient failure
+backoff and the three-attempt budget are unchanged.
