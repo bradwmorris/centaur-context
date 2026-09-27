@@ -1190,25 +1190,37 @@ pub async fn pass(
     .await;
     if let Err(error) = result {
         let message = error.to_string();
-        let retryable = matches!(error, db::DbError::Conflict)
-            || message.contains("timed out")
-            || message.contains("request failed")
-            || message.contains("HTTP 500")
-            || message.contains("HTTP 504")
-            || message.contains("HTTP 503")
-            || message.contains("HTTP 502")
-            || message.contains("HTTP 429");
-        let paused = message.contains("HTTP 401")
-            || message.contains("HTTP 403")
-            || message.contains("HTTP 404")
-            || message.contains("HTTP 400")
-            || message.contains("HTTP 422")
-            || message.contains("subscription contract")
-            || message.contains("invalid Centaur inference response");
+        let broker_failure: Option<Value> =
+            sqlx::query_scalar("SELECT result->'inference_failure' FROM runs WHERE id=$1")
+                .bind(run)
+                .fetch_one(pool)
+                .await?;
+        let broker_retryable = broker_failure
+            .as_ref()
+            .and_then(|d| d["retryable"].as_bool());
+        let retryable = broker_retryable.unwrap_or(
+            matches!(error, db::DbError::Conflict)
+                || message.contains("timed out")
+                || message.contains("request failed")
+                || message.contains("HTTP 500")
+                || message.contains("HTTP 504")
+                || message.contains("HTTP 503")
+                || message.contains("HTTP 502")
+                || message.contains("HTTP 429"),
+        );
+        let paused = broker_retryable.map(|retryable| !retryable).unwrap_or(
+            message.contains("HTTP 401")
+                || message.contains("HTTP 403")
+                || message.contains("HTTP 404")
+                || message.contains("HTTP 400")
+                || message.contains("HTTP 422")
+                || message.contains("subscription contract")
+                || message.contains("invalid Centaur inference response"),
+        );
         let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='failed' AND input->'fingerprints'=$1 AND input->'preview'=$2 AND result->>'configuration_key'=$3")
             .bind(json!(fingerprints)).bind(json!(preview)).bind(&configuration_key).fetch_one(pool).await?;
         let delay = 30_i32 * 2_i32.pow(attempts.min(2) as u32);
-        sqlx::query("UPDATE runs SET status='failed',error=$2,result=$3 || jsonb_build_object('retry_at',now()+make_interval(secs=>$4)),completed_at=now() WHERE id=$1")
+        sqlx::query("UPDATE runs SET status='failed',error=$2,result=result || $3 || jsonb_build_object('retry_at',now()+make_interval(secs=>$4)),completed_at=now() WHERE id=$1")
             .bind(run).bind(message.chars().take(1000).collect::<String>())
             .bind(json!({"policy_version":POLICY_VERSION,"retryable":retryable && attempts < 2,"paused":paused,"configuration_key":configuration_key,"deferred":revisions}))
             .bind(delay as f64).execute(pool).await?;

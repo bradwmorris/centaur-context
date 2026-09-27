@@ -1404,3 +1404,124 @@ async fn saved_preview_rejects_changed_candidate_graph_evidence() {
     assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
     assert_eq!(snapshot(&pool, memory).await, before);
 }
+
+#[tokio::test]
+async fn broker_failure_receipts_are_safe_persisted_and_control_retries() {
+    let _guard = LOCK.lock().await;
+    for (classification, retryable, provider_status, provider_code, oversized) in [
+        (
+            "authentication",
+            false,
+            Some(401),
+            Some("authentication_error"),
+            false,
+        ),
+        (
+            "unsupported_model",
+            false,
+            Some(400),
+            Some("unsupported_model"),
+            false,
+        ),
+        ("quota", false, Some(429), Some("insufficient_quota"), false),
+        (
+            "rate_limit",
+            true,
+            Some(429),
+            Some("rate_limit_exceeded"),
+            false,
+        ),
+        ("timeout", true, None, None, false),
+        (
+            "authentication",
+            false,
+            Some(401),
+            Some("authentication_error"),
+            true,
+        ),
+    ] {
+        let Some(pool) = pool().await else { return };
+        let memory = evidenced_memory(&pool).await;
+        let before = snapshot(&pool, memory).await;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let execution = Uuid::new_v4();
+        let router = axum::Router::new().route("/", axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);
+                (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({
+                    "code":"curator_inference_failed",
+                    "raw_body":"private-provider-secret",
+                    "diagnostics":{"request_id":request["request_id"],"execution_id":execution,
+                        "model":if classification == "unsupported_model" {"unsupported"} else {"gpt-6-luna"},
+                        "reasoning_effort":"high","classification":classification,"retryable":retryable,
+                        "provider_status":provider_status,"provider_code":provider_code,"duration_ms":1500,
+                        "stderr":"private-provider-secret","prompt":if oversized {"private-provider-secret".repeat(2000)} else {"private-provider-secret".into()}}
+                })))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config = centaur_context::config::CuratorModelConfig {
+            transport: centaur_context::config::CuratorModelTransport::CentaurSubscription,
+            endpoint: format!("http://{address}/"),
+            api_token: "synthetic".into(),
+            model: "gpt-6-luna".into(),
+            prompt_version: "test".into(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(5),
+        };
+        let expected_retryable = retryable || oversized; // Untrusted oversized envelope uses bounded legacy HTTP retry.
+        for expected in 1..=if expected_retryable { 3 } else { 1 } {
+            let error = dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .unwrap_err();
+            assert!(!error.to_string().contains("private-provider-secret"));
+            let record:Value=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'input',input,'result',result,'error',error,'trace',trace) FROM runs WHERE kind='memory_dream' ORDER BY created_at DESC LIMIT 1").fetch_one(&pool).await.unwrap();
+            assert!(!record.to_string().contains("private-provider-secret"));
+            assert_eq!(record["result"]["paused"], !expected_retryable);
+            assert_eq!(
+                record["result"]["retryable"],
+                expected_retryable && expected < 3
+            );
+            if oversized {
+                assert!(record["result"]["inference_failure"].is_null());
+            } else {
+                let d = &record["result"]["inference_failure"];
+                assert_eq!(
+                    d["request_id"],
+                    format!("dream-{}", record["id"].as_str().unwrap())
+                );
+                assert_eq!(d["execution_id"], execution.to_string());
+                assert!(record["trace"].as_array().unwrap().iter().any(
+                    |entry| entry["source_execution_id"] == execution.to_string()
+                        && entry["reasoning_effort"] == "high"
+                ));
+                assert_eq!(d["classification"], classification);
+                assert_eq!(d["retryable"], retryable);
+                assert_eq!(d["provider_status"], json!(provider_status));
+                assert_eq!(d["provider_code"], json!(provider_code));
+                assert_eq!(d["duration_ms"], 1500);
+                assert!(d.get("stderr").is_none());
+            }
+            assert!(
+                dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), expected);
+            sqlx::query("UPDATE runs SET result=jsonb_set(result,'{retry_at}',to_jsonb((now()-interval '1 second')::text)) WHERE kind='memory_dream'").execute(&pool).await.unwrap();
+        }
+        assert!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(snapshot(&pool, memory).await, before);
+        server.abort();
+    }
+}

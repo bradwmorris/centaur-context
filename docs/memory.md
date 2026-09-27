@@ -128,3 +128,22 @@ only when its original completed capture Run identifies that exact Memory, actor
 provenance and proof digest. The adapter supplies the verified observation's narrow
 meaning to maintenance; actor allowlisting alone cannot enable edits. Retirement
 retains receipts and supports the existing Run undo.
+
+## Paired broker configuration and failures
+
+For the Luna6 producer, explicitly set `CURATOR_MODEL=gpt-6-luna` on Context.
+Startup accepts Luna6 and explicit legacy Luna5.6 configurations, but never maps
+one name to the other. Every successful subscription receipt must match the
+requested model and effort. Ordinary extraction/summary calls remain Low; the
+Memory reviewer independently requires Luna6 High. A legacy configured model
+cannot be paired with a producer that serves only Luna6.
+
+Non-success subscription responses may provide the bounded
+`curator_inference_failed` envelope. Context verifies its request/model/effort
+identity, retains only allowlisted diagnostics in `Run.result.inference_failure`,
+and uses its explicit retryability. Authentication, quota and unsupported-model
+failures therefore pause even if the broker returns HTTP503; transient failures
+still use the same three-attempt budget. Unknown, malformed or oversized error
+responses retain only the HTTP status and bounded legacy retry behavior. No raw
+provider body, stderr, prompt or arbitrary error message is saved. Existing
+configuration-version changes resume paused work after the operator fixes it.

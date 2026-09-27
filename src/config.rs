@@ -670,9 +670,7 @@ fn curator_model_config() -> Result<Option<CuratorModelConfig>> {
             bail!("CURATOR_MODEL_TRANSPORT must be centaur_subscription or direct_api, got {value}")
         }
     };
-    if transport == CuratorModelTransport::CentaurSubscription && model != "gpt-5.6-luna" {
-        bail!("CURATOR_MODEL must be gpt-5.6-luna in centaur_subscription mode");
-    }
+    validate_curator_model(transport, &model)?;
     if model.len() > 300 || prompt_version.len() > 300 {
         bail!("CURATOR_MODEL and CURATOR_PROMPT_VERSION must each be at most 300 characters");
     }
@@ -685,6 +683,19 @@ fn curator_model_config() -> Result<Option<CuratorModelConfig>> {
         poll_interval: parse_duration_seconds("CURATOR_POLL_SECONDS", 5, 1)?,
         request_timeout: parse_duration_seconds("CURATOR_MODEL_TIMEOUT_SECONDS", 210, 30)?,
     }))
+}
+
+// Preserve explicit legacy deployments while admitting the paired Luna6 broker.
+// Requests and receipts still have to match the configured model exactly.
+fn validate_curator_model(transport: CuratorModelTransport, model: &str) -> Result<()> {
+    if transport == CuratorModelTransport::CentaurSubscription
+        && !matches!(model, "gpt-5.6-luna" | "gpt-6-luna")
+    {
+        bail!(
+            "CURATOR_MODEL must be gpt-6-luna or legacy gpt-5.6-luna in centaur_subscription mode"
+        );
+    }
+    Ok(())
 }
 
 fn embedding_config() -> Result<Option<EmbeddingConfig>> {
@@ -791,5 +802,22 @@ mod tests {
         assert_eq!(EmbeddingInputMode::Shared.query_mode(), None);
         assert_eq!(EmbeddingInputMode::Typed.document_mode(), "search_document");
         assert_eq!(EmbeddingInputMode::Typed.query_mode(), Some("search_query"));
+    }
+    #[test]
+    fn startup_model_guard_accepts_explicit_luna6_without_silent_legacy_migration() {
+        use super::{CuratorModelTransport, validate_curator_model};
+        for model in ["gpt-6-luna", "gpt-5.6-luna"] {
+            assert!(
+                validate_curator_model(CuratorModelTransport::CentaurSubscription, model).is_ok()
+            );
+        }
+        assert!(
+            validate_curator_model(CuratorModelTransport::CentaurSubscription, "gpt-other")
+                .is_err()
+        );
+        assert!(
+            validate_curator_model(CuratorModelTransport::DirectApi, "explicit-direct-model")
+                .is_ok()
+        );
     }
 }
