@@ -19,6 +19,8 @@ pub enum DbError {
     #[error("revision conflict")]
     Conflict,
     #[error("{0}")]
+    MemoryReviewConflict(String),
+    #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
     Validation(#[from] ValidationError),

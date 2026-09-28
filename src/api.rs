@@ -2729,6 +2729,9 @@ impl IntoResponse for ApiError {
                 "revision_conflict",
                 "The record changed after it was read.".to_owned(),
             ),
+            Self::Db(DbError::MemoryReviewConflict(message)) => {
+                (StatusCode::CONFLICT, "revision_conflict", message)
+            }
             Self::IdempotencyConflict => (
                 StatusCode::CONFLICT,
                 "idempotency_conflict",

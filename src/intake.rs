@@ -1468,6 +1468,7 @@ impl From<crate::db::DbError> for IntakeError {
         match value {
             crate::db::DbError::NotFound => Self::BadRequest("record not found".into()),
             crate::db::DbError::Conflict => Self::Conflict("record conflict".into()),
+            crate::db::DbError::MemoryReviewConflict(message) => Self::Conflict(message),
             crate::db::DbError::Invalid(message) => Self::BadRequest(message),
             crate::db::DbError::Validation(error) => Self::BadRequest(error.to_string()),
             crate::db::DbError::Sqlx(error) => Self::Database(error),
