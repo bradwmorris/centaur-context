@@ -9,6 +9,9 @@ use uuid::Uuid;
 const ACTOR: &str = "context-memory-dream";
 const BATCH: i64 = 25;
 const POLICY_VERSION: &str = "event-review-v5";
+// Only failed attempts get a fresh budget after this recovery fix. Successful
+// fingerprints retain POLICY_VERSION and are never re-reviewed by this release.
+const RECOVERY_VERSION: &str = "bounded-recovery-v1";
 const INPUT_BYTES: usize = 24_000;
 const MAX_CHANGES: usize = 20;
 
@@ -108,7 +111,7 @@ fn model_input(batch: &Batch) -> Value {
             json!({
                 "id":c["id"], "source_object_id":c["source_object_id"],
                 "target_object_id":c["target_object_id"], "kind":c["kind"],
-                "description":c["description"]
+                "description":c["description"], "editable":editable_connection(c)
             })
         })
         .collect();
@@ -152,15 +155,26 @@ async fn read_batch_mode(
            AND r.result->>'policy_version'=$2 AND r.result->'fingerprints'->>o.id::text=memory_review_fingerprint(o.id)) \
          AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.kind='memory_dream' AND r.result->>'policy_version'=$2 \
            AND ($4::text IS NULL OR r.result->>'configuration_key'=$4 OR NOT(r.result ? 'configuration_key')) \
+           AND (r.result->>'recovery_version'=$5 OR r.error IS NULL) \
            AND r.input->'preview'=to_jsonb($3::boolean) AND r.input->'fingerprints'->>o.id::text=memory_review_fingerprint(o.id) \
            AND (r.result->>'retryable'='false' OR (r.result->>'retry_at')::timestamptz > now())) \
          AND (SELECT count(*) FROM runs r WHERE r.kind='memory_dream' AND r.status='failed' AND r.result->>'policy_version'=$2 \
            AND ($4::text IS NULL OR r.result->>'configuration_key'=$4 OR NOT(r.result ? 'configuration_key')) \
+           AND (r.result->>'recovery_version'=$5 OR r.error IS NULL) \
            AND r.input->'preview'=to_jsonb($3::boolean) AND r.input->'fingerprints'->>o.id::text=memory_review_fingerprint(o.id)) < 3 \
          ORDER BY o.updated_at,o.id LIMIT $1")
-        .bind(BATCH).bind(POLICY_VERSION).bind(preview).bind(configuration_key).fetch_all(&mut *tx).await?;
+        .bind(BATCH).bind(POLICY_VERSION).bind(preview).bind(configuration_key).bind(RECOVERY_VERSION).fetch_all(&mut *tx).await?;
     let mut ids = ids;
-    if !ids.is_empty() {
+    let prior_failure: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r JOIN objects o ON o.id=ANY($1) WHERE r.kind='memory_dream' AND r.status='failed' AND r.input->'fingerprints'->>o.id::text=memory_review_fingerprint(o.id))")
+        .bind(&ids).fetch_one(&mut *tx).await?;
+    if prior_failure {
+        let current_failure: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r JOIN objects o ON o.id=ANY($1) WHERE r.kind='memory_dream' AND r.status='failed' AND r.result->>'recovery_version'=$2 AND ($3::text IS NULL OR r.result->>'configuration_key'=$3 OR NOT(r.result ? 'configuration_key')) AND r.input->'fingerprints'->>o.id::text=memory_review_fingerprint(o.id))")
+            .bind(&ids).bind(RECOVERY_VERSION).bind(configuration_key).fetch_one(&mut *tx).await?;
+        // A failed group gets at most four rows, then singleton retries. Do not
+        // reattach neighbors and accidentally recreate the failing group.
+        ids.truncate(if current_failure { 1 } else { 4 });
+    }
+    if !ids.is_empty() && !prior_failure {
         let neighbors: Vec<Uuid> = sqlx::query_scalar("SELECT o.id FROM objects o JOIN memories m ON m.object_id=o.id WHERE o.kind='memory' AND o.archived_at IS NULL AND NOT o.protected AND o.created_by_type='system' AND o.created_by_id IN ('context-curator','context-memory-capture') AND o.updated_by_type='system' AND o.updated_by_id IN ('context-curator','context-memory-capture','context-memory-dream') AND NOT COALESCE((o.provenance->>'memory_locked')='true',false) AND NOT (o.id=ANY($1)) AND EXISTS(SELECT 1 FROM objects seed JOIN memories sm ON sm.object_id=seed.id WHERE seed.id=ANY($1) AND m.happened_at=sm.happened_at AND ((o.provenance->>'source_event_id'=seed.provenance->>'source_event_id') OR (o.provenance->'supporting_message_ids'=seed.provenance->'supporting_message_ids' AND o.provenance->'chat_object_id'=seed.provenance->'chat_object_id'))) ORDER BY o.id LIMIT 25")
             .bind(&ids).fetch_all(&mut *tx).await?;
         ids.extend(neighbors);
@@ -470,7 +484,12 @@ async fn lock_memory(
         ));
     }
     if current["revision"] != snapshot["revision"] {
-        return Err(db::DbError::Conflict);
+        return Err(review_conflict(
+            "memory",
+            id,
+            &snapshot["revision"],
+            &current["revision"],
+        ));
     }
     Ok(current)
 }
@@ -528,6 +547,7 @@ async fn apply_plan_mode(
     plan: &Plan,
     preview: bool,
 ) -> Result<(), db::DbError> {
+    validate_plan_text(plan)?;
     if plan.changes.len() > MAX_CHANGES {
         return Err(invalid("too many dream changes"));
     }
@@ -567,7 +587,7 @@ async fn apply_plan_mode(
         {
             let actual:Value=sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_array(id,revision) ORDER BY id),'[]'::jsonb) FROM connections WHERE archived_at IS NULL AND (source_object_id=$1 OR target_object_id=$1)").bind(id).fetch_one(&mut *tx).await?;
             if actual != *expected {
-                return Err(db::DbError::Conflict);
+                return Err(review_conflict("memory connections", id, expected, &actual));
             }
         }
         let snapshot = batch
@@ -581,7 +601,12 @@ async fn apply_plan_mode(
                 .fetch_one(&mut *tx)
                 .await?;
             if current != expected {
-                return Err(db::DbError::Conflict);
+                return Err(review_conflict(
+                    "memory fingerprint",
+                    id,
+                    &json!(expected),
+                    &json!(current),
+                ));
             }
         }
     }
@@ -594,7 +619,12 @@ async fn apply_plan_mode(
         .fetch_optional(&mut *tx)
         .await?;
         if revision != connection["revision"].as_i64() {
-            return Err(db::DbError::Conflict);
+            return Err(review_conflict(
+                "connection",
+                id,
+                &connection["revision"],
+                &json!(revision),
+            ));
         }
     }
     if batch
@@ -607,7 +637,12 @@ async fn apply_plan_mode(
                 let revision: Option<i64> = sqlx::query_scalar("SELECT revision FROM connections WHERE id=$1 AND archived_at IS NULL FOR SHARE")
                     .bind(uuid(evidence, "id")?).fetch_optional(&mut *tx).await?;
                 if revision != evidence["revision"].as_i64() {
-                    return Err(db::DbError::Conflict);
+                    return Err(review_conflict(
+                        "evidence connection",
+                        uuid(evidence, "id")?,
+                        &evidence["revision"],
+                        &json!(revision),
+                    ));
                 }
             }
         }
@@ -619,7 +654,12 @@ async fn apply_plan_mode(
             .fetch_optional(&mut *tx)
             .await?;
             if revision != target["revision"].as_i64() {
-                return Err(db::DbError::Conflict);
+                return Err(review_conflict(
+                    "target",
+                    uuid(target, "id")?,
+                    &target["revision"],
+                    &json!(revision),
+                ));
             }
         }
     }
@@ -766,7 +806,12 @@ async fn apply_plan_mode(
                 .fetch_optional(&mut *tx)
                 .await?;
                 if !touched.contains(target_id) && revision != target["revision"].as_i64() {
-                    return Err(db::DbError::Conflict);
+                    return Err(review_conflict(
+                        "connection target",
+                        *target_id,
+                        &target["revision"],
+                        &json!(revision),
+                    ));
                 }
                 if target["kind"] == "memory" && kind != "related_to" {
                     return Err(invalid("distinct Memory events use related_to"));
@@ -850,6 +895,51 @@ fn provenance_edge(batch: &Batch, connection: &Value) -> bool {
     })
 }
 
+fn review_conflict(kind: &str, id: Uuid, expected: &Value, actual: &Value) -> db::DbError {
+    db::DbError::MemoryReviewConflict(format!(
+        "Memory review conflict: {kind} {id}; expected {expected}; actual {actual}"
+    ))
+}
+
+fn editable_connection(c: &Value) -> bool {
+    c["created_by_type"] == "system"
+        && c["updated_by_type"] == "system"
+        && matches!(
+            c["updated_by_id"].as_str(),
+            Some("context-curator" | "context-memory-capture" | "context-memory-dream")
+        )
+        && c["protected"] == false
+        && c["archived_at"].is_null()
+}
+
+fn validate_plan_text(plan: &Plan) -> Result<(), db::DbError> {
+    for change in &plan.changes {
+        if let Change::Rewrite {
+            object_id,
+            title,
+            description,
+            ..
+        }
+        | Change::Merge {
+            object_id,
+            title,
+            description,
+            ..
+        } = change
+        {
+            crate::domain::required_text(title.clone(), "title", 300)?;
+            crate::domain::object_description(title, description.clone())?;
+            if description.split_whitespace().count() > 60 {
+                return Err(invalid(&format!(
+                    "Memory {object_id} description must contain at most 60 words (received {})",
+                    description.split_whitespace().count()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_reason(reason: &str) -> Result<(), db::DbError> {
     crate::domain::required_text(reason.to_owned(), "reason", 600)?;
     Ok(())
@@ -869,17 +959,16 @@ async fn lock_connection(
         .execute(&mut **tx)
         .await?;
     let current = db::target_snapshot(tx, "connection", id).await?;
-    if current["created_by_type"] != "system"
-        || current["updated_by_type"] != "system"
-        || !matches!(
-            current["updated_by_id"].as_str(),
-            Some("context-curator" | "context-memory-capture" | "context-memory-dream")
-        )
-        || current["protected"] != false
-        || !current["archived_at"].is_null()
-        || current["revision"] != expected["revision"]
-    {
-        return Err(db::DbError::Conflict);
+    if !editable_connection(&current) {
+        return Err(invalid(&format!("Memory connection is read-only: {id}")));
+    }
+    if current["revision"] != expected["revision"] || !current["archived_at"].is_null() {
+        return Err(review_conflict(
+            "connection",
+            id,
+            &expected["revision"],
+            &current["revision"],
+        ));
     }
     if !batch
         .memories
@@ -984,7 +1073,7 @@ const PROMPT: &str = r#"Review existing generated Memories: keep (omit changes),
 Write short, clear, explicit event snapshots in everyday language. State what happened; use the details that make this event understandable. Examples illustrate quality, not templates or required fields: 'Alex chose weekly research reviews'; 'Dev requested a duplicate-Memory fix'; 'The cleanup test failed because the model service returned HTTP 503.' Avoid abstractions like 'Strategic alignment' and timeless inferred traits. Requests are not completed outcomes. Preserve event time and attribution. A workflow service may record an action initiated by a human; use supplied authenticated messages to distinguish them, never guess from installation ownership.
 Substantial interactions, including adding a Source, are useful events even before a research outcome. Keep valuable old Memories. Retire only demonstrably irrelevant noise, test/status receipts or redundant generated content; missing evidence or age is not a reason to delete. Verified Git observations establish technical movement only, not authorship, Task completion or deployment.
 Use context and judgment to select details and connections; there is no required person/title/author/organisation checklist or link count. Candidates from metadata search are suggestions, not evidence by themselves. Use related_to to connect separate Memories only when supplied context supports a meaningful continuation; shared topics, authors or organisations alone are insufficient. Keep distinct events separate.
-Merge only the same event with identical source evidence and event time. Supply the survivor's final title and description preserving all useful supported information. Existing eligible links and provenance are preserved atomically. If distinct facts cannot fit, keep both. Do not combine a merge/retire with another edit of its Memories. A rewrite and connection repair may be combined. Preserve required provenance and manual/protected links. Use disconnect only for an incorrect generated optional relation; reconnect can repair its type/description. Never edit other Object contents. Leave ambiguous or incomplete items unchanged. Reasons explain specific evidence, not generic confidence."#;
+Merge only the same event with identical source evidence and event time. Supply the survivor's final title and description preserving all useful supported information. Existing eligible links and provenance are preserved atomically. If distinct facts cannot fit, keep both. Do not combine a merge/retire with another edit of its Memories. A rewrite and connection repair may be combined. Preserve required provenance and manual/protected links. Existing connections marked editable=false are read-only: keep them unchanged and do not merge or retire a Memory if that would change such a link. Use disconnect only for an incorrect generated optional relation; reconnect can repair its type/description. Never edit other Object contents. Leave ambiguous or incomplete items unchanged. Reasons explain specific evidence, not generic confidence."#;
 
 /// Keep only the authorization snapshot needed for exact saved-plan application.
 /// Original private message/note bodies are not duplicated into approval records.
@@ -1133,7 +1222,7 @@ pub async fn run_worker(
                 loop {
                     match pass(&pool, &client, &config, mode == "preview").await {
                         Ok(Some(_)) => continue,
-                        Err(db::DbError::Invalid(_)) | Err(db::DbError::Conflict) => continue,
+                        Err(db::DbError::Invalid(_)) | Err(db::DbError::Conflict) | Err(db::DbError::MemoryReviewConflict(_)) => continue,
                         Ok(None) => break,
                         Err(error) => { tracing::warn!(%error,"Memory review scan failed"); break; }
                     }
@@ -1181,7 +1270,7 @@ pub async fn pass(
     // Owning the only worker lease proves any prior running attempt was
     // interrupted. Preserve its input/history, but do not leave a false active
     // dependency behind after a process crash or lost database connection.
-    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',result=result || jsonb_strip_nulls(jsonb_build_object('policy_version',input->'policy_version','configuration_key',input->'configuration_key','retryable',true,'retry_at',now()+interval '30 seconds')),completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
+    sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',result=result || jsonb_strip_nulls(jsonb_build_object('policy_version',input->'policy_version','configuration_key',input->'configuration_key','recovery_version',COALESCE(input->>'recovery_version','bounded-recovery-v1'),'retryable',true,'retry_at',now()+interval '30 seconds')),completed_at=now(),updated_at=now() WHERE kind='memory_dream' AND status='running'")
         .execute(pool).await?;
     use sha2::{Digest, Sha256};
     let configuration_key = format!(
@@ -1241,13 +1330,13 @@ pub async fn pass(
     if input.len() > INPUT_BYTES || incomplete_evidence(&batch) {
         sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,completed_at) VALUES($1,'memory_dream','failed','system',$2,$3,$4,$5,now())")
             .bind(run).bind(ACTOR).bind(run.to_string()).bind(json!({"preview":preview,"fingerprints":fingerprints,"context_budget":context_budget}))
-            .bind(json!({"policy_version":POLICY_VERSION,"deferred":revisions,"retryable":false,"reason":if input.len()>INPUT_BYTES {"required evidence exceeds input budget"} else {"required evidence missing, incomplete or unsupported"},"context_budget":context_budget,"model_calls":0})).execute(pool).await?;
+            .bind(json!({"policy_version":POLICY_VERSION,"recovery_version":RECOVERY_VERSION,"deferred":revisions,"retryable":false,"reason":if input.len()>INPUT_BYTES {"required evidence exceeds input budget"} else {"required evidence missing, incomplete or unsupported"},"context_budget":context_budget,"model_calls":0})).execute(pool).await?;
         return Ok(Some(run));
     }
     let exclusions: Value = sqlx::query_scalar("SELECT jsonb_build_object('protected',count(*) FILTER(WHERE protected),'manual_or_human',count(*) FILTER(WHERE created_by_type<>'system' OR updated_by_type<>'system'),'memory_locked',count(*) FILTER(WHERE provenance->>'memory_locked'='true')) FROM objects WHERE kind='memory' AND archived_at IS NULL")
         .fetch_one(pool).await?;
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at) VALUES($1,'memory_dream','running','system',$2,$3,$4,'{}',now())")
-        .bind(run).bind(ACTOR).bind(run.to_string()).bind(json!({"policy_version":POLICY_VERSION,"preview":preview,"configuration_key":configuration_key,"revisions":revisions,"fingerprints":fingerprints,"excluded_counts":exclusions,"context_budget":context_budget,"memory_ids":batch.memories.iter().map(|m|m["id"].clone()).collect::<Vec<_>>()})).execute(pool).await?;
+        .bind(run).bind(ACTOR).bind(run.to_string()).bind(json!({"policy_version":POLICY_VERSION,"recovery_version":RECOVERY_VERSION,"preview":preview,"configuration_key":configuration_key,"revisions":revisions,"fingerprints":fingerprints,"excluded_counts":exclusions,"context_budget":context_budget,"memory_ids":batch.memories.iter().map(|m|m["id"].clone()).collect::<Vec<_>>()})).execute(pool).await?;
     let result = async {
         let value = crate::curator::request_json_model_with_effort(
             pool,
@@ -1256,14 +1345,27 @@ pub async fn pass(
             run,
             None,
             PROMPT,
-            input,
+            input.clone(),
             plan_schema(),
             format!("dream-{run}"),
             "high",
         )
         .await
         .map_err(|e| invalid(&e.to_string()))?;
-        let plan: Plan = serde_json::from_value(value).map_err(|e| invalid(&e.to_string()))?;
+        let mut plan: Plan = serde_json::from_value(value).map_err(|e| invalid(&e.to_string()))?;
+        if let Err(error) = validate_plan_text(&plan) {
+            // One correction, using exactly the same evidence and an explicit
+            // validation error. Never truncate event facts mechanically.
+            sqlx::query("UPDATE runs SET result=result || $2 WHERE id=$1")
+                .bind(run).bind(json!({"initial_plan":plan,"validation_error":error.to_string(),"correction_calls":1})).execute(pool).await?;
+            let corrected = crate::curator::request_json_model_with_effort(pool, client, config, run, None, PROMPT,
+                json!({"evidence":serde_json::from_str::<Value>(&input).map_err(|e|invalid(&e.to_string()))?,"previous_plan":plan,"validation_error":error.to_string(),"correction":"Return a corrected complete plan. Preserve supported facts; each Memory description must be at most 60 words."}).to_string(),
+                plan_schema(), format!("dream-{run}-correction"), "high").await.map_err(|e|invalid(&e.to_string()))?;
+            plan = serde_json::from_value(corrected).map_err(|e|invalid(&e.to_string()))?;
+        }
+        // Retain the rejected proposal too, so conflicts can be diagnosed.
+        sqlx::query("UPDATE runs SET result=result || $2 WHERE id=$1")
+            .bind(run).bind(json!({"plan":plan})).execute(pool).await?;
         if preview {
             apply_plan_mode(pool, run, &batch, &plan, true).await?;
             sqlx::query(
@@ -1289,16 +1391,31 @@ pub async fn pass(
         let broker_retryable = broker_failure
             .as_ref()
             .and_then(|d| d["retryable"].as_bool());
-        let retryable = broker_retryable.unwrap_or(
-            matches!(error, db::DbError::Conflict)
-                || message.contains("timed out")
-                || message.contains("request failed")
-                || message.contains("HTTP 500")
-                || message.contains("HTTP 504")
-                || message.contains("HTTP 503")
-                || message.contains("HTTP 502")
-                || message.contains("HTTP 429"),
-        );
+        let content_failure = broker_failure.as_ref().is_some_and(|d| {
+            matches!(
+                d["classification"].as_str(),
+                Some("model_failure" | "output_limit" | "malformed_output")
+            )
+        }) || (broker_failure.is_none()
+            && (matches!(error, db::DbError::Validation(_))
+                || (matches!(error, db::DbError::Invalid(_))
+                    && !message.starts_with("curator ")
+                    && !message.contains("HTTP ")
+                    && !message.contains("request failed"))));
+        let retryable = (content_failure && batch.memories.len() > 1)
+            || broker_retryable.unwrap_or(
+                matches!(
+                    error,
+                    db::DbError::Conflict | db::DbError::MemoryReviewConflict(_)
+                ) || message.starts_with("Memory review conflict:")
+                    || message.contains("timed out")
+                    || message.contains("request failed")
+                    || message.contains("HTTP 500")
+                    || message.contains("HTTP 504")
+                    || message.contains("HTTP 503")
+                    || message.contains("HTTP 502")
+                    || message.contains("HTTP 429"),
+            );
         let paused = broker_failure
             .as_ref()
             .map(|failure| {
@@ -1317,14 +1434,16 @@ pub async fn pass(
                     || message.contains("subscription contract")
                     || message.contains("invalid Centaur inference response"),
             );
-        let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE kind='memory_dream' AND status='failed' AND input->'fingerprints'=$1 AND input->'preview'=$2 AND result->>'configuration_key'=$3")
-            .bind(json!(fingerprints)).bind(json!(preview)).bind(&configuration_key).fetch_one(pool).await?;
+        // Count per Memory/fingerprint, not per batch: splitting must never
+        // reset a row's bounded retry budget.
+        let attempts: i64 = sqlx::query_scalar("SELECT COALESCE(max(n),0) FROM (SELECT count(*) n FROM runs r CROSS JOIN LATERAL jsonb_each_text(r.input->'fingerprints') f WHERE r.kind='memory_dream' AND r.status='failed' AND r.input->'preview'=$2 AND r.result->>'configuration_key'=$3 AND r.result->>'recovery_version'=$4 AND $1::jsonb->>f.key=f.value GROUP BY f.key) counts")
+            .bind(json!(fingerprints)).bind(json!(preview)).bind(&configuration_key).bind(RECOVERY_VERSION).fetch_one(pool).await?;
         let delay = 30_i32 * 2_i32.pow(attempts.min(2) as u32);
         sqlx::query("UPDATE runs SET status='failed',error=$2,result=result || $3 || jsonb_build_object('retry_at',now()+make_interval(secs=>$4)),completed_at=now() WHERE id=$1")
             .bind(run).bind(message.chars().take(1000).collect::<String>())
-            .bind(json!({"policy_version":POLICY_VERSION,"retryable":retryable && attempts < 2,"paused":paused,"configuration_key":configuration_key,"deferred":revisions}))
+            .bind(json!({"policy_version":POLICY_VERSION,"recovery_version":RECOVERY_VERSION,"retryable":retryable && attempts < 2,"paused":paused,"configuration_key":configuration_key,"deferred":revisions}))
             .bind(delay as f64).execute(pool).await?;
-        if !retryable && !paused {
+        if (!retryable || content_failure) && !paused {
             // A content-specific failure finishes this batch, not the whole
             // worker. Its durable deferral lets the next pending batch advance.
             lease.commit().await?;

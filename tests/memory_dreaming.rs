@@ -1787,7 +1787,7 @@ async fn content_failures_defer_one_batch_without_pausing_other_memories() {
             .await
             .unwrap();
         assert_eq!(result["paused"], false);
-        assert_eq!(result["retryable"], false);
+        assert_eq!(result["retryable"], classification != "prohibited_tool");
         assert_eq!(
             result["inference_failure"]["classification"],
             classification
@@ -1830,4 +1830,171 @@ async fn content_failures_defer_one_batch_without_pausing_other_memories() {
         );
         server.abort();
     }
+}
+
+#[tokio::test]
+async fn overlong_plan_gets_one_correction_and_saved_result() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let id = evidenced_memory(&pool).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = calls.clone();
+    let router = axum::Router::new().route("/", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        let count = count.clone();
+        async move {
+            let attempt = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut change = rewrite(id);
+            if attempt == 0 {
+                if let Change::Rewrite { description, .. } = &mut change { *description = "supported detail ".repeat(40); }
+            } else {
+                assert!(body.to_string().contains("validation_error"));
+            }
+            axum::Json(json!({"choices":[{"message":{"content":serde_json::to_string(&Plan {changes:vec![change]}).unwrap()}}]}))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = recovery_config(address);
+    let r = dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot(&pool, id).await["revision"], 3);
+    let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+        .bind(r)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(result["correction_calls"], 1);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(
+        dreaming::pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    server.abort();
+}
+
+fn recovery_config(address: std::net::SocketAddr) -> centaur_context::config::CuratorModelConfig {
+    centaur_context::config::CuratorModelConfig {
+        transport: centaur_context::config::CuratorModelTransport::DirectApi,
+        endpoint: format!("http://{address}/"),
+        api_token: "synthetic".into(),
+        model: "gpt-6-luna".into(),
+        prompt_version: "test".into(),
+        poll_interval: std::time::Duration::from_secs(1),
+        request_timeout: std::time::Duration::from_secs(5),
+    }
+}
+
+#[tokio::test]
+async fn recovery_keeps_successes_and_splits_without_resetting_row_budgets() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let done = evidenced_memory(&pool).await;
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    dreaming::apply_plan(&pool, run(&pool).await, &input, &Plan { changes: vec![] })
+        .await
+        .unwrap();
+    let mut pending = vec![];
+    for _ in 0..4 {
+        pending.push(evidenced_memory(&pool).await);
+    }
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    let fingerprints: serde_json::Map<String, Value> = input
+        .memories
+        .iter()
+        .map(|m| {
+            (
+                m["id"].as_str().unwrap().into(),
+                m["review_fingerprint"].clone(),
+            )
+        })
+        .collect();
+    let old = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,error,input,result) VALUES($1,'memory_dream','failed','system','context-memory-dream',$1::text,'revision conflict',$2,$3)",
+    )
+    .bind(old)
+    .bind(json!({"preview":false,"fingerprints":fingerprints}))
+    .bind(json!({"policy_version":"event-review-v5","retryable":false}))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let retry = dreaming::read_batch(&pool).await.unwrap();
+    assert_eq!(retry.memories.len(), 4);
+    assert!(!retry.memories.iter().any(|m| m["id"] == done.to_string()));
+    let router = axum::Router::new().route(
+        "/",
+        axum::routing::post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let config = recovery_config(address);
+    for _ in 0..20 {
+        sqlx::query("UPDATE runs SET result=jsonb_set(result,'{retry_at}',to_jsonb((now()-interval '1 second')::text)) WHERE status='failed'").execute(&pool).await.unwrap();
+        if matches!(
+            dreaming::pass(&pool, &reqwest::Client::new(), &config, false).await,
+            Ok(None)
+        ) {
+            break;
+        }
+    }
+    for id in pending {
+        let attempts:i64=sqlx::query_scalar("SELECT count(*) FROM runs WHERE status='failed' AND result->>'recovery_version'='bounded-recovery-v1' AND input->'fingerprints' ? $1").bind(id.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(attempts, 3);
+        assert_eq!(snapshot(&pool, id).await["revision"], 2);
+    }
+    let sizes:Vec<i32>=sqlx::query_scalar("SELECT jsonb_array_length(input->'memory_ids') FROM runs WHERE result->>'recovery_version'='bounded-recovery-v1' ORDER BY created_at").fetch_all(&pool).await.unwrap();
+    assert_eq!(sizes[0], 4);
+    assert!(sizes[1..].iter().all(|n| *n == 1));
+    assert_eq!(snapshot(&pool, done).await["revision"], 2);
+    server.abort();
+}
+
+#[tokio::test]
+async fn conflict_diagnostics_distinguish_changed_rows_from_read_only_edges() {
+    let _guard = LOCK.lock().await;
+    let Some(pool) = pool().await else { return };
+    let id = evidenced_memory(&pool).await;
+    let target = fixture(&pool, "source", json!({})).await;
+    let link = edge(&pool, id, target, "about").await;
+    sqlx::query("UPDATE connections SET protected=true WHERE id=$1")
+        .bind(link)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let input = dreaming::read_batch(&pool).await.unwrap();
+    let error = dreaming::apply_plan(
+        &pool,
+        run(&pool).await,
+        &input,
+        &Plan {
+            changes: vec![
+                rewrite(id),
+                Change::Disconnect {
+                    connection_id: link,
+                    reason: "Unsupported optional relationship.".into(),
+                },
+            ],
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("read-only"));
+    assert!(error.to_string().contains(&link.to_string()));
+    assert_eq!(snapshot(&pool, id).await["revision"], 2);
+    sqlx::query("UPDATE objects SET revision=revision+1 WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = dreaming::apply_plan(&pool, run(&pool).await, &input, &Plan { changes: vec![] })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("expected 2; actual 3"));
+    assert!(error.to_string().contains(&id.to_string()));
 }
