@@ -64,6 +64,10 @@ fn digest(value: &Value) -> String {
 fn key(table: &str, row: &Value) -> Value {
     if table == "context_apply_requests" {
         json!({"principal_id":row["principal_id"],"idempotency_key":row["idempotency_key"]})
+    } else if table == "visual_upload_requests" {
+        json!({"actor_type":row["actor_type"],"actor_id":row["actor_id"],"idempotency_key":row["idempotency_key"]})
+    } else if table == "artifact_binary_payloads" {
+        json!({"artifact_id":row["artifact_id"]})
     } else if table == "task_routines" {
         json!({"task_id":row["task_id"]})
     } else if SUBTYPES.contains(&table) {
@@ -654,9 +658,8 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
             && n != "_sqlx_migrations"
             && n != "maintenance_purge_receipts"
             && n != "maintenance_execution_fences"
-            // Visual bytes and upload receipts have immutable evidence semantics.
-            // Their foreign keys block deletion of affected Artifacts until a
-            // separate purge policy is reviewed; unrelated fixture purges work.
+            // Visual bytes and upload receipts are inspected as bounded key-only
+            // references below. Their payloads are never included in a preview.
             && n != "artifact_binary_payloads"
             && n != "visual_upload_requests"
     }) {
@@ -679,6 +682,27 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
             ));
         }
         result.insert((*table).into(), rows);
+    }
+    for (table, columns) in [
+        ("artifact_binary_payloads", "artifact_id"),
+        (
+            "visual_upload_requests",
+            "actor_type,actor_id,idempotency_key,artifact_id",
+        ),
+    ] {
+        let references: Vec<Value> = sqlx::query_scalar(&format!(
+            "SELECT to_jsonb(t) FROM (SELECT {columns} FROM {table} LIMIT $1) t"
+        ))
+        .bind(MAX_SNAPSHOT_ROWS + 1)
+        .fetch_all(&mut **tx)
+        .await?;
+        count += references.len();
+        if count > MAX_SNAPSHOT_ROWS as usize {
+            return Err(IntakeError::BadRequest(
+                "audit exceeds bounded purge snapshot; narrow operational policy first".into(),
+            ));
+        }
+        result.insert(table.into(), references);
     }
     Ok(result)
 }
