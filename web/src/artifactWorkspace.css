@@ -5,6 +5,10 @@
 .artifact-list { margin-top: 14px; border-top: 1px solid var(--border); }
 .artifact-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 14px; min-height: 58px; padding: 10px 4px; border-bottom: 1px solid var(--border); color: var(--text-primary); text-decoration: none; }
 .artifact-row:hover { background: var(--hover); }
+.artifact-visual-row { grid-template-columns: 90px minmax(0, 1fr) auto; }
+.artifact-thumbnail { width: 84px; height: 60px; object-fit: contain; grid-row: 1 / span 2; border-radius: 5px; background: var(--panel-raised); }
+.artifact-visual-row .artifact-row-meta { grid-column: 2; }
+.artifact-visual-row > span:last-child { grid-column: 3; grid-row: 1 / span 2; }
 .artifact-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
 .artifact-row-meta, .artifact-eyebrow { color: var(--text-muted); font-size: 13px; }
 .artifact-create-form { display: grid; gap: 12px; margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }
@@ -13,6 +17,11 @@
 .artifact-create-form input, .artifact-create-form textarea, .artifact-create-form select, .artifact-editor textarea { width: 100%; border: 1px solid #3d3f47; border-radius: 7px; padding: 10px; background: var(--panel-raised); color: var(--text-primary); }
 .artifact-create-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .artifact-reader { max-width: 860px; margin: 0 auto; padding: 28px clamp(18px, 5vw, 60px) 80px; }
+.artifact-visual-reader { max-width: 1500px; }
+.artifact-visual { margin: 0; }
+.artifact-visual img { display: block; width: 100%; max-height: calc(100vh - 210px); min-height: 320px; object-fit: contain; background: var(--panel-raised); }
+.artifact-visual figcaption { margin: 14px 0; color: var(--text-secondary); }
+.artifact-visual .artifact-actions { justify-content: flex-start; gap: 22px; }
 .artifact-back { color: var(--text-secondary); font-size: 13px; text-decoration: none; }
 .artifact-reader-head { align-items: flex-start; margin: 28px 0 22px; }
 .artifact-reader-head h1 { margin: 4px 0 0; font-size: clamp(25px, 3vw, 38px); line-height: 1.2; overflow-wrap: anywhere; }
@@ -46,5 +55,11 @@
   .artifact-row { grid-template-columns: minmax(0, 1fr) auto; }
   .artifact-row-meta { grid-column: 1; grid-row: 2; }
   .artifact-row > span:last-child { grid-column: 2; grid-row: 1 / span 2; }
+  .artifact-visual-row { grid-template-columns: 70px minmax(0, 1fr) auto; }
+  .artifact-thumbnail { width: 64px; height: 52px; }
+  .artifact-visual-row .artifact-row-title { grid-column: 2; }
+  .artifact-visual-row .artifact-row-meta { grid-column: 2; grid-row: 2; }
+  .artifact-visual-row > span:last-child { grid-column: 3; grid-row: 1 / span 2; }
+  .artifact-visual img { min-height: 0; max-height: 70vh; }
   .artifact-reader { padding-top: 18px; }
 }

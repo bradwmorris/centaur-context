@@ -2,8 +2,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Extension, Json, Router,
-    body::Body,
-    extract::{Path, Query, Request, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -155,6 +155,11 @@ pub fn agent_router(state: AppState, token: String) -> Router {
                 .route("/objects/{id}", get(read_context_object))
                 .route("/objects/{id}/artifacts", get(list_artifacts))
                 .route("/artifacts/{id}/content", get(read_artifact_by_id))
+                .route("/artifacts/{id}/binary", get(read_visual))
+                .route(
+                    "/sources/{id}/visual-artifacts",
+                    post(create_visual).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
+                )
                 .route("/embeddings/status", get(read_embedding_status))
                 .route("/sources", get(list_sources))
                 .route("/search/sources", get(search_sources))
@@ -222,6 +227,7 @@ fn service_router(state: AppState) -> Router {
                     get(list_artifacts).post(create_artifact),
                 )
                 .route("/artifacts/{id}/content", get(read_artifact_by_id))
+                .route("/artifacts/{id}/binary", get(read_visual))
                 .route("/sources/{id}/content", get(read_artifact))
                 .route("/notes", get(list_notes).post(create_note))
                 .route("/notes/{id}", get(read_note).patch(update_note))
@@ -1457,6 +1463,142 @@ async fn read_artifact_by_id(
     }
     Ok(Json(
         json!({"data":db::get_artifact_window_by_id(&state.pool,id,offset,limit).await?}),
+    ))
+}
+
+#[derive(Deserialize)]
+struct VisualReadQuery {
+    download: Option<bool>,
+}
+
+async fn read_visual(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<VisualReadQuery>,
+) -> Result<Response, ApiError> {
+    let (media_type, bytes) = db::read_visual_bytes(&state.pool, id).await?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, media_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            if query.download.unwrap_or(false) {
+                format!(
+                    "attachment; filename=\"visual-{id}.{}\"",
+                    if bytes.starts_with(b"\x89PNG") {
+                        "png"
+                    } else {
+                        "jpg"
+                    }
+                )
+            } else {
+                "inline".to_owned()
+            },
+        )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(bytes))
+        .map_err(|_| ApiError::BadRequest("could not serve visual".into()))
+}
+
+fn visual_header(
+    headers: &HeaderMap,
+    name: &'static str,
+    max_chars: usize,
+) -> Result<String, ApiError> {
+    let value = required_header(headers, name)?;
+    if value.len() > max_chars || value.trim() != value || value.is_empty() {
+        return Err(ApiError::BadRequest(format!("{name} is invalid")));
+    }
+    Ok(value)
+}
+
+async fn create_visual(
+    State(state): State<AppState>,
+    Extension(actor): Extension<ActorContext>,
+    Path(source_id): Path<Uuid>,
+    headers: HeaderMap,
+    bytes: Bytes,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let key = idempotency_key(&headers, true, &actor)?.expect("required key");
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return Err(ApiError::BadRequest(
+            "visual must be between 1 byte and 20 MiB".into(),
+        ));
+    }
+    let media_type = visual_header(&headers, "content-type", 20)?;
+    let format = match media_type.as_str() {
+        "image/png" => image::ImageFormat::Png,
+        "image/jpeg" => image::ImageFormat::Jpeg,
+        _ => return Err(ApiError::BadRequest("visual must be PNG or JPEG".into())),
+    };
+    let dimensions = imagesize::blob_size(&bytes)
+        .map_err(|_| ApiError::BadRequest("invalid image data".into()))?;
+    if dimensions.width == 0
+        || dimensions.height == 0
+        || dimensions.width.saturating_mul(dimensions.height) > 24_000_000
+    {
+        return Err(ApiError::BadRequest(
+            "visual exceeds the 24 megapixel limit".into(),
+        ));
+    }
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|_| ApiError::BadRequest("invalid or truncated image data".into()))?;
+    if decoded.width() as usize != dimensions.width
+        || decoded.height() as usize != dimensions.height
+    {
+        return Err(ApiError::BadRequest(
+            "image dimensions do not match decoded data".into(),
+        ));
+    }
+    let expected_revision = visual_header(&headers, "x-artifact-expected-revision", 20)?
+        .parse::<i64>()
+        .map_err(|_| ApiError::BadRequest("invalid expected revision".into()))?;
+    let title = visual_header(&headers, "x-artifact-title", 500)?;
+    let description = visual_header(&headers, "x-artifact-description", 1000)?;
+    let document_key = visual_header(&headers, "x-artifact-document-key", 100)?;
+    let predecessor = optional_header(&headers, "x-artifact-supersedes-id")?
+        .map(|value| {
+            Uuid::parse_str(&value)
+                .map_err(|_| ApiError::BadRequest("invalid predecessor ID".into()))
+        })
+        .transpose()?;
+    let method = optional_header(&headers, "x-artifact-method")?;
+    if method.as_ref().is_some_and(|value| value.len() > 500) {
+        return Err(ApiError::BadRequest("visual method is too long".into()));
+    }
+    let artifact = db::append_visual(
+        &state.pool,
+        &actor,
+        source_id,
+        db::NewVisual {
+            expected_revision,
+            title,
+            description,
+            document_key,
+            media_type,
+            width: dimensions.width as i32,
+            height: dimensions.height as i32,
+            bytes: bytes.to_vec(),
+            supersedes_artifact_id: predecessor,
+            method,
+        },
+        &key,
+    )
+    .await
+    .map_err(|error| match error {
+        DbError::Invalid(message)
+            if message == "idempotency key was already used with a different request" =>
+        {
+            ApiError::IdempotencyConflict
+        }
+        other => ApiError::Db(other),
+    })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "data": {"artifact": artifact, "viewer_path": format!("/sources/{source_id}/artifacts/{}", artifact.id)}
+        })),
     ))
 }
 

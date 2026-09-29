@@ -20,6 +20,7 @@ context_search = "centaur_tool_centaur_context.search:main"
 context_read = "centaur_tool_centaur_context.read:main"
 context_routine = "centaur_tool_centaur_context.routine:main"
 context_apply = "centaur_tool_centaur_context.apply:main"
+context_visual = "centaur_tool_centaur_context.visual:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]

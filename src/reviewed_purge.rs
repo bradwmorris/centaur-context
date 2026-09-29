@@ -654,6 +654,11 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
             && n != "_sqlx_migrations"
             && n != "maintenance_purge_receipts"
             && n != "maintenance_execution_fences"
+            // Visual bytes and upload receipts have immutable evidence semantics.
+            // Their foreign keys block deletion of affected Artifacts until a
+            // separate purge policy is reviewed; unrelated fixture purges work.
+            && n != "artifact_binary_payloads"
+            && n != "visual_upload_requests"
     }) {
         return Err(IntakeError::Conflict(
             "application schema changed: purge policy requires review".into(),

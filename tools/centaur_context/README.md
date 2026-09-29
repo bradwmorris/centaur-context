@@ -1,11 +1,15 @@
 # Centaur Context agent client
 
-This package provides exactly three agent-facing commands over one shared
+This package provides three universal record commands over one shared
 authenticated HTTP client:
 
 - `context_search` finds canonical Objects;
 - `context_read` reads Objects and bounded supporting data; and
 - `context_apply` applies one atomic, idempotent write batch.
+
+`context_visual` is a specialized local-file helper for Source-attached PNG/JPEG
+visuals. It uses the same bound agent authority and reads the bytes back after
+upload. The three universal commands keep their existing contract.
 
 Call them directly from an agent sandbox:
 
@@ -15,6 +19,7 @@ context_read 00000000-0000-0000-0000-000000000001 --include connections
 context_apply --example
 context_apply --schema
 context_apply --file apply-request.json
+context_visual SOURCE_UUID image.png --title 'Feedback loop' --description 'A simple loop showing a delayed response.' --document-key feedback-loop --method 'Codex image generation'
 ```
 
 `context_apply --example` is local and prints validation-only create/update

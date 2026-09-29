@@ -53,6 +53,10 @@ class _UrllibResponse:
 
         return json.loads(self._body.decode("utf-8"))
 
+    @property
+    def content(self) -> bytes:
+        return self._body
+
 
 class _UrllibClient:
     def __init__(self, timeout: float) -> None:
@@ -71,6 +75,7 @@ class _UrllibClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        content: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> _UrllibResponse:
         import json as json_module
@@ -83,6 +88,8 @@ class _UrllibClient:
         if json is not None:
             body = json_module.dumps(json, separators=(",", ":")).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
+        elif content is not None:
+            body = content
         request = Request(url, data=body, headers=request_headers, method=method)
         proxy = _clean(os.getenv("http_proxy") or os.getenv("HTTP_PROXY"))
         open_request = urlopen
@@ -660,6 +667,58 @@ class CentaurContextClient:
         return self._request(
             "GET", f"/api/v2/objects/{quote(object_id, safe='')}/artifacts"
         )
+
+    def attach_visual_bytes(
+        self, source_id: str, data: bytes, *, title: str, description: str,
+        document_key: str, media_type: str, expected_revision: int,
+        idempotency_key: str, supersedes_artifact_id: str | None = None,
+        method: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach one bounded PNG/JPEG to a Source under current agent authority."""
+        if not data or len(data) > 20 * 1024 * 1024:
+            raise ValueError("visual must be between 1 byte and 20 MiB")
+        headers = self._headers(idempotency_key)
+        headers.update({
+            "Content-Type": media_type,
+            "X-Artifact-Title": _required(title, "title"),
+            "X-Artifact-Description": _required(description, "description"),
+            "X-Artifact-Document-Key": _required(document_key, "document_key"),
+            "X-Artifact-Expected-Revision": str(expected_revision),
+        })
+        if supersedes_artifact_id:
+            headers["X-Artifact-Supersedes-Id"] = supersedes_artifact_id
+        if method:
+            headers["X-Artifact-Method"] = method
+        try:
+            response = self._http.request(
+                "POST", f"{self.base_url}/api/v2/sources/{quote(source_id, safe='')}/visual-artifacts",
+                content=data, headers=headers,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"visual attachment failed: {exc}") from exc
+        if response.status_code >= 400:
+            try:
+                error = response.json().get("error", {})
+                detail = error.get("message") or error.get("code")
+            except (ValueError, AttributeError):
+                detail = None
+            raise RuntimeError(f"visual attachment failed: {detail or f'HTTP {response.status_code}'}")
+        return _data(response.json())
+
+    def read_visual_bytes(self, artifact_id: str) -> bytes:
+        """Read actual visual bytes for receipt verification or an agent preview."""
+        try:
+            response = self._http.request(
+                "GET", f"{self.base_url}/api/v2/artifacts/{quote(artifact_id, safe='')}/binary",
+                headers=self._headers(),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"visual readback failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise RuntimeError(f"visual readback failed: HTTP {response.status_code}")
+        if len(response.content) > 20 * 1024 * 1024:
+            raise RuntimeError("visual readback exceeds 20 MiB")
+        return response.content
 
     def embedding_status(self) -> dict[str, Any]:
         """Read provider-safe embedding queue and lexical-fallback status."""
