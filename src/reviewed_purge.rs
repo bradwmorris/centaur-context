@@ -1174,6 +1174,60 @@ mod performance_tests {
     use uuid::Uuid;
 
     #[test]
+    fn visual_payload_references_block_only_their_own_artifact_purge() {
+        let artifact_id = Uuid::from_u128(9001);
+        let artifact =
+            json!({"id":artifact_id,"object_id":Uuid::from_u128(9002),"kind":"research_visual"});
+        let mut rows: Snapshot = TABLES
+            .iter()
+            .map(|table| ((*table).to_owned(), Vec::new()))
+            .collect();
+        rows.get_mut("artifacts").unwrap().push(artifact.clone());
+        rows.insert("artifact_binary_payloads".into(), Vec::new());
+        rows.insert("visual_upload_requests".into(), Vec::new());
+        let request = PurgeRequest {
+            idempotency_key: "synthetic-visual-purge".into(),
+            selections: vec![Selection {
+                table: "artifacts".into(),
+                key: key("artifacts", &artifact),
+                row_sha256: digest(&artifact),
+                reason: "Synthetic disposable visual".into(),
+            }],
+            reconciliations: vec![],
+            commit: false,
+            manifest_sha256: None,
+            recovery_export_sha256: None,
+        };
+        let fks = vec![
+            (
+                "artifact_binary_payloads".into(),
+                "artifacts".into(),
+                vec!["artifact_id".into()],
+                vec!["id".into()],
+            ),
+            (
+                "visual_upload_requests".into(),
+                "artifacts".into(),
+                vec!["artifact_id".into()],
+                vec!["id".into()],
+            ),
+        ];
+        let empty = preview_rows(rows.clone(), &request, fks.clone()).unwrap();
+        assert!(empty["manifest"]["blockers"].as_array().unwrap().is_empty());
+        rows.get_mut("artifact_binary_payloads")
+            .unwrap()
+            .push(json!({"artifact_id":artifact_id}));
+        rows.get_mut("visual_upload_requests").unwrap().push(json!({
+            "artifact_id":artifact_id,
+            "actor_type":"centaur_agent",
+            "actor_id":"synthetic",
+            "idempotency_key":"synthetic-visual"
+        }));
+        let blocked = preview_rows(rows, &request, fks).unwrap();
+        assert_eq!(blocked["manifest"]["blockers"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
     fn fifteen_thousand_rows_and_large_history_fit_preview_budget() {
         let mut rows: Snapshot = TABLES
             .iter()
