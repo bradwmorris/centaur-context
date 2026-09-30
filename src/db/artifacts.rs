@@ -2,6 +2,153 @@
 
 use super::*;
 
+pub struct NewVisual {
+    pub expected_revision: i64,
+    pub title: String,
+    pub description: String,
+    pub document_key: String,
+    pub media_type: String,
+    pub width: i32,
+    pub height: i32,
+    pub bytes: Vec<u8>,
+    pub supersedes_artifact_id: Option<Uuid>,
+    pub method: Option<String>,
+}
+
+pub async fn read_visual_bytes(
+    pool: &PgPool,
+    artifact_id: Uuid,
+) -> Result<(String, Vec<u8>), DbError> {
+    sqlx::query_as(
+        "SELECT p.media_type,p.bytes FROM artifact_binary_payloads p JOIN artifacts a ON a.id=p.artifact_id WHERE a.id=$1 AND a.kind='research_visual'",
+    )
+    .bind(artifact_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(DbError::NotFound)
+}
+
+pub async fn append_visual(
+    pool: &PgPool,
+    actor: &ActorContext,
+    source_id: Uuid,
+    input: NewVisual,
+    idempotency_key: &str,
+) -> Result<Artifact, DbError> {
+    let sha256 = format!("{:x}", Sha256::digest(&input.bytes));
+    let request = json!({
+        "source_id": source_id, "expected_revision": input.expected_revision,
+        "title": input.title, "description": input.description,
+        "document_key": input.document_key, "media_type": input.media_type,
+        "width": input.width, "height": input.height, "sha256": sha256,
+        "supersedes_artifact_id": input.supersedes_artifact_id, "method": input.method,
+    });
+    let request_hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&request).map_err(|e| DbError::Invalid(e.to_string()))?)
+    );
+    let mut tx = pool.begin().await?;
+    crate::runs::assert_thread_not_fenced(&mut tx, actor.centaur_thread_key.as_deref()).await?;
+    let lock_key = format!("{}:{}:{idempotency_key}", actor.actor_type, actor.actor_id);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(lock_key)
+        .execute(&mut *tx)
+        .await?;
+    let prior: Option<(String, Uuid)> = sqlx::query_as(
+        "SELECT request_hash,artifact_id FROM visual_upload_requests WHERE actor_type=$1 AND actor_id=$2 AND idempotency_key=$3",
+    ).bind(actor.actor_type).bind(&actor.actor_id).bind(idempotency_key).fetch_optional(&mut *tx).await?;
+    if let Some((old_hash, artifact_id)) = prior {
+        if old_hash != request_hash {
+            return Err(DbError::Invalid(
+                "idempotency key was already used with a different request".into(),
+            ));
+        }
+        let artifact = sqlx::query_as("SELECT * FROM artifacts WHERE id=$1")
+            .bind(artifact_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(artifact);
+    }
+    let source: Option<(i64, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT o.revision,o.title,o.description,s.current_artifact_id FROM objects o JOIN sources s ON s.object_id=o.id WHERE o.id=$1 AND o.kind='source' AND o.archived_at IS NULL FOR UPDATE OF o",
+    ).bind(source_id).fetch_optional(&mut *tx).await?;
+    let Some((revision, title, description, canonical_id)) = source else {
+        return Err(DbError::NotFound);
+    };
+    validate_object_description(&title, &description)?;
+    if revision != input.expected_revision {
+        return Err(DbError::Conflict);
+    }
+    if let Some(predecessor) = input.supersedes_artifact_id {
+        let prior: Option<(String, Value)> =
+            sqlx::query_as("SELECT kind,metadata FROM artifacts WHERE id=$1 AND object_id=$2")
+                .bind(predecessor)
+                .bind(source_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some((kind, metadata)) = prior else {
+            return Err(DbError::Invalid(
+                "visual predecessor belongs to another Source".into(),
+            ));
+        };
+        if kind != "research_visual"
+            || metadata.get("document_key").and_then(Value::as_str)
+                != Some(input.document_key.as_str())
+            || canonical_id == Some(predecessor)
+        {
+            return Err(DbError::Invalid(
+                "visual may supersede only a visual with the same document key".into(),
+            ));
+        }
+        let has_successor: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE supersedes_artifact_id=$1)",
+        )
+        .bind(predecessor)
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_successor {
+            return Err(DbError::Conflict);
+        }
+    } else {
+        let key_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE object_id=$1 AND kind='research_visual' AND metadata->>'document_key'=$2)",
+        ).bind(source_id).bind(&input.document_key).fetch_one(&mut *tx).await?;
+        if key_exists {
+            return Err(DbError::Conflict);
+        }
+    }
+    let artifact_id = Uuid::new_v4();
+    let metadata = json!({
+        "document_key": input.document_key,
+        "creation_key": idempotency_key,
+        "description": input.description,
+        "width": input.width,
+        "height": input.height,
+        "method": input.method,
+        "predecessor_artifact_id": input.supersedes_artifact_id,
+    });
+    let artifact: Artifact = sqlx::query_as(
+        "INSERT INTO artifacts (id,object_id,kind,title,media_type,sha256,size_bytes,capture_outcome,metadata,supersedes_artifact_id,semantic_indexing_enabled) VALUES ($1,$2,'research_visual',$3,$4,$5,$6,'complete',$7,$8,false) RETURNING *",
+    ).bind(artifact_id).bind(source_id).bind(&input.title).bind(&input.media_type)
+     .bind(&sha256).bind(input.bytes.len() as i64).bind(metadata).bind(input.supersedes_artifact_id)
+     .fetch_one(&mut *tx).await?;
+    sqlx::query("INSERT INTO artifact_binary_payloads (artifact_id,media_type,width,height,bytes) VALUES ($1,$2,$3,$4,$5)")
+        .bind(artifact_id).bind(&input.media_type).bind(input.width).bind(input.height).bind(&input.bytes)
+        .execute(&mut *tx).await?;
+    let next_revision: i64 = sqlx::query_scalar(
+        "UPDATE objects SET revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1 RETURNING revision",
+    ).bind(source_id).bind(actor.actor_type).bind(&actor.actor_id).fetch_one(&mut *tx).await?;
+    insert_event(&mut tx, actor, "object", source_id, source_id, "artifact_attached",
+        Some(idempotency_key), Some(revision), next_revision,
+        json!({"artifact_id": artifact_id, "kind": "research_visual", "sha256": sha256, "size_bytes": input.bytes.len()})).await?;
+    sqlx::query("INSERT INTO visual_upload_requests (actor_type,actor_id,idempotency_key,request_hash,artifact_id) VALUES ($1,$2,$3,$4,$5)")
+        .bind(actor.actor_type).bind(&actor.actor_id).bind(idempotency_key).bind(request_hash).bind(artifact_id)
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(artifact)
+}
+
 pub async fn list_artifacts(pool: &PgPool, object_id: Uuid) -> Result<Vec<Artifact>, DbError> {
     get_object(pool, object_id).await?;
     Ok(sqlx::query_as(

@@ -13,6 +13,7 @@ readme = "README.md"
 anyhow = "1"
 axum = "0.8.9"
 imagesize = { version = "0.14", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 scraper = { version = "0.24", default-features = false }
 serde = { version = "1", features = ["derive"] }

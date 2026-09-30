@@ -230,6 +230,7 @@ async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping()
     assert_eq!(
         tables,
         vec![
+            "artifact_binary_payloads",
             "artifacts",
             "chat_messages",
             "chats",
@@ -249,7 +250,8 @@ async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping()
             "task_routines",
             "tasks",
             "themes",
-            "users"
+            "users",
+            "visual_upload_requests"
         ]
     );
 }

@@ -7,9 +7,10 @@ export interface ArtifactDocument {
 }
 
 export function documentKey(artifact: Artifact): string | null {
-  if (artifact.kind !== "research_notes") return null;
+  if (artifact.kind !== "research_notes" && artifact.kind !== "research_visual") return null;
   const key = artifact.metadata.document_key;
-  return typeof key === "string" && key.trim() ? key : "default";
+  const value = typeof key === "string" && key.trim() ? key : "default";
+  return artifact.kind === "research_visual" ? `visual:${value}` : value;
 }
 
 function newest(first: Artifact, second: Artifact): number {
