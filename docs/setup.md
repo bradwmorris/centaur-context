@@ -31,13 +31,11 @@ Read the [Centaur integration contract](centaur-integration.md) for the design
 boundary. The [Integration API](api.md) lists the HTTP endpoints and credentials;
 its example service names also need to be mapped to the real deployment.
 
-For a plain-English explanation of **every change in the maintainer's fork and
-its exact files**, read `docs/FORK.md` in a local checkout of
-`bradwmorris/centaur`. If the two repositories are checked out side by side,
-the file is at `../centaur/docs/FORK.md`. That new guide has not been published
-to GitHub yet. The published
-[fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
-contains the commit-by-commit evidence in the meantime.
+Use [Adapting the Slack integration](centaur-integration.md#adapting-the-slack-integration)
+for the required behavior, optional pieces, and public source references. This
+guide needs no adjacent Centaur checkout or unpublished fork document. The
+[historical fork audit](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/docs/fork-audit-2026-09-15.md)
+provides background on earlier changes, not a current installation recipe.
 
 ## 0. Plan for your existing deployment
 
@@ -89,7 +87,8 @@ gap; do not silently claim the setup is complete.
   before claiming the integration works there.
 - **Stock Centaur or another client:** installing Context alone will not create
   automatic capture or retrieval. The current implementation is in the
-  maintainer's Slackbot v2 fork. Review the [fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md)
+  maintainer's Slackbot v2 fork. Follow the
+  [adaptation guide](centaur-integration.md#adapting-the-slack-integration)
   and port only the needed behavior to the developer's own Centaur fork, or
   agree on a general Centaur extension point. Do not modify Paradigm's original
   repository as part of this setup.
@@ -363,8 +362,8 @@ The fork has other changes that are **not part of those two Slack connections**:
   Context.
 
 Do not copy all fork commits or files into another fork. Choose the required
-parts for the deployment using the Centaur fork's `docs/FORK.md` guide and the
-published [fork audit](https://github.com/bradwmorris/centaur/blob/main/docs/fork-audit-2026-09-15.md).
+parts for the deployment using the
+[adaptation guide and source map](centaur-integration.md#adapting-the-slack-integration).
 The original hook commits are history, not an installation recipe.
 [`compatibility.toml`](../compatibility.toml) must pin a current, tested Centaur
 revision before this can be presented as a supported working installation.
@@ -613,7 +612,10 @@ For one-time imports, embedding rollout, and trace accounting, see
 [advanced operations](operations.md). The
 [Secret template](../deploy/secret.example.yaml) documents available service settings;
 the [agent client](../tools/centaur_context/client.py) and
-[CLI](../tools/centaur_context/cli.py) define the tool contract.
+[tool command guide](../tools/centaur_context/README.md) describe the current
+commands; [`pyproject.toml`](../tools/centaur_context/pyproject.toml) lists their
+entry points. The [Context contract](context-contract.md) defines the universal
+record operations.
 
 Normal agent search/read/apply uses `CENTAUR_CONTEXT_API_TOKEN` on port `8081`,
 including Theme creation and explained Connections. Retained Note/Task writer

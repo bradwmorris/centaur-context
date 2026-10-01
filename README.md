@@ -101,6 +101,18 @@ If you want to try it, make the Centaur changes in your own fork. See the [setup
 - [Context contract](docs/context-contract.md) — the shared agent-facing rules
   and three universal tools.
 
+Optional capabilities and advanced guidance:
+
+- [Codex desktop integration](docs/codex.md) — opt-in local capture and Context
+  tools, with separate session binding and credentials.
+- [Memory capture and maintenance](docs/memory.md) — optional event capture,
+  generated-Memory review, preview/apply controls, and model requirements.
+- [Research Artifacts](docs/research-artifacts.md) — optional working documents,
+  publication receipts, and supporting visuals on existing Objects.
+- [Advanced operations](docs/operations.md) — optional imports, indexing,
+  trace accounting, and reviewed maintenance. Start with the setup guide for
+  installation, backup, and removal.
+
 Centaur Context runs alongside Centaur with its own PostgreSQL database. Centaur
 owns agent execution; Context owns shared knowledge. Company-specific prompts,
 workflows, and integrations belong in a private overlay.

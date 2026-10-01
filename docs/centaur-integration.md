@@ -32,9 +32,10 @@ on the Centaur integration described below.
 
 ## Current compatibility
 
-The full Slack loop has been tested against the maintainer's Centaur fork, not
-an untouched current upstream Centaur checkout. The fork originally introduced
-the integration in these commits:
+Historical Slack-loop testing used the maintainer's Centaur fork. This repository
+does not yet record a freshly end-to-end tested Context/Centaur pair in
+`compatibility.toml`. The fork originally introduced the integration in these
+commits:
 
 | Commit | Contract introduced |
 | --- | --- |
@@ -43,9 +44,59 @@ the integration in these commits:
 | `33e7cd59` | Optional pre-execution `contextBuilder` |
 
 Later fork commits add trace, identity, usage, multi-instance, and explainable
-evaluation behavior. As of 2026-09-09, upstream `paradigmxyz/centaur` does not
-contain the two lifecycle hooks. The fork also trails current upstream, so these
-historical commits are evidence of the contract, not a safe installation recipe.
+evaluation behavior. These historical commits are evidence of the contract, not
+a safe installation recipe or a claim about the current fork/upstream distance.
+
+## Adapting the Slack integration
+
+Start with your running Centaur revision and the deployment plan in
+[setup](setup.md#0-plan-for-your-existing-deployment). Installing Context or
+loading its tools does not add Slack lifecycle hooks to Centaur. If your fork
+lacks the following behavior, it needs a separately reviewed integration change
+before the setup values can work.
+
+1. **Capture and identify the Chat.** Before retrieval, send the current Slack
+   snapshot to `POST /api/v2/ingest/slack/interactions` using the ingestion token,
+   with `interaction_finished: false` and a running interaction. Keep workspace,
+   channel, root-thread timestamp, message IDs, and human/agent identities stable.
+   Use the returned `chat_object_id`; never substitute a retrieved Object ID.
+   Preserve the current triggering message timestamp separately from the thread
+   root. The [API reference](api.md) defines the payload and allowed thread forms.
+2. **Retrieve before execution.** Send the question, canonical Chat ID, principal,
+   and matching thread key to `GET /api/v2/context` with the agent token. Render
+   the bounded packet as untrusted reference data, separate from conversation
+   history. If no valid Chat ID is available or retrieval fails, record the
+   failure and let the ordinary agent turn continue without the packet.
+3. **Capture the result.** After response rendering, send the updated snapshot
+   with stable message/interaction identities and the actual Run outcome. Include
+   available usage and trace evidence; label unavailable values rather than
+   inventing them. The finish signal or Context's inactivity handling makes
+   eligible windows available for Memory extraction. Snapshot failures must not
+   retract the delivered response; retries must preserve identities and content.
+4. **Wire configuration and private transport.** Adapt the hook URLs, timeouts,
+   Secret references, and approved Slack surfaces to your installation. Review
+   caller egress, receiver ingress, DNS, and service ports using the
+   [setup network checklist](setup.md#hook-configuration). Neither hook needs
+   access to Centaur's database. First exercise success and outage behavior in a
+   disposable environment and record the exact revisions and configuration.
+
+The following public files were source-reviewed at fork revision
+`f44ce662f3b3fca63bd4c162add332cb43ec035c`. This is a source reference, **not a
+tested installation pin**. Compare behavior and dependencies in your chosen
+revision instead of copying these files wholesale.
+
+| Integration part | Public source |
+| --- | --- |
+| Snapshot payloads, participant profiles, response Chat identity | [interaction-sink.ts](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/services/slackbotv2/src/interaction-sink.ts) |
+| Authenticated retrieval and bounded reference formatting | [shared-context.ts](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/services/slackbotv2/src/shared-context.ts) |
+| Initial Chat resolution, execution ordering, completion capture, failure handling | [Slackbot lifecycle](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/services/slackbotv2/src/index.ts) |
+| Hook settings and Secret-to-environment wiring | [Helm values](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/contrib/chart/values.yaml), [Slackbot template](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/contrib/chart/templates/slackbotv2.yaml) |
+
+Optional additions remain separate: [agent tools](setup.md#optional-agent-tools)
+provide explicit search/read/apply; [Curator transport](#curator-model-transport-is-a-separate-decision)
+enables automatic Memory extraction; [Memory maintenance](memory.md) has its own
+controls. Multiple Slack apps, organization-specific workflows, and unrelated
+fork fixes are not prerequisites for a single-app capture/retrieval integration.
 
 ## The minimum Centaur surface
 
@@ -92,17 +143,26 @@ sequenceDiagram
     participant X as Context provider
     participant A as Agent harness
     U->>C: New message
-    C->>X: principal + thread key + query
-    alt context available
-        X-->>C: bounded reference packet
-    else timeout or failure
-        X-->>C: no packet
+    C->>X: Initial snapshot (ingestion token)
+    X-->>C: Canonical Chat ID, or failure
+    opt Canonical Chat ID available
+        C->>X: Chat ID + principal + thread key + query
+        alt context available
+            X-->>C: bounded reference packet
+        else timeout or failure
+            X-->>C: no packet
+        end
     end
     C->>A: execute with optional context
     A-->>C: completed response
     C-->>U: rendered response
     C->>X: normalized completed interaction
 ```
+
+The diagram includes the Slack implementation's initial Chat handshake. Both
+capture calls and retrieval use bounded requests; unavailable Context must leave
+ordinary Centaur execution usable. Memory extraction and maintenance are separate
+Context operations, not additional steps required to return the answer.
 
 ## Security boundary
 
