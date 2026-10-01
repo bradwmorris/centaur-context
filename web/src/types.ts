@@ -313,6 +313,7 @@ export interface ObjectEvent {
 }
 
 export interface ChatMessage {
+  correction?: { reason: string; actor_id: string; representation: {content?: string} } | null;
   id: string;
   chat_object_id: string;
   provider_message_id: string;

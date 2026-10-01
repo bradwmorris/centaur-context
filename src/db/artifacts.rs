@@ -173,7 +173,10 @@ pub async fn get_artifact_window(
         sqlx::query_as("SELECT sc.* FROM sources s JOIN artifacts sc ON sc.id=s.current_artifact_id WHERE s.object_id=$1")
             .bind(object_id).fetch_optional(pool).await?
     }.ok_or(DbError::NotFound)?;
-    artifact_window(artifact, offset, limit)
+    let mut window = artifact_window(artifact, offset, limit)?;
+    window.correction=sqlx::query_scalar("SELECT to_jsonb(c) FROM evidence_corrections c WHERE target_type='artifact' AND target_id=$1 ORDER BY object_revision DESC LIMIT 1")
+        .bind(window.content.id).fetch_optional(pool).await?;
+    Ok(window)
 }
 
 pub async fn get_artifact_window_by_id(
@@ -187,7 +190,10 @@ pub async fn get_artifact_window_by_id(
         .fetch_optional(pool)
         .await?
         .ok_or(DbError::NotFound)?;
-    artifact_window(artifact, offset, limit)
+    let mut window = artifact_window(artifact, offset, limit)?;
+    window.correction=sqlx::query_scalar("SELECT to_jsonb(c) FROM evidence_corrections c WHERE target_type='artifact' AND target_id=$1 ORDER BY object_revision DESC LIMIT 1")
+        .bind(window.content.id).fetch_optional(pool).await?;
+    Ok(window)
 }
 
 fn artifact_window(artifact: Artifact, offset: i64, limit: i64) -> Result<ArtifactWindow, DbError> {
@@ -206,6 +212,7 @@ fn artifact_window(artifact: Artifact, offset: i64, limit: i64) -> Result<Artifa
         .collect();
     let end = offset + text.chars().count() as i64;
     Ok(ArtifactWindow {
+        correction: None,
         content: artifact,
         text,
         offset,

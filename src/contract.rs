@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(object_description_max_characters(), 600);
         assert!(interactive_writable("task"));
         assert!(interactive_writable("source"));
-        assert!(!interactive_writable("memory"));
+        assert!(interactive_writable("memory"));
         assert!(connection_kind("related_to"));
         assert_eq!(
             document()["tools"].as_object().expect("tools object").len(),

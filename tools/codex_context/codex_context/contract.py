@@ -29,7 +29,7 @@ def schemas():
     for name,spec in tools['context_apply']['operations'].items():
         fields={'operation':{'type':'string','const':name}}
         for key in spec['required']+spec.get('optional',[]):
-            fields[key]= {'type':'integer','minimum':1} if key=='expected_revision' else ref if key in ('source','target','object') else {'type':'object'} if key in ('provenance','fields','changes','metadata') else dict(string)
+            fields[key]= {'type':'integer','minimum':1} if key in ('expected_revision','expected_target_revision') else ref if key in ('source','target','object') else {'type':'object'} if key in ('provenance','fields','changes','metadata','representation') else dict(string)
         variants.append(obj(fields,['operation',*spec['required']]))
     apply=obj({'contract_version':{'type':'string','const':c['contract_version']},'idempotency_key':string,'validate_only':{'type':'boolean'},'operations':{**array({'oneOf':variants}),'minItems':1,'maxItems':limits['apply_operations']}},tools['context_apply']['input']['required'])
     return search,read,apply

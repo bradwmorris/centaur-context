@@ -32,13 +32,14 @@ A Connection joins two Objects. It names the relationship and includes an explan
 
 For example, a Chat might involve a User. A Task agreed in that conversation might be `derived_from` the Chat and `depend_on` another Task. These links let the system find an Object and then inspect nearby knowledge. The explanation makes each link reviewable; it is not merely an unexplained edge in a graph.
 
-Ordinary authenticated `context_apply` callers may create explained `involves`
-or `about` Connections from an active Source to an Entity, and `related_to`
-Connections between active Entities, even if either endpoint is protected.
-This creation-only permission leaves endpoint contents and protection unchanged;
-it does not permit modifying existing Connections. Protected Connection edits,
-archived or system-managed endpoints, and other relationship shapes remain
-subject to their existing restrictions.
+Explicit authenticated corrections can edit protected Objects and Connections.
+`protected` remains an autonomous-curation preference. All eight Object kinds
+have revisioned current metadata, archival and restoration paths. Stable UUIDs,
+Object kinds, original message authorship, Artifact bytes and audit Events remain
+historical evidence. Use replacement Objects and relink current relationships for
+a mistaken type. See [correction contract](context-contract.md#writable-records)
+and [RD 132](rd/132-agent-corrections.md) for identity repair and evidence handling.
+
 
 The Object types and allowed relationships form the **ontology**: the shared vocabulary for what the system can represent and how those things relate.
 

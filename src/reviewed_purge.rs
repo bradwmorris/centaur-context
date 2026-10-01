@@ -662,6 +662,7 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
             // references below. Their payloads are never included in a preview.
             && n != "artifact_binary_payloads"
             && n != "visual_upload_requests"
+            && n != "evidence_corrections"
     }) {
         return Err(IntakeError::Conflict(
             "application schema changed: purge policy requires review".into(),
@@ -684,6 +685,7 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
         result.insert((*table).into(), rows);
     }
     for (table, columns) in [
+        ("evidence_corrections", "id,object_id,target_type,target_id"),
         ("artifact_binary_payloads", "artifact_id"),
         (
             "visual_upload_requests",
@@ -891,6 +893,19 @@ fn preview_rows_with_plan(
             }
         }
     }
+    // Corrections are retained evidence, never an automatically deletable child.
+    for correction in rows.get("evidence_corrections").into_iter().flatten() {
+        let target = match correction["target_type"].as_str() {
+            Some("artifact") => "artifacts",
+            Some("message") => "chat_messages",
+            Some("event") => "object_events",
+            Some("run") => "runs",
+            _ => "objects",
+        };
+        if selected_id(&set, target, &correction["target_id"]) {
+            blockers.push(json!({"table":"evidence_corrections","key":key("evidence_corrections",correction),"reason":"retained correction references selected historical evidence"}));
+        }
+    }
     for event in &rows["object_events"] {
         let target = if event["target_type"] == "object" {
             "objects"
@@ -1024,7 +1039,7 @@ async fn execute_purge(
             return Ok(Json(json!({"data":receipt,"replayed":true})));
         }
         sqlx::query(&format!(
-            "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+            "LOCK TABLE {},evidence_corrections IN SHARE ROW EXCLUSIVE MODE",
             TABLES.join(",")
         ))
         .execute(&mut *tx)
@@ -1225,6 +1240,36 @@ mod performance_tests {
         }));
         let blocked = preview_rows(rows, &request, fks).unwrap();
         assert_eq!(blocked["manifest"]["blockers"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn historical_correction_blocks_purge_of_its_original_evidence() {
+        let artifact =
+            json!({"id":Uuid::new_v4(),"object_id":Uuid::new_v4(),"kind":"captured_text"});
+        let mut rows: Snapshot = TABLES
+            .iter()
+            .map(|table| ((*table).to_owned(), Vec::new()))
+            .collect();
+        rows.get_mut("artifacts").unwrap().push(artifact.clone());
+        rows.insert("evidence_corrections".into(),vec![json!({"id":Uuid::new_v4(),"object_id":artifact["object_id"],"target_type":"artifact","target_id":artifact["id"]})]);
+        let request = PurgeRequest {
+            idempotency_key: "retain-corrected-evidence".into(),
+            selections: vec![Selection {
+                table: "artifacts".into(),
+                key: key("artifacts", &artifact),
+                row_sha256: digest(&artifact),
+                reason: "Synthetic candidate".into(),
+            }],
+            reconciliations: vec![],
+            commit: false,
+            manifest_sha256: None,
+            recovery_export_sha256: None,
+        };
+        let preview = preview_rows(rows, &request, vec![]).unwrap();
+        assert_eq!(
+            preview["manifest"]["blockers"][0]["table"],
+            "evidence_corrections"
+        );
     }
 
     #[test]

@@ -109,11 +109,6 @@ pub async fn routine_configure(
     }
     let next = routine_next(pool, &input.schedule, OffsetDateTime::now_utc()).await?;
     let task = get_task(pool, id).await?;
-    if actor.is_agent && task.protected {
-        return Err(DbError::Invalid(
-            "Protected task cannot be reconfigured by an agent".into(),
-        ));
-    }
     if task.lifecycle != "active"
         || (input.enabled
             && (!task.agent_suitable

@@ -25,6 +25,7 @@ pub async fn list_chat_messages(
     Ok(sqlx::query_as(
         r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
                   o.title AS sender_title,u.user_kind AS sender_kind,m.content,
+                  (SELECT to_jsonb(c) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id AND c.object_id=m.chat_object_id ORDER BY object_revision DESC LIMIT 1) AS correction,
                   m.source_created_at,m.ingestion_sequence,m.ingested_at
            FROM chat_messages m
            JOIN users u ON u.object_id=m.sender_user_object_id
@@ -176,4 +177,18 @@ pub async fn list_object_visuals(pool: &PgPool) -> Result<Vec<ObjectVisual>, DbE
                 .unwrap_or_default(),
         })
         .collect())
+}
+
+/// Original evidence and all correction assertions, newest first.
+pub async fn list_corrections(pool: &PgPool, object_id: Uuid) -> Result<Vec<Value>, DbError> {
+    Ok(sqlx::query_scalar("SELECT to_jsonb(c) FROM evidence_corrections c WHERE object_id=$1 ORDER BY object_revision DESC")
+        .bind(object_id).fetch_all(pool).await?)
+}
+
+pub async fn list_current_corrections(
+    pool: &PgPool,
+    object_id: Uuid,
+) -> Result<Vec<Value>, DbError> {
+    Ok(sqlx::query_scalar("SELECT to_jsonb(c) FROM (SELECT DISTINCT ON(target_type,target_id) * FROM evidence_corrections WHERE object_id=$1 ORDER BY target_type,target_id,object_revision DESC) c")
+        .bind(object_id).fetch_all(pool).await?)
 }

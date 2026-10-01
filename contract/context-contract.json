@@ -7,29 +7,84 @@
     "task": {
       "interactive_write": true,
       "creation_requirements": "Assigned active User; agent/system creation requires due_at. Code work requires canonical GitHub issue. Legacy gaps must be repaired before execution.",
-      "fields": ["status", "priority", "owner_object_id", "agent_suitable", "blocked_reason", "due_at", "completed_at", "work_kind", "github_issue_url", "brief_markdown"]
+      "fields": [
+        "status",
+        "priority",
+        "owner_object_id",
+        "agent_suitable",
+        "blocked_reason",
+        "due_at",
+        "completed_at",
+        "work_kind",
+        "github_issue_url",
+        "brief_markdown"
+      ]
     },
     "entity": {
       "interactive_write": true,
-      "fields": ["entity_kind"]
+      "fields": [
+        "entity_kind"
+      ]
     },
     "source": {
       "interactive_write": true,
-      "fields": ["source_kind", "canonical_uri", "byline", "publisher", "published_at", "published_at_precision", "last_accessed_at", "original_language", "original_media_type", "original_artifact_reference"]
+      "fields": [
+        "source_kind",
+        "canonical_uri",
+        "byline",
+        "publisher",
+        "published_at",
+        "published_at_precision",
+        "last_accessed_at",
+        "original_language",
+        "original_media_type",
+        "original_artifact_reference"
+      ]
     },
     "note": {
       "interactive_write": true,
-      "fields": ["content", "content_format", "intent", "source_artifact_id", "source_locator"]
+      "fields": [
+        "content",
+        "content_format",
+        "intent",
+        "source_artifact_id",
+        "source_locator"
+      ]
     },
     "theme": {
       "interactive_write": true,
-      "fields": ["slug"]
+      "fields": [
+        "slug"
+      ]
     },
-    "chat": {"interactive_write": false, "fields": []},
-    "user": {"interactive_write": false, "fields": []},
-    "memory": {"interactive_write": false, "fields": []}
+    "chat": {
+      "interactive_write": true,
+      "fields": [
+        "channel_name"
+      ]
+    },
+    "user": {
+      "interactive_write": true,
+      "fields": [
+        "user_kind",
+        "identities"
+      ]
+    },
+    "memory": {
+      "interactive_write": true,
+      "fields": [
+        "happened_at"
+      ]
+    }
   },
-  "connection_kinds": ["involves", "about", "related_to", "depends_on", "derived_from", "themed"],
+  "connection_kinds": [
+    "involves",
+    "about",
+    "related_to",
+    "depends_on",
+    "derived_from",
+    "themed"
+  ],
   "description_policy": {
     "max_characters": 600,
     "preferred_sentences": 2,
@@ -56,33 +111,219 @@
   "tools": {
     "context_search": {
       "operation": "search",
-      "task_filters": {"required": [], "optional": ["owner_object_id", "statuses", "priority", "due_before", "ready", "cursor"]},
+      "task_filters": {
+        "required": [],
+        "optional": [
+          "owner_object_id",
+          "statuses",
+          "priority",
+          "due_before",
+          "ready",
+          "cursor"
+        ]
+      },
       "read_only": true,
-      "input": {"required": ["query"], "optional": ["object_types", "limit", "lexical_only", "task_filters"]},
-      "output": {"required": ["objects"]}
+      "input": {
+        "required": [
+          "query"
+        ],
+        "optional": [
+          "object_types",
+          "limit",
+          "lexical_only",
+          "task_filters"
+        ]
+      },
+      "output": {
+        "required": [
+          "objects"
+        ]
+      }
     },
     "context_read": {
       "operation": "read",
       "read_only": true,
-      "input": {"required": ["object_ids"], "optional": ["include", "artifact_windows", "note_windows"]},
-      "output": {"required": ["objects", "artifact_windows", "note_windows"]}
+      "input": {
+        "required": [
+          "object_ids"
+        ],
+        "optional": [
+          "include",
+          "artifact_windows",
+          "note_windows"
+        ]
+      },
+      "output": {
+        "required": [
+          "objects",
+          "artifact_windows",
+          "note_windows"
+        ]
+      }
     },
     "context_apply": {
       "operation": "atomic_apply",
       "read_only": false,
       "idempotent": true,
-      "input": {"required": ["contract_version", "idempotency_key", "operations"], "optional": ["chat_object_id", "validate_only"]},
-      "operations": {
-        "create_object": {"required": ["local_ref", "kind", "title", "description"], "optional": ["provenance", "fields"]},
-        "update_object": {"required": ["object_id", "expected_revision"], "optional": ["changes"]},
-        "archive_object": {"required": ["object_id", "expected_revision"]},
-        "create_connection": {"required": ["source", "kind", "target", "description"], "optional": ["provenance"]},
-        "update_connection": {"required": ["connection_id", "expected_revision"], "optional": ["kind", "description", "provenance"]},
-        "archive_connection": {"required": ["connection_id", "expected_revision"]},
-        "append_artifact": {"required": ["object", "expected_revision", "kind"], "optional": ["title", "content", "uri", "media_type", "language", "capture_outcome", "capture_reason", "metadata", "supersedes_artifact_id"]}
+      "input": {
+        "required": [
+          "contract_version",
+          "idempotency_key",
+          "operations"
+        ],
+        "optional": [
+          "chat_object_id",
+          "validate_only"
+        ]
       },
-      "object_reference": {"exactly_one_of": ["object_id", "local_ref"]},
-      "output": {"required": ["replayed", "validated_only", "request_hash", "contract_version", "tool_version", "run_id", "event_ids", "results"]}
+      "operations": {
+        "create_object": {
+          "required": [
+            "local_ref",
+            "kind",
+            "title",
+            "description"
+          ],
+          "optional": [
+            "provenance",
+            "fields"
+          ]
+        },
+        "update_object": {
+          "required": [
+            "object_id",
+            "expected_revision"
+          ],
+          "optional": [
+            "changes"
+          ]
+        },
+        "archive_object": {
+          "required": [
+            "object_id",
+            "expected_revision"
+          ]
+        },
+        "create_connection": {
+          "required": [
+            "source",
+            "kind",
+            "target",
+            "description"
+          ],
+          "optional": [
+            "provenance"
+          ]
+        },
+        "update_connection": {
+          "required": [
+            "connection_id",
+            "expected_revision"
+          ],
+          "optional": [
+            "kind",
+            "description",
+            "provenance"
+          ]
+        },
+        "archive_connection": {
+          "required": [
+            "connection_id",
+            "expected_revision"
+          ]
+        },
+        "append_artifact": {
+          "required": [
+            "object",
+            "expected_revision",
+            "kind"
+          ],
+          "optional": [
+            "title",
+            "content",
+            "uri",
+            "media_type",
+            "language",
+            "capture_outcome",
+            "capture_reason",
+            "metadata",
+            "supersedes_artifact_id"
+          ]
+        },
+        "promote_source_artifact": {
+          "required": [
+            "source_id",
+            "expected_revision",
+            "artifact_id",
+            "expected_sha256"
+          ]
+        },
+        "restore_object": {
+          "required": [
+            "object_id",
+            "expected_revision"
+          ]
+        },
+        "restore_connection": {
+          "required": [
+            "connection_id",
+            "expected_revision"
+          ]
+        },
+        "rebuild_derived": {
+          "required": [
+            "object_id",
+            "expected_revision"
+          ]
+        },
+        "correct_evidence": {
+          "required": [
+            "object_id",
+            "expected_revision",
+            "target_type",
+            "target_id",
+            "reason",
+            "representation"
+          ]
+        },
+        "reassign_identity": {
+          "required": [
+            "object_id",
+            "expected_revision",
+            "target_object_id",
+            "expected_target_revision",
+            "identity_id",
+            "reason"
+          ]
+        },
+        "reassign_chat": {
+          "required": [
+            "object_id",
+            "expected_revision",
+            "target_object_id",
+            "expected_target_revision",
+            "reason"
+          ]
+        }
+      },
+      "object_reference": {
+        "exactly_one_of": [
+          "object_id",
+          "local_ref"
+        ]
+      },
+      "output": {
+        "required": [
+          "replayed",
+          "validated_only",
+          "request_hash",
+          "contract_version",
+          "tool_version",
+          "run_id",
+          "event_ids",
+          "results"
+        ]
+      }
     }
   },
   "limits": {
@@ -98,19 +339,19 @@
   },
   "rules": {
     "new_objects_require_connection": true,
-    "standalone_note_intents": ["idea", "fact", "insight", "question"],
+    "standalone_note_intents": [
+      "idea",
+      "fact",
+      "insight",
+      "question"
+    ],
     "verified_chat_adds_provenance_connection": true,
     "object_kind_is_immutable": true,
     "updates_require_expected_revision": true,
     "unknown_fields_fail": true,
-    "protected_records_block_ordinary_updates_except_verified_note_archives": true,
-    "protected_sources_allow_research_notes_append": true,
-    "protected_notes_allow_archive_with_exact_complete_research_notes_manifest": true,
-    "protected_note_connections_must_archive_in_same_batch_before_note": true,
-    "protected_sources_allow_note_derivation_and_task_about_connections": true,
-    "protected_sources_and_entities_allow_only_creation_of_involves_about_or_related_to_research_links": true,
-    "source_canonical_artifact_promotion_is_ingestion_only": true,
     "exact_connection_repeat_is_replay": true,
-    "different_connection_assertion_merges_provenance": true
+    "different_connection_assertion_merges_provenance": true,
+    "protected_is_background_curation_preference": true,
+    "evidence_corrections_preserve_original": true
   }
 }

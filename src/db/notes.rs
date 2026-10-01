@@ -528,8 +528,13 @@ pub async fn update_note(
         .content_format
         .unwrap_or_else(|| current.content_format.clone());
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM objects WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "object", id).await?;
     let updated_revision: Option<i64> = sqlx::query_scalar(
-        r#"UPDATE objects SET title=$3,description=$4,protected=$5,revision=revision+1,
+        r#"UPDATE objects SET title=$3,description=$4,protected=$5,explicitly_corrected=true,revision=revision+1,
            updated_by_type=$6,updated_by_id=$7,updated_at=now()
            WHERE id=$1 AND kind='note' AND revision=$2 AND archived_at IS NULL
            RETURNING revision"#,
@@ -560,7 +565,7 @@ pub async fn update_note(
         idempotency_key,
         Some(expected_revision),
         updated_revision,
-        json!({
+        json!({"before_state":before,
             "kind":"note",
             "title":title,
             "description_changed":description != current.description,

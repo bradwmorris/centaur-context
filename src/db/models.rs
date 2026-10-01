@@ -130,6 +130,7 @@ pub struct ChatMessage {
     pub sender_title: String,
     pub sender_kind: String,
     pub content: String,
+    pub correction: Option<Value>,
     #[serde(with = "time::serde::rfc3339")]
     pub source_created_at: OffsetDateTime,
     pub ingestion_sequence: i64,
@@ -216,6 +217,7 @@ pub struct SourceSearchResult {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ArtifactWindow {
+    pub correction: Option<Value>,
     #[serde(flatten)]
     pub content: Artifact,
     pub text: String,

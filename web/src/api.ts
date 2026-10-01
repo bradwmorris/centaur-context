@@ -56,6 +56,11 @@ function write(method: "POST" | "PATCH" | "PUT", body: unknown): RequestInit {
 }
 
 export const api = {
+  readCorrections(id: string, messages: boolean) { return request("/api/v2/read", { method: "POST", body: JSON.stringify({object_ids: [id], include: ["events", "artifacts", ...(messages ? ["messages"] : [])]}) }); },
+  applyCorrections(operations: Record<string, unknown>[]) {
+    const key = crypto.randomUUID();
+    return request("/api/v2/apply", { method: "POST", headers: {"Idempotency-Key": key}, body: JSON.stringify({contract_version: "1.1.0", idempotency_key: key, operations}) });
+  },
   routine(id: string) { return request<import("./TaskRoutine").RoutineDetail>(`/api/v2/tasks/${id}/routine`); },
   configureRoutine(id: string, body: unknown) { return request(`/api/v2/tasks/${id}/routine`, write("PUT", body)); },
   acceptRoutineRun(id: string) { return request(`/api/v2/routine-runs/${id}`, write("PATCH", { status: "completed" })); },

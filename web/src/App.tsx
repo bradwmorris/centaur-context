@@ -9,6 +9,7 @@ import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph"
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "./TaskIdentity";
+import { CorrectionHistory } from "./CorrectionHistory";
 import { InlineEditor } from "./InlineEditor";
 import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
 import { SchemaWorkspace } from "./SchemaWorkspace";
@@ -437,6 +438,7 @@ function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: stri
     <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={600} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
     <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
     <FocusedObjectGraph objectId={theme.object_id} objectTitle={theme.title} refreshKey={refreshKey} />
+    <CorrectionHistory key={id} id={id} kind="theme" onChanged={onChanged} />
     {themeObject && <Provenance value={themeObject.provenance} />}
   </div></div>;
 }
@@ -647,7 +649,8 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
     </Section>
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
-    <Provenance value={source.provenance} />
+    <CorrectionHistory key={id} id={id} kind="source" onChanged={onChanged} />
+      <Provenance value={source.provenance} />
   </div></div>;
 }
 
@@ -706,7 +709,8 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
     <Artifacts section="notes" objectId={id} artifacts={artifacts} onCreated={load} />
     <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
-    <Provenance value={note.provenance} />
+    <CorrectionHistory key={id} id={id} kind="note" onChanged={onChanged} />
+      <Provenance value={note.provenance} />
   </div></div>;
 }
 
@@ -763,6 +767,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       {(item.kind === "source" || item.kind === "note") && <Artifacts section="objects" objectId={id} artifacts={artifacts} onCreated={load} />}
       <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} includeThread />
+      <CorrectionHistory key={id} id={id} kind={item.kind} onChanged={onChanged} />
       <Provenance value={item.provenance} />
     </div>
   </div>;
@@ -807,7 +812,7 @@ function ChatTranscript({ id, visuals, refreshKey }: { id: string; visuals: Map<
 }
 
 function MessageRow({ item, visual }: { item: ChatMessage; visual: ObjectVisual | undefined }) {
-  return <article className="chat-message"><ObjectContext visual={visual} /><strong>{item.sender_title}</strong><span className="message-kind">{item.sender_kind}</span><p title={item.content}>{item.content}</p><time>{relative(item.source_created_at)}</time></article>;
+  return <article className="chat-message"><ObjectContext visual={visual} /><strong>{item.sender_title}</strong><span className="message-kind">{item.sender_kind}</span><p title={item.content}>{item.content}</p>{item.correction && <aside aria-label="Message correction"><strong>Correction by {item.correction.actor_id}</strong><p>{item.correction.representation.content ?? "Correction withdrawn; original retained."}</p><small>{item.correction.reason}</small></aside>}<time>{relative(item.source_created_at)}</time></article>;
 }
 
 function ActivityTimeline({ events, visuals }: { events: ObjectEvent[]; visuals: Map<string, ObjectVisual>; includeThread?: boolean }) {
@@ -925,6 +930,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
       {error && <p className="form-error">{error}</p>}
       <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} />
+      <CorrectionHistory key={id} id={id} kind="task" onChanged={onChanged} />
       <Provenance value={task.provenance} />
     </div>
   </div>;

@@ -206,8 +206,8 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
         "contract_version":"1.1.0",
         "idempotency_key":system_key,
         "operations":[
-            {"operation":"create_object","local_ref":"memory","kind":"memory","title":"Forbidden memory","description":"Agents must not directly create this system-managed record.","fields":{}},
-            {"operation":"create_connection","source":{"local_ref":"memory"},"kind":"related_to","target":{"object_id":anchor},"description":"This must never commit."}
+            {"operation":"create_object","local_ref":"memory","kind":"memory","title":"Explicit memory","description":"An agent explicitly creates a durable Memory.","fields":{}},
+            {"operation":"create_connection","source":{"local_ref":"memory"},"kind":"related_to","target":{"object_id":anchor},"description":"This Memory records an observation about the anchor."}
         ]
     });
     let system_owned = app
@@ -215,7 +215,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
         .oneshot(request("POST", "/api/v2/apply", &token, system_owned))
         .await
         .unwrap();
-    assert_eq!(system_owned.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(system_owned.status(), StatusCode::OK);
 
     let mut conflict = apply.clone();
     conflict["operations"][0]["title"] = json!("Changed retry body");
@@ -820,11 +820,12 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    // An invalid unrelated protected edge rolls back the otherwise valid Note.
+    // Contextual links are valid; validation does not commit the Note.
     let mut bad = body.clone();
     bad["operations"][1]["kind"] = json!("related_to");
+    bad["validate_only"] = json!(true);
     let r = app.clone().oneshot(req(bad, &short)).await.unwrap();
-    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(r.status(), StatusCode::OK);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM notes WHERE source_artifact_id=$1")
         .bind(artifact)
         .fetch_one(&pool)
@@ -906,10 +907,10 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
     // Caller-supplied links to the protected Chat do not inherit the automatic exception.
     let explicit = json!({"contract_version":"1.1.0","idempotency_key":format!("explicit-chat-{}",Uuid::new_v4()),"operations":[{"operation":"create_connection","source":{"object_id":chat},"target":{"object_id":note},"kind":"about","description":"A caller cannot claim the server-generated provenance exception."}]});
     let r = app.clone().oneshot(req(explicit, &short)).await.unwrap();
-    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(r.status(), StatusCode::OK);
     let update = json!({"contract_version":"1.1.0","idempotency_key":format!("protected-edit-{}",Uuid::new_v4()),"operations":[{"operation":"update_object","object_id":source,"expected_revision":1,"changes":{"description":"Unauthorized edit."}}]});
     let r = app.clone().oneshot(req(update, &short)).await.unwrap();
-    assert_eq!(r.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(r.status(), StatusCode::OK);
     // A second workspace using the same short identity makes that identity ambiguous.
     let mut seed = pool.begin().await.unwrap();
     let other = Uuid::new_v4();
@@ -1072,106 +1073,9 @@ async fn protected_source_research_notes_are_versioned_without_changing_source_e
     )
     .await;
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    let missing_key = send(
-        format!("protected-notes-missing-key-{}", Uuid::new_v4()),
-        json!({
-            "operation":"append_artifact","object":{"object_id":source},
-            "expected_revision":3,"kind":"research_notes","content":"No key",
-            "capture_outcome":"complete"
-        }),
-    )
-    .await;
-    assert_eq!(missing_key.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-    for (name, object_id, revision, metadata, predecessor) in [
-        (
-            "canonical-evidence",
-            source,
-            3,
-            json!({"document_key":document_key,"predecessor_artifact_id":canonical_artifact}),
-            Some(canonical_artifact),
-        ),
-        (
-            "wrong-kind",
-            source,
-            3,
-            json!({"document_key":document_key,"predecessor_artifact_id":wrong_kind_artifact}),
-            Some(wrong_kind_artifact),
-        ),
-        (
-            "cross-document",
-            source,
-            3,
-            json!({"document_key":"another-document","predecessor_artifact_id":first_id}),
-            Some(first_id),
-        ),
-        (
-            "cross-source",
-            other_source,
-            1,
-            json!({"document_key":document_key,"predecessor_artifact_id":first_id}),
-            Some(first_id),
-        ),
-    ] {
-        let response = send(
-            format!("protected-notes-{name}-{}", Uuid::new_v4()),
-            json!({
-                "operation":"append_artifact","object":{"object_id":object_id},
-                "expected_revision":revision,"kind":"research_notes","content":"Invalid successor",
-                "capture_outcome":"complete","metadata":metadata,
-                "supersedes_artifact_id":predecessor
-            }),
-        )
-        .await;
-        assert_eq!(
-            response.status(),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{name}"
-        );
-    }
-
-    for (name, object_id, revision) in [
-        ("protected-note", protected_note, 1),
-        ("protected-source", source, 3),
-    ] {
-        let update = send(
-            format!("protected-notes-update-{name}-{}", Uuid::new_v4()),
-            json!({"operation":"update_object","object_id":object_id,"expected_revision":revision,"changes":{"title":"Must remain protected"}}),
-        ).await;
-        assert_eq!(update.status(), StatusCode::UNPROCESSABLE_ENTITY, "{name}");
-        let archive = send(
-            format!("protected-notes-archive-{name}-{}", Uuid::new_v4()),
-            json!({"operation":"archive_object","object_id":object_id,"expected_revision":revision}),
-        ).await;
-        assert_eq!(archive.status(), StatusCode::UNPROCESSABLE_ENTITY, "{name}");
-    }
-    let non_source_artifact = send(
-        format!("protected-notes-non-source-{}", Uuid::new_v4()),
-        json!({
-            "operation":"append_artifact","object":{"object_id":protected_note},
-            "expected_revision":1,"kind":"research_notes","content":"Wrong target",
-            "capture_outcome":"complete","metadata":{"document_key":document_key}
-        }),
-    )
-    .await;
-    assert_eq!(
-        non_source_artifact.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let other_artifact_kind = send(
-        format!("protected-notes-other-kind-{}", Uuid::new_v4()),
-        json!({
-            "operation":"append_artifact","object":{"object_id":source},
-            "expected_revision":3,"kind":"supporting_text","content":"Wrong artifact kind",
-            "capture_outcome":"complete","metadata":{"document_key":document_key}
-        }),
-    )
-    .await;
-    assert_eq!(
-        other_artifact_kind.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-
+    // Issue 132 replaces protection-only denials with uniform correction paths.
+    // Cross-owner supersession, stale revisions and exact citation integrity are
+    // exercised in agent_corrections.rs.
     let source_state: (bool, i64, String, Option<Uuid>) = sqlx::query_as(
         "SELECT o.protected,o.revision,s.canonical_uri,s.current_artifact_id FROM objects o JOIN sources s ON s.object_id=o.id WHERE o.id=$1",
     ).bind(source).fetch_one(&pool).await.unwrap();
@@ -1317,7 +1221,7 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
     .unwrap();
     assert_eq!(event_count, 3);
 
-    // A mismatched manifest cannot authorize either the protected link or the Note.
+    // A preservation manifest is optional: immutable history already retains the Note.
     let bad_note = Uuid::new_v4();
     let bad_source = Uuid::new_v4();
     let bad_connection = Uuid::new_v4();
@@ -1350,12 +1254,12 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
             {"operation":"archive_object","object_id":bad_note,"expected_revision":1}
         ]
     }))).await.unwrap();
-    assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(denied.status(), StatusCode::OK);
     let still_active: (Option<time::OffsetDateTime>, Option<time::OffsetDateTime>) = sqlx::query_as(
         "SELECT o.archived_at,c.archived_at FROM objects o CROSS JOIN connections c WHERE o.id=$1 AND c.id=$2",
     ).bind(bad_note).bind(bad_connection).fetch_one(&pool).await.unwrap();
-    assert!(still_active.0.is_none());
-    assert!(still_active.1.is_none());
+    assert!(still_active.0.is_some());
+    assert!(still_active.1.is_some());
 
     async fn seed_invalid_case(pool: &PgPool, case: &str) -> (Uuid, Uuid, bool) {
         use sha2::{Digest, Sha256};
@@ -1464,14 +1368,14 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
             ))
             .await
             .unwrap();
-        assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY, "{case}");
+        assert_eq!(denied.status(), StatusCode::OK, "{case}");
         let archived: Option<time::OffsetDateTime> =
             sqlx::query_scalar("SELECT archived_at FROM objects WHERE id=$1")
                 .bind(case_note)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert!(archived.is_none(), "{case}");
+        assert_eq!(archived.is_some(), prior_archive, "{case}");
     }
 }
 
@@ -1578,7 +1482,7 @@ async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations(
 }
 
 #[tokio::test]
-async fn protected_research_connections_are_creation_only_and_endpoint_scoped() {
+async fn protected_research_connections_allow_explicit_edits_with_active_endpoints() {
     let Some(pool) = test_pool().await else {
         eprintln!("skipping protected research Connection contract: TEST_DATABASE_URL is not set");
         return;
@@ -1773,10 +1677,10 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
             "A different synthetic attribution.",
         ),
         format!("protected-link-change-{}", Uuid::new_v4()),
-        false,
+        true,
     )
     .await;
-    assert_eq!(changed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(changed.status(), StatusCode::OK);
     let still_same: (i64, String) =
         sqlx::query_as("SELECT revision,description FROM connections WHERE id=$1")
             .bind(Uuid::parse_str(first_edge_id).unwrap())
@@ -1815,7 +1719,7 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
             "A preexisting synthetic protected attribution.",
         ),
         format!("protected-link-protected-replay-{}", Uuid::new_v4()),
-        false,
+        true,
     )
     .await;
     assert_eq!(protected_edge_same.status(), StatusCode::OK);
@@ -1827,33 +1731,24 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
             "A conflicting synthetic attribution.",
         ),
         format!("protected-link-protected-change-{}", Uuid::new_v4()),
-        false,
+        true,
     )
     .await;
-    assert_eq!(
-        protected_edge_change.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(protected_edge_change.status(), StatusCode::OK);
     let protected_edge_update = send(
         json!({"operation":"update_connection","connection_id":protected_edge,"expected_revision":1,"description":"Attempted protected edge edit."}),
         format!("protected-link-protected-update-{}", Uuid::new_v4()),
-        false,
+        true,
     )
     .await;
-    assert_eq!(
-        protected_edge_update.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(protected_edge_update.status(), StatusCode::OK);
     let protected_edge_archive = send(
         json!({"operation":"archive_connection","connection_id":protected_edge,"expected_revision":1}),
         format!("protected-link-protected-archive-{}", Uuid::new_v4()),
-        false,
+        true,
     )
     .await;
-    assert_eq!(
-        protected_edge_archive.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(protected_edge_archive.status(), StatusCode::OK);
 
     // Validation accepts the new shape while rolling back both the edge and its events.
     let dry_source = source_ids[2];
@@ -1889,11 +1784,11 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
     .unwrap();
     assert_eq!(dry_events, dry_events_before);
 
-    // The creation exception does not grant endpoint edits, edge edits, or other shapes.
-    let protected_update = send(json!({"operation":"update_object","object_id":source_ids[0],"expected_revision":1,"changes":{"description":"Attempted protected edit."}}), format!("protected-link-object-update-{}", Uuid::new_v4()), false).await;
-    assert_eq!(protected_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let edge_update = send(json!({"operation":"update_connection","connection_id":first_edge_id,"expected_revision":1,"description":"Attempted edge edit."}), format!("protected-link-edge-update-{}", Uuid::new_v4()), false).await;
-    assert_eq!(edge_update.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Explicit edits are valid for protected records; inactive endpoints remain invalid.
+    let protected_update = send(json!({"operation":"update_object","object_id":source_ids[0],"expected_revision":1,"changes":{"description":"Attempted protected edit."}}), format!("protected-link-object-update-{}", Uuid::new_v4()), true).await;
+    assert_eq!(protected_update.status(), StatusCode::OK);
+    let edge_update = send(json!({"operation":"update_connection","connection_id":first_edge_id,"expected_revision":1,"description":"Attempted edge edit."}), format!("protected-link-edge-update-{}", Uuid::new_v4()), true).await;
+    assert_eq!(edge_update.status(), StatusCode::OK);
     for (source, kind, target) in [
         (source_ids[0], "derived_from", entity_ids[3]),
         (source_ids[0], "about", chat),
@@ -1903,12 +1798,16 @@ async fn protected_research_connections_are_creation_only_and_endpoint_scoped() 
         let rejected = send(
             connection(source, kind, target, "Unsupported protected-link boundary."),
             format!("protected-link-reject-{}", Uuid::new_v4()),
-            false,
+            true,
         )
         .await;
         assert_eq!(
             rejected.status(),
-            StatusCode::UNPROCESSABLE_ENTITY,
+            if target == archived_entity {
+                StatusCode::UNPROCESSABLE_ENTITY
+            } else {
+                StatusCode::OK
+            },
             "{kind}"
         );
     }

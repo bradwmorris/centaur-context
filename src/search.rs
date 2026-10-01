@@ -27,6 +27,7 @@ pub struct RetrievedObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<db::SearchEvidence>,
     pub connections: Vec<ContextConnection>,
+    pub corrections: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,13 +113,17 @@ pub async fn search_filtered(
     )
     .await?;
     fused.truncate(limit as usize);
+    let mut objects = Vec::new();
+    for item in fused {
+        let corrections = db::list_current_corrections(pool, item.object.id).await?;
+        let mut object = retrieved(item, None, Vec::new(), false);
+        object.corrections = corrections;
+        objects.push(object);
+    }
     Ok(SearchPacket {
         query: query.to_owned(),
         retrieval,
-        objects: fused
-            .into_iter()
-            .map(|item| retrieved(item, None, Vec::new(), false))
-            .collect(),
+        objects,
         budget: None,
     })
 }
@@ -217,6 +222,7 @@ pub async fn context(
                 },
                 evidence: None,
                 connections: general_connections.remove(&id).unwrap_or_default(),
+                corrections: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -248,6 +254,7 @@ pub async fn read_object(pool: &PgPool, id: Uuid) -> Result<RetrievedObject, DbE
         },
         evidence: None,
         connections: connections.remove(&id).unwrap_or_default(),
+        corrections: db::list_current_corrections(pool, id).await?,
     })
 }
 
@@ -372,6 +379,7 @@ fn retrieved(
         relevance,
         evidence: item.evidence,
         connections,
+        corrections: Vec::new(),
     }
 }
 
@@ -591,6 +599,7 @@ mod tests {
     fn candidate(description: &str, connections: usize) -> RetrievedObject {
         RetrievedObject {
             id: Uuid::new_v4(),
+            corrections: Vec::new(),
             kind: "memory".to_owned(),
             title: "A complete event".to_owned(),
             description: description.to_owned(),

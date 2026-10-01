@@ -23,17 +23,24 @@ writes. See [API authentication](api.md#authentication) and
 
 ## Writable records
 
-Normal interactive agents may create, update, and archive Tasks, Entities,
-Sources, Notes, and Themes, and may manage explained Connections. Chats, Users,
-Memories, Object Events, and Runs are system-managed. Protected records reject
-ordinary updates. A protected Note may be archived after a complete
-`research_notes` Artifact on its active derived-from Source preserves the exact
-current Note content and has a nonempty document key plus a matching
-`source_note_manifest` object ID and revision. Archive every incident protected
-Connection earlier in the same atomic `context_apply` batch; its immutable
-archive Event is retained. Other protected archival remains denied. Supporting
-Artifacts may be appended, but only the specialist Source-ingestion path may
-promote an Artifact as a Source's canonical captured content.
+Authenticated agents can create, update, archive and restore every Object kind,
+and manage all explained Connections regardless of `protected`. The flag is a
+background-curation preference. Explicit updates retain locked before/after
+snapshots with authenticated attribution. User metadata cannot grant credentials.
+Imported identity keys remain evidence; annotate mistakes and use replacement
+Objects/relinked current relationships instead of forging original authorship.
+
+Artifacts remain immutable. Append a superseding version and use
+`promote_source_artifact` with the Source revision and exact SHA-256 to select
+current evidence. Its result lists Notes retaining older citations; their exact
+Artifact IDs remain valid. To move a quotation, explicitly update the Note and
+validate its content against the new Artifact. `correct_evidence` appends a
+reason and representation for an Object, Artifact, message, Event or Run. All
+assertions are returned by `context_read`; message reads show original content
+and the latest correction separately. A later assertion supersedes the earlier
+correction; an empty representation withdraws it. `rebuild_derived` requeues
+existing embedding work; normal workers discover new targets. Lexical indexes
+are transactionally maintained. See [RD 132](rd/132-agent-corrections.md).
 
 New Objects require a meaningful Connection except Idea and Fact Notes,
 which may stand alone without a Source, Connection, or originating Chat. Later

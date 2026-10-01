@@ -65,6 +65,41 @@ pub enum ApplyOperation {
         object_id: Uuid,
         expected_revision: i64,
     },
+    ReassignChat {
+        object_id: Uuid,
+        expected_revision: i64,
+        target_object_id: Uuid,
+        expected_target_revision: i64,
+        reason: String,
+    },
+    ReassignIdentity {
+        object_id: Uuid,
+        expected_revision: i64,
+        target_object_id: Uuid,
+        expected_target_revision: i64,
+        identity_id: Uuid,
+        reason: String,
+    },
+    RestoreObject {
+        object_id: Uuid,
+        expected_revision: i64,
+    },
+    RestoreConnection {
+        connection_id: Uuid,
+        expected_revision: i64,
+    },
+    CorrectEvidence {
+        object_id: Uuid,
+        expected_revision: i64,
+        target_type: String,
+        target_id: Uuid,
+        reason: String,
+        representation: Value,
+    },
+    RebuildDerived {
+        object_id: Uuid,
+        expected_revision: i64,
+    },
     CreateConnection {
         source: ObjectReference,
         kind: String,
@@ -241,12 +276,34 @@ async fn apply_with_authority(
         .await?;
     }
 
+    let mut participant_ids = BTreeSet::new();
+    for operation in &request.operations {
+        if let ApplyOperation::ReassignIdentity {
+            object_id,
+            target_object_id,
+            ..
+        }
+        | ApplyOperation::ReassignChat {
+            object_id,
+            target_object_id,
+            ..
+        } = operation
+        {
+            participant_ids.insert(*object_id);
+            participant_ids.insert(*target_object_id);
+        }
+    }
+    for id in participant_ids {
+        sqlx::query("SELECT id FROM objects WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let mut event_ids = Vec::new();
     let mut results = Vec::new();
     let mut sequence = 1_i64;
-    let mut archived_connection_ids = BTreeSet::new();
     for operation in &request.operations {
-        let before = if authority == WriteAuthority::ReviewedMaintenance {
+        let before = {
             let target = match operation {
                 ApplyOperation::UpdateObject { object_id, .. }
                 | ApplyOperation::UpdateDescription { object_id, .. }
@@ -255,12 +312,18 @@ async fn apply_with_authority(
                     ..
                 }
                 | ApplyOperation::ArchiveObject { object_id, .. }
+                | ApplyOperation::RestoreObject { object_id, .. }
+                | ApplyOperation::ReassignIdentity { object_id, .. }
+                | ApplyOperation::ReassignChat { object_id, .. }
+                | ApplyOperation::CorrectEvidence { object_id, .. }
+                | ApplyOperation::RebuildDerived { object_id, .. }
                 | ApplyOperation::AppendArtifact {
                     object: ObjectReference::Id { object_id },
                     ..
                 } => Some(("object", "objects", *object_id)),
                 ApplyOperation::UpdateConnection { connection_id, .. }
-                | ApplyOperation::ArchiveConnection { connection_id, .. } => {
+                | ApplyOperation::ArchiveConnection { connection_id, .. }
+                | ApplyOperation::RestoreConnection { connection_id, .. } => {
                     Some(("connection", "connections", *connection_id))
                 }
                 _ => None,
@@ -277,8 +340,6 @@ async fn apply_with_authority(
             } else {
                 None
             }
-        } else {
-            None
         };
         let mut result = execute_operation(
             &mut tx,
@@ -289,7 +350,6 @@ async fn apply_with_authority(
             (!request.validate_only).then_some(run_id),
             &mut sequence,
             &mut event_ids,
-            &mut archived_connection_ids,
             authority,
         )
         .await?;
@@ -313,7 +373,6 @@ async fn apply_with_authority(
                 &mut sequence,
                 &mut event_ids,
                 authority,
-                true,
             )
             .await?;
             results.push(json!({"operation":"automatic_chat_connection","data":result}));
@@ -396,13 +455,10 @@ fn validate_authority_operations(
     authority: WriteAuthority,
 ) -> Result<(), DbError> {
     if authority == WriteAuthority::Ordinary
-        && request.operations.iter().any(|operation| {
-            matches!(
-                operation,
-                ApplyOperation::UpdateDescription { .. }
-                    | ApplyOperation::PromoteSourceArtifact { .. }
-            )
-        })
+        && request
+            .operations
+            .iter()
+            .any(|operation| matches!(operation, ApplyOperation::UpdateDescription { .. }))
     {
         return Err(DbError::Invalid(
             "operation is available only through reviewed maintenance".into(),
@@ -485,7 +541,6 @@ async fn execute_operation(
     run_id: Option<Uuid>,
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
-    archived_connection_ids: &mut BTreeSet<Uuid>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
     match operation {
@@ -529,7 +584,7 @@ async fn execute_operation(
                 authority,
             )
             .await?;
-            record_event(
+            record_event_with_before(
                 tx,
                 run_id,
                 sequence,
@@ -541,6 +596,7 @@ async fn execute_operation(
                 "updated",
                 Some(*expected_revision),
                 *expected_revision + 1,
+                before,
             )
             .await?;
             Ok(json!({"operation":"update_object","data":value}))
@@ -582,7 +638,7 @@ async fn execute_operation(
             artifact_id,
             expected_sha256,
         } => {
-            let value = promote_source_artifact(
+            let mut value = promote_source_artifact(
                 tx,
                 actor,
                 *source_id,
@@ -607,22 +663,21 @@ async fn execute_operation(
                 before,
             )
             .await?;
-            Ok(json!({"operation":"promote_source_artifact","data":value}))
+            let citations = value
+                .as_object_mut()
+                .and_then(|object| object.remove("retained_citation_note_ids"))
+                .unwrap_or_else(|| json!([]));
+            Ok(
+                json!({"operation":"promote_source_artifact","data":value,"retained_citation_note_ids":citations}),
+            )
         }
         ApplyOperation::ArchiveObject {
             object_id,
             expected_revision,
         } => {
-            let value = archive_object(
-                tx,
-                actor,
-                *object_id,
-                *expected_revision,
-                authority,
-                archived_connection_ids,
-            )
-            .await?;
-            record_event(
+            let value =
+                archive_object(tx, actor, *object_id, *expected_revision, authority).await?;
+            record_event_with_before(
                 tx,
                 run_id,
                 sequence,
@@ -634,9 +689,276 @@ async fn execute_operation(
                 "archived",
                 Some(*expected_revision),
                 *expected_revision + 1,
+                before,
             )
             .await?;
             Ok(json!({"operation":"archive_object","data":value}))
+        }
+        ApplyOperation::ReassignChat {
+            object_id,
+            expected_revision,
+            target_object_id,
+            expected_target_revision,
+            reason,
+        } => {
+            required_text(reason.clone(), "reason", 2000)?;
+            let source = before.ok_or(DbError::NotFound)?;
+            let target = db::target_snapshot(tx, "object", *target_object_id).await?;
+            if object_id == target_object_id
+                || source["kind"] != "chat"
+                || target["kind"] != "chat"
+                || !target["archived_at"].is_null()
+                || source["subtype"]["provider"].is_null()
+                || !target["subtype"]["provider"].is_null()
+            {
+                return Err(DbError::Invalid("reassign_chat requires an imported Chat and a different active Chat without an imported identity".into()));
+            }
+            if source["revision"].as_i64() != Some(*expected_revision)
+                || target["revision"].as_i64() != Some(*expected_target_revision)
+            {
+                return Err(DbError::Conflict);
+            }
+            sqlx::query("UPDATE chats SET provider=NULL,workspace_id=NULL,channel_id=NULL,thread_id=NULL,surface_kind=NULL WHERE object_id=$1")
+                .bind(object_id).execute(&mut **tx).await?;
+            sqlx::query("UPDATE chats SET provider=$2,workspace_id=$3,channel_id=$4,thread_id=$5,surface_kind=$6 WHERE object_id=$1")
+                .bind(target_object_id).bind(source["subtype"]["provider"].as_str()).bind(source["subtype"]["workspace_id"].as_str()).bind(source["subtype"]["channel_id"].as_str()).bind(source["subtype"]["thread_id"].as_str()).bind(source["subtype"]["surface_kind"].as_str()).execute(&mut **tx).await?;
+            for (id, rev, old) in [
+                (*object_id, *expected_revision, source),
+                (*target_object_id, *expected_target_revision, &target),
+            ] {
+                correct_evidence(tx,actor,id,rev,"object",id,reason,&json!({"from_chat":object_id,"to_chat":target_object_id,"original_messages_unchanged":true,"original_provider_identity":source["subtype"]})).await?;
+                sqlx::query("UPDATE objects SET revision=revision+1,explicitly_corrected=true,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
+                record_event_with_before(
+                    tx,
+                    run_id,
+                    sequence,
+                    event_ids,
+                    actor,
+                    "object",
+                    id,
+                    id,
+                    "updated",
+                    Some(rev),
+                    rev + 1,
+                    Some(old),
+                )
+                .await?;
+            }
+            Ok(
+                json!({"operation":"reassign_chat","data":db::target_snapshot(tx,"object",*object_id).await?,"target":db::target_snapshot(tx,"object",*target_object_id).await?}),
+            )
+        }
+        ApplyOperation::ReassignIdentity {
+            object_id,
+            expected_revision,
+            target_object_id,
+            expected_target_revision,
+            identity_id,
+            reason,
+        } => {
+            required_text(reason.clone(), "reason", 2000)?;
+            if object_id == target_object_id {
+                return Err(DbError::Invalid(
+                    "identity replacement requires another User".into(),
+                ));
+            }
+            let source = before.ok_or(DbError::NotFound)?;
+            let target = db::target_snapshot(tx, "object", *target_object_id).await?;
+            if source["kind"] != "user"
+                || target["kind"] != "user"
+                || !target["archived_at"].is_null()
+            {
+                return Err(DbError::Invalid(
+                    "identity replacement requires an active target User".into(),
+                ));
+            }
+            if source["revision"].as_i64() != Some(*expected_revision)
+                || target["revision"].as_i64() != Some(*expected_target_revision)
+            {
+                return Err(DbError::Conflict);
+            }
+            let mut identities = source["subtype"]["identities"]
+                .as_array()
+                .cloned()
+                .ok_or(DbError::NotFound)?;
+            let pos = identities
+                .iter()
+                .position(|i| i["id"].as_str() == Some(&identity_id.to_string()))
+                .ok_or(DbError::NotFound)?;
+            let moved = identities.remove(pos);
+            let mut target_identities = target["subtype"]["identities"]
+                .as_array()
+                .cloned()
+                .ok_or(DbError::NotFound)?;
+            target_identities.push(moved);
+            sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+                .bind(object_id)
+                .bind(json!(identities))
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+                .bind(target_object_id)
+                .bind(json!(target_identities))
+                .execute(&mut **tx)
+                .await?;
+            for (id, rev, old) in [
+                (*object_id, *expected_revision, source),
+                (*target_object_id, *expected_target_revision, &target),
+            ] {
+                correct_evidence(tx,actor,id,rev,"object",id,reason,&json!({"reassigned_identity_id":identity_id,"from_user":object_id,"to_user":target_object_id,"original_messages_unchanged":true})).await?;
+                sqlx::query("UPDATE objects SET revision=revision+1,explicitly_corrected=true,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
+                record_event_with_before(
+                    tx,
+                    run_id,
+                    sequence,
+                    event_ids,
+                    actor,
+                    "object",
+                    id,
+                    id,
+                    "updated",
+                    Some(rev),
+                    rev + 1,
+                    Some(old),
+                )
+                .await?;
+            }
+            Ok(
+                json!({"operation":"reassign_identity","data":db::target_snapshot(tx,"object",*object_id).await?,"target":db::target_snapshot(tx,"object",*target_object_id).await?}),
+            )
+        }
+        ApplyOperation::RestoreObject {
+            object_id,
+            expected_revision,
+        }
+        | ApplyOperation::RebuildDerived {
+            object_id,
+            expected_revision,
+        }
+        | ApplyOperation::CorrectEvidence {
+            object_id,
+            expected_revision,
+            ..
+        } => {
+            let current = before.ok_or(DbError::NotFound)?;
+            if current["revision"].as_i64() != Some(*expected_revision) {
+                return Err(DbError::Conflict);
+            }
+            let name = match operation {
+                ApplyOperation::RestoreObject { .. } => {
+                    if current["archived_at"].is_null() {
+                        return Err(DbError::Invalid("Object is already active".into()));
+                    }
+                    let unavailable_owner: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tasks t JOIN objects owner ON owner.id=t.owner_object_id WHERE t.object_id=$1 AND owner.archived_at IS NOT NULL)")
+                        .bind(object_id).fetch_one(&mut **tx).await?;
+                    if unavailable_owner {
+                        return Err(DbError::Invalid(
+                            "restore the assigned User before restoring this Task".into(),
+                        ));
+                    }
+                    sqlx::query("UPDATE objects SET archived_at=NULL WHERE id=$1")
+                        .bind(object_id)
+                        .execute(&mut **tx)
+                        .await?;
+                    "restore_object"
+                }
+                ApplyOperation::CorrectEvidence {
+                    target_type,
+                    target_id,
+                    reason,
+                    representation,
+                    ..
+                } => {
+                    correct_evidence(
+                        tx,
+                        actor,
+                        *object_id,
+                        *expected_revision,
+                        target_type,
+                        *target_id,
+                        reason,
+                        representation,
+                    )
+                    .await?;
+                    "correct_evidence"
+                }
+                _ => {
+                    sqlx::query("UPDATE embeddings SET status='pending',embedding=NULL,attempts=0,available_at=now(),started_at=NULL,completed_at=NULL,last_error=NULL,updated_at=now() WHERE object_id=$1")
+                        .bind(object_id).execute(&mut **tx).await?;
+                    "rebuild_derived"
+                }
+            };
+            sqlx::query("UPDATE objects SET revision=revision+1,explicitly_corrected=true,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
+                .bind(object_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
+            record_event_with_before(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "object",
+                *object_id,
+                *object_id,
+                "updated",
+                Some(*expected_revision),
+                *expected_revision + 1,
+                before,
+            )
+            .await?;
+            Ok(json!({"operation":name,"data":db::target_snapshot(tx,"object",*object_id).await?}))
+        }
+        ApplyOperation::RestoreConnection {
+            connection_id,
+            expected_revision,
+        } => {
+            let current = before.ok_or(DbError::NotFound)?;
+            if current["revision"].as_i64() != Some(*expected_revision) {
+                return Err(DbError::Conflict);
+            }
+            if current["archived_at"].is_null() {
+                return Err(DbError::Invalid("Connection is already active".into()));
+            }
+            let source = Uuid::parse_str(
+                current["source_object_id"]
+                    .as_str()
+                    .ok_or(DbError::NotFound)?,
+            )
+            .map_err(|_| DbError::NotFound)?;
+            let target = Uuid::parse_str(
+                current["target_object_id"]
+                    .as_str()
+                    .ok_or(DbError::NotFound)?,
+            )
+            .map_err(|_| DbError::NotFound)?;
+            validate_endpoints(
+                tx,
+                source,
+                current["kind"].as_str().ok_or(DbError::NotFound)?,
+                target,
+            )
+            .await?;
+            sqlx::query("UPDATE connections SET archived_at=NULL,revision=revision+1,updated_by_type=$2,updated_by_id=$3,updated_at=now() WHERE id=$1")
+                .bind(connection_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
+            record_event_with_before(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "connection",
+                *connection_id,
+                source,
+                "updated",
+                Some(*expected_revision),
+                *expected_revision + 1,
+                before,
+            )
+            .await?;
+            Ok(
+                json!({"operation":"restore_connection","data":db::target_snapshot(tx,"connection",*connection_id).await?}),
+            )
         }
         ApplyOperation::CreateConnection {
             source,
@@ -659,7 +981,6 @@ async fn execute_operation(
                 sequence,
                 event_ids,
                 authority,
-                false,
             )
             .await?;
             Ok(json!({"operation":"create_connection","data":value}))
@@ -682,7 +1003,7 @@ async fn execute_operation(
                 authority,
             )
             .await?;
-            record_event(
+            record_event_with_before(
                 tx,
                 run_id,
                 sequence,
@@ -694,6 +1015,7 @@ async fn execute_operation(
                 "updated",
                 Some(*expected_revision),
                 value.revision,
+                before,
             )
             .await?;
             Ok(json!({"operation":"update_connection","data":value}))
@@ -702,17 +1024,10 @@ async fn execute_operation(
             connection_id,
             expected_revision,
         } => {
-            let value = archive_connection(
-                tx,
-                actor,
-                *connection_id,
-                *expected_revision,
-                authority,
-                archived_connection_ids,
-            )
-            .await?;
-            archived_connection_ids.insert(*connection_id);
-            record_event(
+            let value =
+                archive_connection(tx, actor, *connection_id, *expected_revision, authority)
+                    .await?;
+            record_event_with_before(
                 tx,
                 run_id,
                 sequence,
@@ -724,6 +1039,7 @@ async fn execute_operation(
                 "archived",
                 Some(*expected_revision),
                 value.revision,
+                before,
             )
             .await?;
             Ok(json!({"operation":"archive_connection","data":value}))
@@ -761,7 +1077,7 @@ async fn execute_operation(
                 authority,
             )
             .await?;
-            record_event(
+            record_event_with_before(
                 tx,
                 run_id,
                 sequence,
@@ -773,6 +1089,7 @@ async fn execute_operation(
                 "artifact_attached",
                 Some(*expected_revision),
                 *expected_revision + 1,
+                before,
             )
             .await?;
             Ok(json!({"operation":"append_artifact","data":value}))
@@ -1035,6 +1352,38 @@ async fn insert_subtype(
                 .execute(&mut **tx)
                 .await?;
         }
+        "chat" => {
+            sqlx::query("INSERT INTO chats(object_id,channel_name) VALUES($1,$2)")
+                .bind(id)
+                .bind(optional_string(fields, "channel_name")?)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "user" => {
+            if fields
+                .get("identities")
+                .is_some_and(|value| value != &json!([]))
+            {
+                return Err(DbError::Invalid("create a User without imported identities, then use reassign_identity to repair an existing binding".into()));
+            }
+
+            let user_kind = string_or(fields, "user_kind", "human")?;
+            allowed(user_kind.clone(), "user_kind", &["human", "agent"])?;
+            sqlx::query("INSERT INTO users(object_id,user_kind) VALUES($1,$2)")
+                .bind(id)
+                .bind(user_kind)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "memory" => {
+            sqlx::query(
+                "INSERT INTO memories(object_id,happened_at) VALUES($1,COALESCE($2,now()))",
+            )
+            .bind(id)
+            .bind(optional_time(fields, "happened_at")?)
+            .execute(&mut **tx)
+            .await?;
+        }
         _ => unreachable!("write boundary checked before subtype insertion"),
     }
     Ok(())
@@ -1059,7 +1408,6 @@ async fn lock_writable_object(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     authority: WriteAuthority,
-    allow_protected_source_research_notes: bool,
 ) -> Result<Object, DbError> {
     let object: Object = sqlx::query_as(
         r#"SELECT id,kind,title,description,protected,
@@ -1074,14 +1422,6 @@ async fn lock_writable_object(
     .ok_or(DbError::NotFound)?;
     if object.lifecycle != "active" {
         return Err(DbError::NotFound);
-    }
-    if object.protected
-        && authority == WriteAuthority::Ordinary
-        && !(allow_protected_source_research_notes && object.kind == "source")
-    {
-        return Err(DbError::Invalid(
-            "protected Objects cannot be changed through context_apply".into(),
-        ));
     }
     if authority == WriteAuthority::ReviewedMaintenance
         && !matches!(
@@ -1099,9 +1439,6 @@ async fn lock_writable_object(
             object.kind
         )));
     }
-    if authority == WriteAuthority::Ordinary {
-        crate::domain::validate_object_description(&object.title, &object.description)?;
-    }
     Ok(object)
 }
 
@@ -1113,7 +1450,7 @@ async fn update_object(
     changes: &Map<String, Value>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let current = lock_writable_object(tx, id, authority, false).await?;
+    let current = lock_writable_object(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1140,7 +1477,7 @@ async fn update_object(
         .transpose()?
         .unwrap_or(current.provenance);
     sqlx::query(
-        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,revision=revision+1,
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,explicitly_corrected=true,revision=revision+1,
            updated_by_type=$6,updated_by_id=$7,updated_at=now()
            WHERE id=$1 AND revision=$2"#,
     )
@@ -1210,11 +1547,6 @@ async fn promote_source_artifact(
     expected_sha256: &str,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    if authority != WriteAuthority::ReviewedMaintenance {
-        return Err(DbError::Invalid(
-            "promote_source_artifact is available only through reviewed maintenance".into(),
-        ));
-    }
     if expected_sha256.len() != 64
         || !expected_sha256
             .bytes()
@@ -1224,7 +1556,7 @@ async fn promote_source_artifact(
             "expected_sha256 must be 64 lowercase hexadecimal characters".into(),
         ));
     }
-    let current = lock_writable_object(tx, source_id, authority, false).await?;
+    let current = lock_writable_object(tx, source_id, authority).await?;
     if current.kind != "source" {
         return Err(DbError::Invalid(
             "promote_source_artifact requires a Source Object".into(),
@@ -1277,7 +1609,7 @@ async fn promote_source_artifact(
         .execute(&mut **tx)
         .await?;
     sqlx::query(
-        r#"UPDATE objects SET revision=revision+1,updated_by_type=$3,
+        r#"UPDATE objects SET revision=revision+1,explicitly_corrected=true,updated_by_type=$3,
            updated_by_id=$4,updated_at=now() WHERE id=$1 AND revision=$2"#,
     )
     .bind(source_id)
@@ -1286,7 +1618,11 @@ async fn promote_source_artifact(
     .bind(&actor.actor_id)
     .execute(&mut **tx)
     .await?;
-    db::target_snapshot(tx, "object", source_id).await
+    let mut result = db::target_snapshot(tx, "object", source_id).await?;
+    let dependencies: Vec<Uuid> = sqlx::query_scalar("SELECT n.object_id FROM notes n JOIN artifacts a ON a.id=n.source_artifact_id WHERE a.object_id=$1 AND n.source_artifact_id<>$2 ORDER BY n.object_id")
+        .bind(source_id).bind(artifact_id).fetch_all(&mut **tx).await?;
+    result["retained_citation_note_ids"] = json!(dependencies);
+    Ok(result)
 }
 
 async fn update_subtype(
@@ -1413,6 +1749,7 @@ async fn update_subtype(
         }
         "note" => {
             let content = required_field_string(&fields, "content")?;
+            crate::domain::required_preserved_text(content.clone(), "content", 100_000)?;
             let content_format = required_field_string(&fields, "content_format")?;
             let intent = optional_string(&fields, "intent")?;
             allowed(
@@ -1443,12 +1780,80 @@ async fn update_subtype(
             .bind(optional_uuid(&fields, "source_artifact_id")?)
             .bind(fields.get("source_locator").cloned().filter(|value| !value.is_null()))
             .execute(&mut **tx).await?;
+            let wrong: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notes n JOIN artifacts a ON a.id=n.source_artifact_id JOIN connections c ON c.source_object_id=n.object_id AND c.kind='derived_from' AND c.archived_at IS NULL WHERE n.object_id=$1 AND n.intent='excerpt' AND c.target_object_id<>a.object_id)")
+                .bind(id).fetch_one(&mut **tx).await?;
+            if wrong {
+                return Err(DbError::Invalid(
+                    "archive outdated derivation Connections before changing the cited Source"
+                        .into(),
+                ));
+            }
         }
         "theme" => {
             let slug = theme_slug(required_field_string(&fields, "slug")?)?;
             sqlx::query("UPDATE themes SET slug=$2 WHERE object_id=$1")
                 .bind(id)
                 .bind(slug)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "chat" => {
+            sqlx::query("UPDATE chats SET channel_name=$2 WHERE object_id=$1")
+                .bind(id)
+                .bind(optional_string(&fields, "channel_name")?)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "user" => {
+            let user_kind = required_field_string(&fields, "user_kind")?;
+            allowed(user_kind.clone(), "user_kind", &["human", "agent"])?;
+            if let Some(identities) = changes.get("identities") {
+                let old = fields
+                    .get("identities")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| DbError::Invalid("identities must be an array".into()))?;
+                let original: Value =
+                    sqlx::query_scalar("SELECT identities FROM users WHERE object_id=$1")
+                        .bind(id)
+                        .fetch_one(&mut **tx)
+                        .await?;
+                let original = original
+                    .as_array()
+                    .ok_or_else(|| DbError::Invalid("invalid original identities".into()))?;
+                if old.len() != original.len() {
+                    return Err(DbError::Invalid("identity membership requires replacement/relink; metadata edits retain imported identities".into()));
+                }
+                for identity in old {
+                    let existing = original
+                        .iter()
+                        .find(|v| v["id"] == identity["id"])
+                        .ok_or_else(|| DbError::Invalid("identity id is immutable".into()))?;
+                    for key in ["provider", "workspace_id", "provider_user_id"] {
+                        if identity[key] != existing[key] {
+                            return Err(DbError::Invalid("imported identity keys require a correction annotation and replacement User; metadata cannot impersonate an identity".into()));
+                        }
+                    }
+                }
+                serde_json::from_value::<Vec<db::ExternalIdentity>>(identities.clone())
+                    .map_err(|_| DbError::Invalid("invalid identity metadata".into()))?;
+                sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+                    .bind(id)
+                    .bind(identities)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            sqlx::query("UPDATE users SET user_kind=$2 WHERE object_id=$1")
+                .bind(id)
+                .bind(user_kind)
+                .execute(&mut **tx)
+                .await?;
+        }
+        "memory" => {
+            let happened_at = optional_time(&fields, "happened_at")?
+                .ok_or_else(|| DbError::Invalid("happened_at is required".into()))?;
+            sqlx::query("UPDATE memories SET happened_at=$2 WHERE object_id=$1")
+                .bind(id)
+                .bind(happened_at)
                 .execute(&mut **tx)
                 .await?;
         }
@@ -1463,13 +1868,8 @@ async fn archive_object(
     id: Uuid,
     expected_revision: i64,
     authority: WriteAuthority,
-    archived_connection_ids: &BTreeSet<Uuid>,
 ) -> Result<Value, DbError> {
-    let current = if authority == WriteAuthority::Ordinary {
-        lock_archiveable_object(tx, id, authority).await?
-    } else {
-        lock_writable_object(tx, id, authority, false).await?
-    };
+    let current = lock_writable_object(tx, id, authority).await?;
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1485,12 +1885,11 @@ async fn archive_object(
             "archive an Object's active Connections first, in the same batch if appropriate".into(),
         ));
     }
-    if current.protected
-        && authority == WriteAuthority::Ordinary
-        && !protected_note_has_preservation_witness(tx, id, archived_connection_ids, None).await?
-    {
+    let owned: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tasks t JOIN objects o ON o.id=t.object_id WHERE t.owner_object_id=$1 AND o.archived_at IS NULL)")
+        .bind(id).fetch_one(&mut **tx).await?;
+    if owned {
         return Err(DbError::Invalid(
-            "protected Objects cannot be archived through context_apply without a preserved research_notes Artifact".into(),
+            "reassign active Tasks before archiving their User".into(),
         ));
     }
     sqlx::query(
@@ -1506,106 +1905,12 @@ async fn archive_object(
     db::target_snapshot(tx, "object", id).await
 }
 
-async fn lock_archiveable_object(
-    tx: &mut Transaction<'_, Postgres>,
-    id: Uuid,
-    authority: WriteAuthority,
-) -> Result<Object, DbError> {
-    let object: Object = sqlx::query_as(
-        r#"SELECT id,kind,title,description,protected,
-           CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
-           revision,created_by_type,created_by_id,updated_by_type,updated_by_id,
-           provenance,created_at,updated_at,archived_at
-           FROM objects WHERE id=$1 FOR UPDATE"#,
-    )
-    .bind(id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or(DbError::NotFound)?;
-    if object.lifecycle != "active" {
-        return Err(DbError::NotFound);
-    }
-    if object.protected && authority == WriteAuthority::Ordinary && object.kind != "note" {
-        return Err(DbError::Invalid(
-            "protected Objects cannot be archived through context_apply".into(),
-        ));
-    }
-    if authority == WriteAuthority::Ordinary {
-        if !contract::interactive_writable(&object.kind) {
-            return Err(DbError::Invalid(format!(
-                "{} Objects are system-managed",
-                object.kind
-            )));
-        }
-        crate::domain::validate_object_description(&object.title, &object.description)?;
-    }
-    Ok(object)
-}
-
-async fn protected_note_has_preservation_witness(
-    tx: &mut Transaction<'_, Postgres>,
-    note_id: Uuid,
-    archived_connection_ids: &BTreeSet<Uuid>,
-    required_source: Option<Uuid>,
-) -> Result<bool, DbError> {
-    let note: Option<(i64, String)> = sqlx::query_as(
-        r#"SELECT o.revision,n.content FROM objects o
-           JOIN notes n ON n.object_id=o.id
-           WHERE o.id=$1 AND o.kind='note' AND o.protected AND o.archived_at IS NULL
-           FOR UPDATE OF o"#,
-    )
-    .bind(note_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some((revision, content)) = note else {
-        return Ok(false);
-    };
-    if content.trim().is_empty() {
-        return Ok(false);
-    }
-    let witnesses: Vec<(String, Value)> = sqlx::query_as(
-        r#"SELECT a.content,a.metadata FROM connections c
-           JOIN objects s ON s.id=c.target_object_id AND s.kind='source' AND s.archived_at IS NULL
-           JOIN artifacts a ON a.object_id=s.id AND a.kind='research_notes'
-             AND a.capture_outcome='complete' AND a.content IS NOT NULL
-           WHERE c.source_object_id=$1 AND c.target_object_id=s.id AND c.kind='derived_from'
-             AND (c.archived_at IS NULL OR c.id=ANY($2))
-             AND ($3::uuid IS NULL OR c.target_object_id=$3) AND a.content<>''"#,
-    )
-    .bind(note_id)
-    .bind(archived_connection_ids.iter().copied().collect::<Vec<_>>())
-    .bind(required_source)
-    .fetch_all(&mut **tx)
-    .await?;
-    Ok(witnesses.into_iter().any(|(body, metadata)| {
-        let key = metadata
-            .get("document_key")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty() && value.trim() == value);
-        let manifested = metadata
-            .get("source_note_manifest")
-            .and_then(Value::as_array)
-            .is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    entry.get("object_id").and_then(Value::as_str)
-                        == Some(note_id.to_string().as_str())
-                        && entry.get("revision").and_then(Value::as_i64) == Some(revision)
-                })
-            });
-        key && manifested && body.contains(&content)
-    }))
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn validate_endpoints(
     tx: &mut Transaction<'_, Postgres>,
     source_id: Uuid,
     kind: &str,
     target_id: Uuid,
-    authority: WriteAuthority,
-    verified_chat_connection: bool,
-    allow_protected_research_connection_creation: bool,
-) -> Result<bool, DbError> {
+) -> Result<(), DbError> {
     if source_id == target_id {
         return Err(DbError::Invalid(
             "source and target Objects must be different".into(),
@@ -1630,39 +1935,14 @@ async fn validate_endpoints(
             "Connections require active endpoint Objects".into(),
         ));
     }
-    let has_protected_endpoint = source.is_some_and(|row| row.2) || target.is_some_and(|row| row.2);
-    let protected_research_connection_creation = allow_protected_research_connection_creation
-        && authority == WriteAuthority::Ordinary
-        && has_protected_endpoint
-        && ((matches!(kind, "involves" | "about")
-            && source.is_some_and(|row| row.1 == "source")
-            && target.is_some_and(|row| row.1 == "entity"))
-            || (kind == "related_to"
-                && source.is_some_and(|row| row.1 == "entity")
-                && target.is_some_and(|row| row.1 == "entity")));
-    if authority == WriteAuthority::Ordinary && has_protected_endpoint {
-        // Connecting new research to a protected Source does not edit the Source.
-        // Excerpts additionally have to cite an Artifact owned by that Source.
-        let research_source_link = target.is_some_and(|row| row.1 == "source")
-            && source.is_some_and(|row| !row.2)
-            && ((kind == "about" && source.is_some_and(|row| row.1 == "task"))
-                || (kind == "derived_from"
-                    && source.is_some_and(|row| row.1 == "note")
-                    && sqlx::query_scalar::<_, bool>(
-                        "SELECT EXISTS (SELECT 1 FROM notes n LEFT JOIN artifacts a ON a.id=n.source_artifact_id WHERE n.object_id=$1 AND (n.intent IN ('idea','fact','insight','question') OR (n.intent='excerpt' AND a.object_id=$2)))",
-                    )
-                    .bind(source_id)
-                    .bind(target_id)
-                    .fetch_one(&mut **tx)
-                    .await?));
-        let chat_provenance_link = verified_chat_connection
-            && kind == "about"
-            && source.is_some_and(|row| row.1 == "chat")
-            && target.is_some_and(|row| !row.2);
-        if !research_source_link && !chat_provenance_link && !protected_research_connection_creation
-        {
+    // Derivation asserts evidence ownership; contextual links remain unrestricted.
+    if kind == "derived_from" && source.is_some_and(|row| row.1 == "note") {
+        let invalid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notes n JOIN artifacts a ON a.id=n.source_artifact_id WHERE n.object_id=$1 AND n.intent='excerpt' AND a.object_id<>$2)")
+            .bind(source_id).bind(target_id).fetch_one(&mut **tx).await?;
+        if invalid {
             return Err(DbError::Invalid(
-                "protected Objects require separate Connection authority".into(),
+                "Excerpt derivation must reference its cited Source; use related_to for context"
+                    .into(),
             ));
         }
     }
@@ -1673,7 +1953,7 @@ async fn validate_endpoints(
             "themed Connections must point from a non-Theme Object to a Theme".into(),
         ));
     }
-    Ok(protected_research_connection_creation)
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1689,18 +1969,8 @@ async fn create_connection(
     sequence: &mut i64,
     event_ids: &mut Vec<Uuid>,
     authority: WriteAuthority,
-    verified_chat_connection: bool,
 ) -> Result<Value, DbError> {
-    let protected_research_connection_creation = validate_endpoints(
-        tx,
-        source_id,
-        kind,
-        target_id,
-        authority,
-        verified_chat_connection,
-        true,
-    )
-    .await?;
+    validate_endpoints(tx, source_id, kind, target_id).await?;
     let description = required_text(description.to_owned(), "description", 1000)?;
     let inserted: Option<Connection> = sqlx::query_as(
         r#"INSERT INTO connections
@@ -1749,14 +2019,13 @@ async fn create_connection(
     if current.description == description && current.provenance == provenance_value {
         return Ok(json!({"connection":current,"reused":true}));
     }
-    if authority == WriteAuthority::ReviewedMaintenance
-        || current.protected
-        || protected_research_connection_creation
-    {
+    if authority == WriteAuthority::ReviewedMaintenance {
         return Err(DbError::Invalid(
             "changing an existing Connection requires its explicit ID and expected revision".into(),
         ));
     }
+    let connection_before =
+        serde_json::to_value(&current).map_err(|e| DbError::Invalid(e.to_string()))?;
     let mut root = current.provenance.as_object().cloned().unwrap_or_default();
     let mut assertions = root
         .remove("assertions")
@@ -1780,7 +2049,7 @@ async fn create_connection(
     .bind(&actor.actor_id)
     .fetch_one(&mut **tx)
     .await?;
-    record_event(
+    record_event_with_before(
         tx,
         run_id,
         sequence,
@@ -1792,6 +2061,7 @@ async fn create_connection(
         "updated",
         Some(current.revision),
         updated.revision,
+        Some(&connection_before),
     )
     .await?;
     Ok(json!({"connection":updated,"reused":true,"assertion_added":true}))
@@ -1800,7 +2070,7 @@ async fn create_connection(
 async fn lock_connection(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
-    authority: WriteAuthority,
+    _authority: WriteAuthority,
 ) -> Result<Connection, DbError> {
     let connection: Connection =
         sqlx::query_as("SELECT * FROM connections WHERE id=$1 AND archived_at IS NULL FOR UPDATE")
@@ -1808,11 +2078,6 @@ async fn lock_connection(
             .fetch_optional(&mut **tx)
             .await?
             .ok_or(DbError::NotFound)?;
-    if connection.protected && authority == WriteAuthority::Ordinary {
-        return Err(DbError::Invalid(
-            "protected Connections require separate authority".into(),
-        ));
-    }
     Ok(connection)
 }
 
@@ -1832,16 +2097,7 @@ async fn update_connection(
         return Err(DbError::Conflict);
     }
     let kind = kind.unwrap_or(&current.kind);
-    validate_endpoints(
-        tx,
-        current.source_object_id,
-        kind,
-        current.target_object_id,
-        authority,
-        false,
-        false,
-    )
-    .await?;
+    validate_endpoints(tx, current.source_object_id, kind, current.target_object_id).await?;
     let description = required_text(
         description.unwrap_or(&current.description).to_owned(),
         "description",
@@ -1872,8 +2128,7 @@ async fn archive_connection(
     actor: &ActorContext,
     id: Uuid,
     expected_revision: i64,
-    authority: WriteAuthority,
-    archived_connection_ids: &BTreeSet<Uuid>,
+    _authority: WriteAuthority,
 ) -> Result<Connection, DbError> {
     let current: Connection =
         sqlx::query_as("SELECT * FROM connections WHERE id=$1 AND archived_at IS NULL FOR UPDATE")
@@ -1881,14 +2136,6 @@ async fn archive_connection(
             .fetch_optional(&mut **tx)
             .await?
             .ok_or(DbError::NotFound)?;
-    if current.protected
-        && authority == WriteAuthority::Ordinary
-        && !protected_connection_has_note_witness(tx, &current, archived_connection_ids).await?
-    {
-        return Err(DbError::Invalid(
-            "protected Connections require separate authority".into(),
-        ));
-    }
     if current.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1902,31 +2149,6 @@ async fn archive_connection(
     .bind(&actor.actor_id)
     .fetch_one(&mut **tx)
     .await?)
-}
-
-async fn protected_connection_has_note_witness(
-    tx: &mut Transaction<'_, Postgres>,
-    connection: &Connection,
-    archived_connection_ids: &BTreeSet<Uuid>,
-) -> Result<bool, DbError> {
-    let note_ids: Vec<Uuid> = sqlx::query_scalar(
-        r#"SELECT id FROM objects WHERE id=ANY($1) AND kind='note' AND protected
-           AND archived_at IS NULL ORDER BY id FOR UPDATE"#,
-    )
-    .bind(vec![
-        connection.source_object_id,
-        connection.target_object_id,
-    ])
-    .fetch_all(&mut **tx)
-    .await?;
-    for note_id in note_ids {
-        if protected_note_has_preservation_witness(tx, note_id, archived_connection_ids, None)
-            .await?
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1947,15 +2169,7 @@ async fn append_artifact(
     supersedes_artifact_id: Option<Uuid>,
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
-    let allow_protected_source_research_notes =
-        authority == WriteAuthority::Ordinary && kind == "research_notes";
-    let object = lock_writable_object(
-        tx,
-        object_id,
-        authority,
-        allow_protected_source_research_notes,
-    )
-    .await?;
+    let object = lock_writable_object(tx, object_id, authority).await?;
     if object.revision != expected_revision {
         return Err(DbError::Conflict);
     }
@@ -1969,64 +2183,19 @@ async fn append_artifact(
             "Artifact metadata must be an object".into(),
         ));
     }
-    let protected_source_research_notes = object.protected
-        && object.kind == "source"
-        && authority == WriteAuthority::Ordinary
-        && kind == "research_notes";
-    if protected_source_research_notes
-        && (content.is_none() || uri.is_some() || capture_outcome != "complete")
-    {
-        return Err(DbError::Invalid(
-            "protected Source research_notes must contain complete Artifact text".into(),
-        ));
-    }
-    let document_key = metadata
-        .get("document_key")
-        .and_then(Value::as_str)
-        .filter(|key| !key.trim().is_empty() && key.trim() == *key);
-    if protected_source_research_notes && document_key.is_none() {
-        return Err(DbError::Invalid(
-            "protected Source research_notes require a nonempty metadata.document_key".into(),
-        ));
-    }
     if let Some(predecessor) = supersedes_artifact_id {
-        let predecessor_row: Option<(String, Value)> =
-            sqlx::query_as("SELECT kind,metadata FROM artifacts WHERE id=$1 AND object_id=$2")
-                .bind(predecessor)
-                .bind(object_id)
-                .fetch_optional(&mut **tx)
-                .await?;
-        let Some((predecessor_kind, predecessor_metadata)) = predecessor_row else {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=$1 AND object_id=$2)",
+        )
+        .bind(predecessor)
+        .bind(object_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        if !exists {
             return Err(DbError::Invalid(
                 "superseded Artifact belongs to another Object".into(),
             ));
-        };
-        if protected_source_research_notes {
-            let predecessor_key = predecessor_metadata
-                .get("document_key")
-                .and_then(Value::as_str);
-            let canonical_artifact: Option<Uuid> =
-                sqlx::query_scalar("SELECT current_artifact_id FROM sources WHERE object_id=$1")
-                    .bind(object_id)
-                    .fetch_one(&mut **tx)
-                    .await?;
-            let metadata_predecessor = metadata.get("predecessor_artifact_id");
-            if predecessor_kind != "research_notes"
-                || predecessor_key != document_key
-                || canonical_artifact == Some(predecessor)
-                || metadata_predecessor.is_some_and(|value| {
-                    value.as_str().and_then(|id| Uuid::parse_str(id).ok()) != Some(predecessor)
-                })
-            {
-                return Err(DbError::Invalid(
-                    "protected Source research_notes may supersede only the prior revision for the same document_key".into(),
-                ));
-            }
         }
-    } else if protected_source_research_notes && metadata.get("predecessor_artifact_id").is_some() {
-        return Err(DbError::Invalid(
-            "metadata.predecessor_artifact_id requires supersedes_artifact_id".into(),
-        ));
     }
     allowed(
         capture_outcome.to_owned(),
@@ -2084,6 +2253,56 @@ async fn append_artifact(
     )
     .bind(object_id).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     Ok(artifact)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn correct_evidence(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &ActorContext,
+    object_id: Uuid,
+    revision: i64,
+    target_type: &str,
+    target_id: Uuid,
+    reason: &str,
+    representation: &Value,
+) -> Result<(), DbError> {
+    let reason = required_text(reason.to_owned(), "reason", 2000)?;
+    if !representation.is_object() || representation.to_string().len() > 100_000 {
+        return Err(DbError::Invalid(
+            "representation must be an object of at most 100000 bytes".into(),
+        ));
+    }
+    let query = match target_type {
+        "object" => "SELECT EXISTS(SELECT 1 FROM objects WHERE id=$1 AND id=$2)",
+        "artifact" => "SELECT EXISTS(SELECT 1 FROM artifacts WHERE id=$1 AND object_id=$2)",
+        "message" => "SELECT EXISTS(SELECT 1 FROM chat_messages WHERE id=$1 AND chat_object_id=$2)",
+        "event" => {
+            "SELECT EXISTS(SELECT 1 FROM object_events e WHERE id=$1 AND ((target_type='object' AND target_id=$2) OR (target_type='connection' AND EXISTS(SELECT 1 FROM connections c WHERE c.id=e.target_id AND (c.source_object_id=$2 OR c.target_object_id=$2)))))"
+        }
+        "run" => {
+            "SELECT EXISTS(SELECT 1 FROM runs r WHERE id=$1 AND (primary_object_id=$2 OR chat_object_id=$2 OR EXISTS(SELECT 1 FROM object_events e WHERE e.run_id=r.id AND ((e.target_type='object' AND e.target_id=$2) OR (e.target_type='connection' AND EXISTS(SELECT 1 FROM connections c WHERE c.id=e.target_id AND (c.source_object_id=$2 OR c.target_object_id=$2))))) OR (r.primary_object_id IS NULL AND r.chat_object_id IS NULL AND NOT EXISTS(SELECT 1 FROM object_events e WHERE e.run_id=r.id))))"
+        }
+        _ => {
+            return Err(DbError::Invalid(
+                "target_type must be object, artifact, message, event or run".into(),
+            ));
+        }
+    };
+    let exists: bool = sqlx::query_scalar(query)
+        .bind(target_id)
+        .bind(object_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !exists {
+        return Err(DbError::Invalid(
+            "correction target must belong to its owning Object".into(),
+        ));
+    }
+    let previous: Option<Uuid>=sqlx::query_scalar("SELECT id FROM evidence_corrections WHERE object_id=$1 AND target_type=$2 AND target_id=$3 ORDER BY object_revision DESC LIMIT 1")
+        .bind(object_id).bind(target_type).bind(target_id).fetch_optional(&mut **tx).await?;
+    sqlx::query("INSERT INTO evidence_corrections(id,object_id,target_type,target_id,reason,representation,supersedes_correction_id,actor_type,actor_id,object_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        .bind(Uuid::new_v4()).bind(object_id).bind(target_type).bind(target_id).bind(reason).bind(representation).bind(previous).bind(actor.actor_type).bind(&actor.actor_id).bind(revision+1).execute(&mut **tx).await?;
+    Ok(())
 }
 
 fn validate_http_uri(value: Option<&str>, field: &str) -> Result<(), DbError> {

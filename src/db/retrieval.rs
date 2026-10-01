@@ -140,7 +140,7 @@ pub async fn context_subtypes(
                         'content_excerpt',substring(n.content FROM 1 FOR 400))
                     WHEN 'theme' THEN jsonb_build_object(
                         'kind','theme','slug',th.slug)
-                  END AS subtype
+                  END || jsonb_build_object('corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c)) FROM (SELECT DISTINCT ON(target_type,target_id) * FROM evidence_corrections WHERE object_id=o.id ORDER BY target_type,target_id,object_revision DESC) c),'[]'::jsonb)) AS subtype
            FROM objects o
            LEFT JOIN tasks t ON t.object_id=o.id
            LEFT JOIN objects owner ON owner.id=t.owner_object_id
@@ -212,7 +212,7 @@ pub async fn full_text_candidates_filtered(
             .push_bind(text_search_config.as_str())
             .push("::regconfig, coalesce(o.title,'')), 'A') || setweight(to_tsvector(")
             .push_bind(text_search_config.as_str())
-            .push("::regconfig, coalesce(o.description,'')), 'B')");
+            .push("::regconfig, correction_embedding_description(coalesce(o.description,''),o.correction_text)), 'B')");
     }
     query.push(", search_query.value)::float8 AS relevance,");
     if with_connection_count {
@@ -234,7 +234,7 @@ pub async fn full_text_candidates_filtered(
             .push_bind(text_search_config.as_str())
             .push("::regconfig, coalesce(o.title,'')), 'A') || setweight(to_tsvector(")
             .push_bind(text_search_config.as_str())
-            .push("::regconfig, coalesce(o.description,'')), 'B'))");
+            .push("::regconfig, correction_embedding_description(coalesce(o.description,''),o.correction_text)), 'B'))");
     }
     query.push(" @@ search_query.value");
     if !kinds.is_empty() {
@@ -382,7 +382,7 @@ pub async fn semantic_candidates_filtered(
            WHERE o.archived_at IS NULL
              AND e.artifact_id IS NULL
              AND e.status='completed'
-             AND e.source_hash=object_embedding_source_hash(e.format_version,o.kind,o.title,o.description)
+             AND e.source_hash=object_embedding_source_hash(e.format_version,o.kind,o.title,correction_embedding_description(o.description,o.correction_text))
              AND e.model="#,
         )
         .push_bind(model)

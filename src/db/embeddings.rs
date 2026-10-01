@@ -85,7 +85,7 @@ pub async fn embedding_status(
                WHERE o.archived_at IS NULL AND e.artifact_id IS NULL AND e.status='completed'
                  AND e.model=$1 AND e.dimensions=$2 AND e.input_mode=$3
                  AND e.source_hash=object_embedding_source_hash(
-                   e.format_version,o.kind,o.title,o.description
+                   e.format_version,o.kind,o.title,correction_embedding_description(o.description,o.correction_text)
                  )"#,
         )
         .bind(model)
@@ -135,7 +135,7 @@ pub async fn embedding_status(
                    (e.artifact_id IS NULL AND (
                      o.archived_at IS NOT NULL OR
                      e.source_hash<>object_embedding_source_hash(
-                       e.format_version,o.kind,o.title,o.description
+                       e.format_version,o.kind,o.title,correction_embedding_description(o.description,o.correction_text)
                      )
                    )) OR
                    (e.artifact_id IS NOT NULL AND (
@@ -185,13 +185,13 @@ pub async fn queue_missing_embeddings(
     Ok(sqlx::query(
         r#"INSERT INTO embeddings
              (object_id,model,dimensions,source_hash,format_version,input_mode,status)
-           SELECT o.id,$1,$4,object_embedding_source_hash($2,o.kind,o.title,o.description),$2,$3,'pending'
+           SELECT o.id,$1,$4,object_embedding_source_hash($2,o.kind,o.title,correction_embedding_description(o.description,o.correction_text)),$2,$3,'pending'
            FROM objects o
            LEFT JOIN embeddings e
              ON e.object_id=o.id AND e.artifact_id IS NULL AND e.model=$1
             AND e.dimensions=$4
             AND e.format_version=$2 AND e.input_mode=$3
-            AND e.source_hash=object_embedding_source_hash($2,o.kind,o.title,o.description)
+            AND e.source_hash=object_embedding_source_hash($2,o.kind,o.title,correction_embedding_description(o.description,o.correction_text))
            WHERE o.archived_at IS NULL AND e.object_id IS NULL
            ON CONFLICT (object_id,model) WHERE artifact_id IS NULL DO UPDATE
            SET source_hash=EXCLUDED.source_hash,format_version=EXCLUDED.format_version,
@@ -324,7 +324,7 @@ pub async fn claim_embedding_job(
            SELECT claimed.id,claimed.object_id,claimed.artifact_id,claimed.chunk_index,
                   claimed.start_offset,claimed.end_offset,claimed.model,claimed.dimensions,
                   claimed.source_hash,claimed.format_version,claimed.input_mode,
-                  o.kind,o.title,o.description,a.content AS artifact_content
+                  o.kind,o.title,correction_embedding_description(o.description,o.correction_text) AS description,a.content AS artifact_content
            FROM claimed JOIN objects o ON o.id=claimed.object_id
            LEFT JOIN artifacts a ON a.id=claimed.artifact_id"#,
     )

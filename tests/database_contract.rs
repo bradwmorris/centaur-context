@@ -238,6 +238,7 @@ async fn canonical_schema_has_application_tables_and_purge_receipt_bookkeeping()
             "context_apply_requests",
             "embeddings",
             "entities",
+            "evidence_corrections",
             "maintenance_execution_fences",
             "maintenance_purge_receipts",
             "memories",
@@ -366,7 +367,10 @@ async fn context_subtypes_include_themes_without_null_decode_failures() {
     let subtypes = db::context_subtypes(&pool, &[object_id], None)
         .await
         .unwrap();
-    assert_eq!(subtypes[&object_id], json!({"kind":"theme","slug":slug}));
+    assert_eq!(
+        subtypes[&object_id],
+        json!({"kind":"theme","slug":slug,"corrections":[]})
+    );
 }
 
 #[tokio::test]
