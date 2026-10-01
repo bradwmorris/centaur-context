@@ -66,3 +66,32 @@ index. Deployment should account for migration/index work on the actual store.
 After separately approved release, verify representative corrections and links
 through the deployed agent tools, then read back current state and retained
 history. Local synthetic tests and a PR do not establish that live acceptance.
+
+### Follow-up release review
+
+Both GitHub CI jobs (`checks`, `ui-composition`) passed for
+`84bc33a09047c93b8e73c501657125bd4431ed57`. The subsequent change adds documentation
+only; its exact-head CI status is reported on PR #134.
+
+Rechecked the full matrix, with additional attention to lifecycle and replacement:
+all eight kinds exercise archive/restore in protected and unprotected variants;
+active incident Connections must be archived first; active Tasks must be
+reassigned before their User can be archived; restoring a Task requires its
+assigned User active. Connection restore revalidates endpoint/kind/citation rules
+and the database's active-edge uniqueness constraint. Restoring an Object does
+not silently restore its old Connections.
+
+Wrong-kind replacement repoints incoming and outgoing current relationships in
+one batch while retaining old UUID/kind, archived edges and provenance. User
+binding/Chat routing transfer checks both revisions and locks participants;
+existing message sender/Chat IDs, Runs and processing cursors are not rewritten.
+Only a different active destination is accepted, and Chat routing requires an
+unbound destination. Authentication identities/configuration do not move with
+domain bindings. Recovery uses another revisioned transfer or explicit relinking,
+not deletion of the previous transfer's audit evidence. No new unresolved code
+finding arose in this review; staged/live producer verification remains pending.
+
+See the [proposed rollout and recovery plan](rollout-plan.md) for schema 36/37
+locking/index work, backup/restore rehearsal, target approval fields, and handling
+post-cutover writes. Actual private destinations and downtime estimates remain
+unverified; no deployment approval is inferred.
