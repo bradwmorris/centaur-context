@@ -20,9 +20,10 @@ There are two distinct reviews:
    [Schema and ontology](schema.md). This is enough to inspect the proposed App
    boundary, data ownership, security boundary, and required Centaur hooks. Do not
    create a Context database merely to review the proposal.
-2. **Working integration review:** first confirm that
-   [`compatibility.toml`](../compatibility.toml) names a current tested Centaur
-   revision. Use Centaur's own documentation to operate Centaur, and use
+2. **Working integration review:** compare your Centaur revision with the
+   required hooks below. [`compatibility.toml`](../compatibility.toml) records
+   the contract, not a certified release pair. Use Centaur's own documentation
+   to operate Centaur, and use
    [Setup and operations](setup.md) only for the separate Context database,
    service, credentials, tool, and verification steps.
 
@@ -182,8 +183,8 @@ needs a model endpoint. The default transport, `centaur_subscription`,
 calls a purpose-bound private inference route added later in the maintainer's
 Centaur fork. That inference route is not part of upstream Centaur.
 Use the [model configuration guidance](setup.md#3-create-the-kubernetes-secret)
-to match the exact model and broker; the reference combination still requires
-disposable end-to-end verification.
+to match the exact model and broker. The example is source-reviewed, not a
+certified pair; verify the model connection when enabling it in your deployment.
 
 Context also implements `direct_api`, a metered provider-key transport currently
 classified as an explicit rollback path. Before a general extension release,
@@ -237,7 +238,7 @@ The exact values and network policy are documented in
 [Setup and operations](setup.md). A production operator should pin a reviewed
 Centaur fork commit and Context image digest together in an installation record.
 
-## Adoption gates
+## Future stable-release requirements
 
 Before claiming compatibility with stock Centaur or publishing a stable release:
 

@@ -1,8 +1,10 @@
 # Issue 131: Step 5 isolation and model follow-up
 
-Status: **partial; full acceptance still blocked**, 2026-10-02. This follow-up
-retains the passing component evidence in [the initial receipt](step5.md).
-Step 6 has not started.
+Historical checkpoint: **full integration remained unverified**, 2026-10-02.
+The owner subsequently removed this certification gate; see the
+[current scope and evidence](README.md). The operational finding below remains
+unresolved and outside this documentation task. This follow-up retains the
+passing component evidence in [the initial receipt](step5.md).
 
 ## Slack routing
 
@@ -86,8 +88,8 @@ claimed. The shared broker was not repaired, restarted, or scaled.
 
 ## Remaining boundary
 
-Full acceptance needs a distinct Slack test route and a working supported broker
-whose ephemeral sandbox images are available. Repair of the existing deployment
+A future full-certification exercise would need a distinct Slack test route and
+a working supported broker whose ephemeral sandbox images are available. Repair of the existing deployment
 is outside this test's authorization; a separate working test broker is also a
 valid way forward. Actual Slack capture/reply, successful Memory extraction,
 later interaction retrieval, complete proxy/tool routing, the paired fresh

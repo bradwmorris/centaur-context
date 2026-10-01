@@ -1,14 +1,17 @@
 # Issue 131: Step 5 component evidence
 
-Status: **partial; full fresh-install acceptance blocked**. Recorded 2026-10-02.
-This receipt does not establish a tested Centaur/Context release pair or authorize
-Step 6. Synthetic caller pods exercised the real Context application and database;
+Historical checkpoint: **component checks passed; full fresh-install acceptance
+was incomplete**. Recorded 2026-10-02. The owner subsequently removed full
+certification from this documentation task; see the [current scope and evidence](README.md).
+This receipt does not establish a tested Centaur/Context release pair. Synthetic
+caller pods exercised the real Context application and database;
 Centaur, Slackbot, iron-proxy, and a model were not running in this fixture.
 
 This is the initial checkpoint. The [follow-up](step5-followup.md) records later
 Slack-send authorization, a source-linked Context build, and a failed attempt to
 use the existing supported model broker. It supersedes the prerequisites below
-where explicitly stated; full paired acceptance remains incomplete.
+where explicitly stated; full paired acceptance remains unverified and is
+outside the revised scope.
 
 ## Versions and scope
 
@@ -103,7 +106,8 @@ The host had approximately 7.65 GiB Docker memory, with an existing cluster usin
 enough capacity for clean builds and the full Centaur workload. Full builds were
 not attempted, and no capacity increase or shared-service shutdown was performed.
 
-To complete Step 5, supply an approved disposable Slack surface plus authorization
+The earlier full-certification plan would have required an approved disposable
+Slack surface plus authorization
 for the specific test sends, a disposable-use model identity/credential with
 approved usage, and sufficient separate or approved spare capacity for immutable
 Context and Centaur builds and their complete deployment. Record verifiable image

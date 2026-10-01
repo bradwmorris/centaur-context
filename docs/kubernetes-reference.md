@@ -1,49 +1,47 @@
 # Private Kubernetes reference candidate
 
-This is one adaptable, **not yet end-to-end verified** combination for issue
-[#131](https://github.com/bradwmorris/centaur-context/issues/131). Use an isolated
-disposable cluster, never an existing private deployment. The
-[setup guide](setup.md) still owns installation and secret handling.
+This example puts service names, labels, and network paths in one place for an
+existing Centaur operator. Adapt it to your deployment alongside the
+[setup guide](setup.md); it does not install Centaur or certify a release pair.
+Disposable network/API checks passed for this configuration. The
+[evidence summary](verification/131/README.md) records their limits.
 
 ## Candidate sources and topology
 
-- Context starting revision: `675421f662c8319b54600242b1880aee566af152`, plus
-  this reference change. Record the final build commit and image digest before
-  testing; neither a tag nor this starting revision is a tested compatibility pin.
-- Centaur source: `f44ce662f3b3fca63bd4c162add332cb43ec035c` from the public
-  maintainer fork, chart `0.1.141`. Use its existing installation procedure with
-  synthetic data and separately supplied test credentials.
+- Context: build the reviewed checkout and record its commit and image identity.
+  The evidence includes a source-linked build at
+  `69e8c2f357383e084b955d3cff9613a60a633b1a`; it is not a paired compatibility pin.
+- Centaur reference source: `f44ce662f3b3fca63bd4c162add332cb43ec035c` from the
+  public maintainer fork, chart `0.1.141`. The examples were rendered against
+  this source. Use Centaur's own installation procedure and review the
+  [required hooks](centaur-integration.md#adapting-the-slack-integration).
 - One namespace, `centaur`; Helm release `centaur`, `nameOverride: centaur`,
   `fullnameOverride: centaur`; one Slackbot instance. Context has its own
   Deployment and ClusterIP Services. api-rs and PostgreSQL services are
   `centaur-api-rs:8080` and `centaur-postgres:5432` under these overrides.
-- PostgreSQL 16 with pgvector. The disposable server may also host disposable
-  Centaur databases, but Context uses only `centaur_context_test_131`, role
-  `centaur_context_app`, and its own credentials. Confirm pgvector availability
-  before running `bootstrap-database.sh --database centaur_context_test_131`.
-- Candidate transport: `centaur_subscription`, private api-rs route, exact
-  `gpt-6-luna`; extraction Low, optional Memory maintenance High. The broker's
-  purpose-bound key and reviewed subscription identity must be supplied through
-  the trusted test secret mechanism. No credentials are in these examples.
-- Candidate enforcement environment: single-node kind `v0.32.0`, Linux arm64,
-  Kubernetes `v1.36.1`, with Calico Open Source `v3.32.2`. Create a fresh cluster
-  with kind's default CNI disabled; follow the [Calico kind guide](https://docs.tigera.io/calico/latest/getting-started/kubernetes/kind)
-  and verify its [host requirements](https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements).
-  This CNI combination has not been exercised here. Do not replace a shared
-  cluster's CNI to test it.
+- PostgreSQL 16 with pgvector and a separate Context database and credentials.
+  Normal bootstrap creates `centaur_context` and `centaur_context_app`.
+  Disposable database checks instead used `centaur_context_test_131`.
+- Optional model transport: `centaur_subscription`, private api-rs route, exact
+  `gpt-6-luna`; extraction Low, optional Memory maintenance High. Leave the model
+  settings unset to use capture, explicit writes, search, and the UI without it.
+- NetworkPolicy needs an enforcing CNI. The component fixture used single-node
+  kind `v0.32.0`, Linux arm64, Kubernetes `v1.36.1`, and Calico Open Source
+  `v3.32.2`. Allowed and denied traffic checks passed. For a new disposable kind
+  fixture, follow the [Calico kind guide](https://docs.tigera.io/calico/latest/getting-started/kubernetes/kind)
+  and [host requirements](https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements).
+  Adopters should use their cluster's reviewed enforcement setup; replacing an
+  existing CNI is not part of installing Context.
 
-Keep the Kubernetes API and UI access on loopback, all Context Services private,
-and ingress disabled. A real Slack round trip requires a separately approved
-test Slack surface and existing delivery arrangement; this example creates no
-public ingress. Synthetic HTTP requests alone cannot prove a real Slack turn.
-Optional Codex, specialist workflow listeners, embeddings, Memory event capture,
-and maintenance are outside the initial capture/retrieval candidate unless
-explicitly included in its test receipt.
+Keep Context Services private and UI access on loopback. This example creates no
+public ingress or Slack app: use your own existing Centaur delivery arrangement
+and approved capture surfaces. Codex, embeddings, specialist workflow listeners,
+event capture, and Memory maintenance are optional.
 
 ## Network and configuration agreement
 
 Merge [`centaur-values.example.yaml`](../deploy/centaur-values.example.yaml)
-into the disposable Centaur values. It is a fragment, not complete Centaur
+into the reviewed Centaur values. It is a fragment, not complete Centaur
 configuration. Retain the chart's existing default-deny, DNS, Slack API, sandbox,
 and control-plane rules. Review the rendered manifests from that exact source.
 
@@ -88,16 +86,17 @@ The chart's [network policy source](https://github.com/bradwmorris/centaur/blob/
 and [label helpers](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/contrib/chart/templates/_helpers.tpl)
 are the reference for these assumptions.
 
-## Disposable validation
+## Validation and evidence
 
-Use a dedicated kubeconfig so the installer's current-context guard and package
-check target only the disposable API. Creating a cluster with `kind create
-cluster --kubeconfig /private/test/kubeconfig ...` keeps the ambient config
-unchanged. Select the disposable context explicitly:
+Check actual pod labels, Service selectors, and both sides of the network table
+before applying the examples. Select the exact Kubernetes context and namespace;
+the package check contacts that API with a server-side dry run. To check a new
+configuration without touching an existing cluster, use a dedicated disposable
+kubeconfig:
 
 ```bash
 export KUBECONFIG=/private/test/kubeconfig
-export CENTAUR_CONTEXT_KUBE_CONTEXT=kind-centaur-context-131
+export CENTAUR_CONTEXT_KUBE_CONTEXT=<exact-test-context>
 export CENTAUR_CONTEXT_NAMESPACE=centaur
 test "$(kubectl config current-context)" = "$CENTAUR_CONTEXT_KUBE_CONTEXT"
 kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" -n "$CENTAUR_CONTEXT_NAMESPACE" \
@@ -109,23 +108,15 @@ kubectl --context "$CENTAUR_CONTEXT_KUBE_CONTEXT" -n "$CENTAUR_CONTEXT_NAMESPACE
   apply --dry-run=server -f deploy/context-peers.example.yaml
 ```
 
-Only after reviewing the rendered Centaur configuration, matching labels, and
-test secrets should the disposable operator apply the peer example without
-`--dry-run=server`, then follow Context's installer. Never apply this example to
-an existing shared deployment as part of validation.
+The directory and context above are placeholders for an already prepared test
+cluster; the commands do not create one. Apply peer policies through the Centaur
+operator's normal reviewed procedure, then use Context's installer. A server-side
+dry run checks admission, not traffic enforcement; HTTP 401 proves reachability,
+not authenticated application behavior.
 
-Before calling the pair tested, prove authenticated application requests through
-the ClusterIP Services and DNS, plus denied requests from unrelated pods and
-other namespaces to Context's agent, ingestion, UI, and Curator ports. Verify
-that Slackbot cannot reach the writer/maintenance listeners. Test the proxy path
-with the actual tools and secret injection, not only a pod with a proxy label.
-Exercise capture, extraction, later retrieval, and ordinary Centaur responses
-during a Context outage. Record the exact Context/Centaur commits, image digests,
-CNI/configuration, outcomes, and optional features not exercised. HTTP 401 proves
-reachability, not successful authenticated behavior; a server-side dry run proves
-schema/admission acceptance, not traffic enforcement.
-
-Step 5 needs sufficient spare Docker resources for Centaur plus Context, a
-working enforcing CNI, isolated databases, and approved test Slack/model
-credentials. Missing prerequisites must be reported; do not reuse live credentials
-or stop shared workloads to complete this receipt.
+Completed component checks covered DNS, authenticated Context requests, blocked
+unrelated/cross-namespace requests, synthetic capture/replay, explicit writes,
+retrieval, and UI display. They used labeled probe pods rather than the actual
+Slackbot and iron-proxy. Full Slack/model integration and outage behavior were
+not certified. They are not completion gates for this documentation change;
+check the capabilities you enable in your own deployment.

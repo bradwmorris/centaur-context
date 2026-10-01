@@ -1,5 +1,6 @@
-# Merge into a reviewed DISPOSABLE Centaur configuration; this is not a complete
-# Centaur install. See docs/kubernetes-reference.md. Contains no credentials.
+# Adapt to your reviewed Centaur configuration; this is not a complete install.
+# See docs/kubernetes-reference.md. Preserve existing release names and instances
+# unless intentionally changing them, and adapt peer selectors to match. No credentials.
 nameOverride: centaur
 fullnameOverride: centaur
 networkPolicy:
@@ -7,6 +8,8 @@ networkPolicy:
   apiIngressSourceNamespaces: []
 ingress:
   enabled: false
+# Optional subscription inference: omit this apiRs/sandbox fragment when not
+# enabling a model connection; retain your existing Centaur authentication setup.
 apiRs:
   curatorInference:
     enabled: true
