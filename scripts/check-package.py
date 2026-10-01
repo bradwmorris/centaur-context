@@ -142,6 +142,7 @@ def main() -> None:
         "deploy/network-policy.yaml",
         "deploy/secret.example.yaml",
         "deploy/provider-egress.example.yaml",
+        "deploy/context-peers.example.yaml",
     ]
     for manifest in manifests:
         subprocess.run(

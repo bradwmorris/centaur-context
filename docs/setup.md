@@ -95,6 +95,11 @@ gap; do not silently claim the setup is complete.
 
 ### Requirements for the Kubernetes recipe below
 
+The [private Kubernetes reference candidate](kubernetes-reference.md) puts the
+namespace, release labels, service names, model transport, and both sides of each
+network path together. It includes an opt-in peer-policy example and a disposable
+validation procedure; it is not yet a tested installation pin.
+
 - An existing, reviewed Centaur deployment using compatible Slackbot v2 code
 - PostgreSQL 16 with pgvector for a **separate Context database**
 - Docker, `kubectl`, and PostgreSQL 16 client tools (`psql`, `pg_dump`,
@@ -255,6 +260,14 @@ same-namespace Centaur pod labels and service destinations. Check those labels
 and all required paths against the real cluster before `--apply`; if they do
 not match, do not use the default policy unchanged. The script does not deploy
 or modify Centaur, and it does not install into a non-Kubernetes environment.
+
+For the single-namespace reference, first review and dry-run
+[`context-peers.example.yaml`](../deploy/context-peers.example.yaml) under the
+same explicit context and namespace. The Centaur operator applies these additive
+peer rules separately; the Context installer never applies them. Retain Centaur's
+base DNS and runtime rules. See the [reference network table](kubernetes-reference.md#network-and-configuration-agreement)
+before running the installer: missing PostgreSQL ingress prevents readiness,
+and missing caller egress prevents the hooks and tools from working.
 
 ```bash
 export CENTAUR_CONTEXT_KUBE_CONTEXT=<exact-kubectl-context>
@@ -434,14 +447,16 @@ The required paths for the features shown above are:
   enabled**; direct-provider mode instead needs reviewed provider egress.
 
 Check **both sides** of each path: the caller's egress rule, the receiver's
-ingress rule, DNS/routing, and the actual listening service. In the checked-in
-Kubernetes package, Context's NetworkPolicy permits ingress from a specifically
-labelled Slackbot to `8082`, but **not** to `8081`. The public Centaur fork chart
-also does not add Slackbot egress to in-cluster Context ports `8081` and `8082`.
-The example will therefore not complete automatic retrieval merely by setting
-the URLs. The deployment owner must provide reviewed policy for those paths,
-or use an approved **private** reachable HTTPS route, and then prove it with a
-real request. Do not add public ingress merely to make the example work.
+ingress rule, DNS/routing, and the actual listening service. Context's policy
+permits the selected Slackbot on both `8081` and `8082`. The reviewed Centaur
+chart still needs the additive caller rules in
+[`context-peers.example.yaml`](../deploy/context-peers.example.yaml); that file
+also admits Context to the selected PostgreSQL server. For subscription inference,
+the chart's `apiRs.curatorInference.enabled` setting admits Context to api-rs.
+The [reference configuration](kubernetes-reference.md) specifies matching labels,
+DNS, Secrets, and service names. Review and adapt it before applying any peer
+policy, then prove real traffic with an enforcing CNI. Setting URLs or passing a
+manifest dry run alone does not establish connectivity. Keep all access private.
 If pod labels or namespaces differ, the checked-in selectors will not match;
 adapt them rather than assuming Centaur uses the maintainer's labels.
 

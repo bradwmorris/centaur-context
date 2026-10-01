@@ -1,0 +1,28 @@
+# Merge into a reviewed DISPOSABLE Centaur configuration; this is not a complete
+# Centaur install. See docs/kubernetes-reference.md. Contains no credentials.
+nameOverride: centaur
+fullnameOverride: centaur
+networkPolicy:
+  enabled: true
+  apiIngressSourceNamespaces: []
+ingress:
+  enabled: false
+apiRs:
+  curatorInference:
+    enabled: true
+sandbox:
+  codexAuthMode: access_token
+slackbotv2:
+  enabled: true
+  instances: []
+  interactionSink:
+    url: http://centaur-context:8082/api/v2/ingest/slack/interactions
+    timeoutMs: 5000
+    secretName: centaur-context-env
+    secretKey: CHAT_INGEST_API_TOKEN
+  contextBuilder:
+    url: http://centaur-context:8081/api/v2/context
+    timeoutMs: 1500
+    limit: 10
+    secretName: centaur-context-env
+    secretKey: AGENT_API_TOKEN

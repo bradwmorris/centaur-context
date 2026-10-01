@@ -25,6 +25,8 @@ spec:
               app.kubernetes.io/component: slackbotv2
       ports:
         - protocol: TCP
+          port: 8081
+        - protocol: TCP
           port: 8082
   egress:
     - to:
