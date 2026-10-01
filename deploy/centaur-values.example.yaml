@@ -1,6 +1,7 @@
 # Adapt to your reviewed Centaur configuration; this is not a complete install.
 # See docs/kubernetes-reference.md. Preserve existing release names and instances
 # unless intentionally changing them, and adapt peer selectors to match. No credentials.
+# Do not pass this whole file as a Helm override for an existing installation.
 nameOverride: centaur
 fullnameOverride: centaur
 networkPolicy:

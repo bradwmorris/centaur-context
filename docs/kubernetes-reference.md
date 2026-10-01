@@ -40,10 +40,15 @@ event capture, and Memory maintenance are optional.
 
 ## Network and configuration agreement
 
-Merge [`centaur-values.example.yaml`](../deploy/centaur-values.example.yaml)
-into the reviewed Centaur values. It is a fragment, not complete Centaur
-configuration. Retain the chart's existing default-deny, DNS, Slack API, sandbox,
-and control-plane rules. Review the rendered manifests from that exact source.
+Use [`centaur-values.example.yaml`](../deploy/centaur-values.example.yaml) as a
+field-by-field reference, not as a replacement values file or an unchanged Helm
+override. Its release-name overrides and `instances: []` describe this single-bot
+example; preserve your existing release identity, instance list, authentication,
+and ingress settings. Copy only the Context hook settings you intend to enable,
+and adapt the URLs and peer selectors to your existing names. Enable the model
+fragment only when configuring subscription inference. Retain the chart's
+default-deny, DNS, Slack API, sandbox, and control-plane rules, then inspect the
+rendered manifests before applying.
 
 The Context installer applies only Context-owned
 [`network-policy.yaml`](../deploy/network-policy.yaml). The three policies in
