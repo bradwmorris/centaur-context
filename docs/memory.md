@@ -1,9 +1,13 @@
 # Event memory and background curation
 
-Memory records meaningful activity in one explicit sentence. Chat capture remains
-append-only and human-grounded; a request does not prove completion. It skips
-routine status traffic and explicit synthetic tests. Original research belongs
-in Notes and Sources.
+Memory records meaningful activity in one explicit sentence. Chat capture stores
+conversation messages independently of Memory extraction. Conversation Memory
+extraction is append-only and human-grounded; a request does not prove completion.
+It skips routine status traffic and explicit synthetic tests when proposing
+Memories, without discarding the captured messages. Original research belongs
+in Notes and Sources, created through explicit write paths rather than conversation
+Memory extraction. Background maintenance of generated Memories is a separate,
+optional worker, described below.
 
 `MEMORY_CAPTURE_ENABLED=true` enables deterministic capture of newly committed
 Task/Source/Note creations. It uses Object Events, not assistant success claims.
