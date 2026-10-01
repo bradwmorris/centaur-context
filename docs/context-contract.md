@@ -14,6 +14,13 @@ and published at Centaur's generic repository-overlay path
 - `context_read` reads complete typed Objects and bounded supporting data.
 - `context_apply` validates and commits one atomic, idempotent write batch.
 
+In Centaur, all three use the agent listener and `AGENT_API_TOKEN`, exposed as
+the proxy-injected `CENTAUR_CONTEXT_API_TOKEN`. Principal and thread headers are
+required; apply also requires an `Idempotency-Key` header matching the body's
+`idempotency_key`. No separate Note/Task writer token is needed for universal
+writes. See [API authentication](api.md#authentication) and
+[tool setup](setup.md#optional-agent-tools) for the transport configuration.
+
 ## Writable records
 
 Normal interactive agents may create, update, and archive Tasks, Entities,
@@ -28,13 +35,16 @@ archive Event is retained. Other protected archival remains denied. Supporting
 Artifacts may be appended, but only the specialist Source-ingestion path may
 promote an Artifact as a Source's canonical captured content.
 
-New Objects require a meaningful Connection except Insight and Question Notes,
+New Objects require a meaningful Connection except Idea and Fact Notes,
 which may stand alone without a Source, Connection, or originating Chat. Later
 Connections can be added when justified; never invent one to save an idea.
 Excerpts retain their evidence and connectivity requirements. A verified current
 Chat is connected deterministically as provenance in the same transaction.
 The contract's `standalone_note_intents` lists the exceptions to
-`new_objects_require_connection`.
+`new_objects_require_connection`, including retained legacy `insight` and
+`question` values. New Note creation accepts `idea`, `excerpt`, and `fact`;
+legacy values remain readable and accepted on updates, without automatic
+conversion. See [Note intents and compatibility](schema.md#note-intents-and-compatibility).
 
 ## Object descriptions
 
@@ -56,6 +66,10 @@ retain the history.
 immutable Object creator attribution. New Tasks require an active User assignee;
 agent/system creation requires `due_at`. `work_kind` is `general` or `code`;
 code work requires a canonical `https://github.com/owner/repo/issues/number` URL.
+Human creation may omit `due_at`, but still requires an active User assignee and
+an Issue for code work. Once a due date is set, it cannot be cleared. Entering
+`doing` requires a nonempty `brief_markdown`; agent execution also requires the
+assignee and due date. The assignee is a User Object ID, not a principal string.
 Every supplied issue URL is validated across write paths. Existing records remain
 readable and unrelated edits remain possible; repair missing assignment, date and
 brief before agent execution. Never guess historical creator/owner/date values.

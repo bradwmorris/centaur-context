@@ -118,9 +118,12 @@ ontology in Centaur.
 ## Curator model transport is a separate decision
 
 The two hooks above capture and retrieve context. Automatic curation separately
-needs a model endpoint. The currently tested default, `centaur_subscription`,
+needs a model endpoint. The default transport, `centaur_subscription`,
 calls a purpose-bound private inference route added later in the maintainer's
 Centaur fork. That inference route is not part of upstream Centaur.
+Use the [model configuration guidance](setup.md#3-create-the-kubernetes-secret)
+to match the exact model and broker; the reference combination still requires
+disposable end-to-end verification.
 
 Context also implements `direct_api`, a metered provider-key transport currently
 classified as an explicit rollback path. Before a general extension release,

@@ -27,6 +27,22 @@ trusted transport, never in an agent sandbox. JSON successes use
 `{"error":{"code":"...","message":"..."}}`. IDs are UUIDs. A repeated
 idempotent write must reuse its original key and identical body.
 
+The normal agent path is `context_search`, `context_read`, and `context_apply`
+on port `8081`. All three use `AGENT_API_TOKEN`; the Python client's
+`CENTAUR_CONTEXT_API_TOKEN` tool secret is supplied through Centaur's credential
+proxy. Apply requires an `Idempotency-Key` header matching the body field
+`idempotency_key`; the client supplies it automatically. The optional execution
+header is accepted by the API but is not automatically added by this Python
+client. Configure the service URL and proxy host together as described in
+[tool setup](setup.md#optional-agent-tools).
+
+Universal writes cover ordinary Tasks, Entities, Sources, Notes, Themes, and
+explained Connections under the [Context contract](context-contract.md).
+System-managed records and protected-record restrictions still apply. The
+separate Note/Task writer and purpose-bound workflow listeners remain available
+for existing specialist callers; their credentials do not replace agent
+authentication or grant general maintenance authority.
+
 ## Endpoints
 
 The optional private Codex listener (loopback port 8090 by default) exposes
@@ -63,7 +79,7 @@ The request column lists body fields unless it says `query` or `path`.
 | Agent | POST | `/api/v2/theme-assignments/{id}/archive` | required `expected_revision` |
 | Note/Task writer | POST | `/api/v2/notes` | required `title`, `description`, `content`, `intent`; optional format, provenance, Source/Note links, and Excerpt evidence |
 | Note/Task writer | POST | `/api/v2/objects/{id}/artifacts` | append immutable supporting material; required `kind`, content or URI, capture outcome, and `Idempotency-Key` |
-| Note/Task writer | POST | `/api/v2/tasks` | required `title`, `description`; optional status, priority, owner, due date and source links |
+| Note/Task writer | POST | `/api/v2/tasks` | required `title`, `description`, active User `owner_object_id`, RFC3339 `due_at`; `work_kind: "code"` also requires `github_issue_url`; optional status, priority, brief and source links |
 | Note/Task writer | PATCH | `/api/v2/tasks/{id}` | required `expected_revision`; include only fields to change |
 | Slack ingestion | POST | `/api/v2/ingest/slack/interactions` | Slack surface and thread IDs, messages, interaction state and Run metadata |
 | Slack ingestion | POST | `/api/v2/ingest/runs/usage` | Normalized model-usage record for an existing Run |
@@ -107,8 +123,8 @@ ranking, or evidence excerpts to Object discovery.
 
 ## Minimal examples
 
-The public Python package exposes exactly `context_search`, `context_read`, and
-`context_apply`. For example:
+The public Python package's three universal record commands are `context_search`,
+`context_read`, and `context_apply`. For example:
 
 ```bash
 context_search 'deployment decision' --object-type task --limit 10
@@ -122,6 +138,11 @@ are current snapshots of at most 600 Unicode characters after trimming. They
 say what the Object is and why it matters in the current Context; Events and
 Runs retain change history.
 
+Replace the illustrative User and deployment Object UUIDs below with verified
+active records, and choose the actual agreed due date. This is a general review
+Task. For code work, use `work_kind: "code"` and supply the existing canonical
+`https://github.com/owner/repo/issues/number` in `github_issue_url`.
+
 ```json
 {
   "contract_version": "1.1.0",
@@ -133,7 +154,14 @@ Runs retain change history.
       "kind": "task",
       "title": "Review deployment",
       "description": "Review the proposed deployment and record the decision. This Task keeps the release approval explicit and reviewable.",
-      "fields": {"status": "todo", "priority": "medium"}
+      "fields": {
+        "status": "todo",
+        "priority": "medium",
+        "work_kind": "general",
+        "owner_object_id": "00000000-0000-0000-0000-000000000002",
+        "due_at": "2026-10-09T17:00:00Z",
+        "brief_markdown": "Review the proposed deployment. Acceptance: record the approval decision and evidence. Next action: read the linked deployment record."
+      }
     },
     {
       "operation": "create_connection",
@@ -152,6 +180,16 @@ returns the stored response; the same key with a different body is rejected.
 Use `update_object` with `expected_revision` to refresh a materially stale
 title or description. Put a known material change and its new description in
 the same batch; do not append dated status updates to the description.
+
+Task creation rules apply to both universal and separate writer endpoints.
+Every new Task needs an active canonical User assignee, distinct from creator
+attribution. Agent/system creation also needs `due_at`. Human creation may omit
+the date; code Tasks still need an Issue regardless of actor. Entering `doing`
+requires a nonempty brief, an active assignee, and (for agents) a due date.
+Once set, the due date cannot be cleared. Legacy Tasks with missing fields stay
+readable and permit unrelated updates, but assignment changes and execution must
+satisfy the current checks; do not invent missing values. See
+[Actionable Tasks](context-contract.md#actionable-tasks) for claims and execution.
 
 Retrieve context for the authenticated thread:
 
@@ -188,7 +226,8 @@ receive priority when the 12,000-character packet budget requires omission.
 }
 ```
 
-Create a Note through the separate writer:
+For callers retaining the separate Note writer, create a Fact as follows
+(normal interactive agents use `context_apply`):
 
 ```bash
 curl 'http://centaur-context-note-write:8084/api/v2/notes' \
@@ -197,7 +236,7 @@ curl 'http://centaur-context-note-write:8084/api/v2/notes' \
   --header 'X-Centaur-Thread-Key: <provider:workspace:channel:thread>' \
   --header 'Idempotency-Key: <stable-operation-id>' \
   --header 'Content-Type: application/json' \
-  --data '{"title":"Decision","description":"Records the approved deployment decision and why it was selected.","content":"Use the private service endpoint.","intent":"insight","content_format":"markdown"}'
+  --data '{"title":"Decision","description":"Records the approved deployment decision and why it was selected.","content":"Use the private service endpoint.","intent":"fact","content_format":"markdown"}'
 ```
 
 Creation returns HTTP `201` with the canonical Note under `data`, including its
@@ -206,9 +245,14 @@ timestamps. Excerpts additionally require exactly one
 `derived_from_source_object_ids` entry, its `source_artifact_id`, and a
 `source_locator` object whose kind is `timestamp`, `page`, `section`, or
 `text_offset`; the submitted Excerpt content must occur verbatim in that
-Artifact's captured text. Insights and Questions may include
+Artifact's captured text. Idea and Fact Notes may include
 `derived_from_note_object_ids` so their Note relationships are committed in
 the same idempotent operation.
+
+New Notes accept only `idea`, `excerpt`, and `fact`. Legacy `insight` and
+`question` values remain stored/readable and accepted on updates; they are not
+aliases for the current choices. See the [intent mapping](schema.md#note-intents-and-compatibility)
+for unclassified Notes and the universal creation default.
 
 ## Internal surfaces
 
@@ -237,7 +281,7 @@ The listener exposes only these routes:
 | Networking mutation | GET | `/api/v2/objects/{id}` | Return one active canonical Entity, including `entity_kind`; non-Entities are not visible. |
 | Networking mutation | POST | `/api/v2/objects` | Create or replay one Entity from exactly `kind`, `title`, `description`, `entity_kind`, and `provenance`; `kind` must be `entity`. |
 | Networking mutation | POST | `/api/v2/connections` | Create or reuse one unprotected Connection from exactly the two Object IDs, `kind`, `description`, `provenance`, and `protected: false`. |
-| Networking mutation | POST | `/api/v2/tasks` | Create or replay one unassigned `todo` Task from exactly `title`, `description`, `status`, `priority`, `agent_suitable: false`, `provenance`, and an empty `derived_from_source_object_ids` array. |
+| Networking mutation | POST | `/api/v2/tasks` | Create or replay one assigned general `todo` Task from exactly `title`, `description`, `status`, `priority`, `owner_object_id`, RFC3339 `due_at`, nonempty `brief_markdown`, `agent_suitable: false`, `provenance`, and an empty `derived_from_source_object_ids` array. |
 
 Unknown JSON and query fields fail. Other methods and paths do not exist on
 this listener. Entity kinds are limited to `person`, `organization`, `product`,
@@ -247,6 +291,10 @@ Task priorities use the canonical allowlists. Create calls require a stable
 Connection, or Task record with recorded provenance. Provenance must include a
 non-empty `source_type`. A durable caller must reuse both the key and body on
 retry.
+
+This workflow requires an active canonical User assignee and fixes
+`work_kind=general`; it does not accept code-Task fields. Its exact replay checks
+include the assignee, due date, and brief.
 
 Duplicate resolution deliberately remains fail-closed in the calling workflow:
 search returns every candidate and never chooses one. The workflow may reuse

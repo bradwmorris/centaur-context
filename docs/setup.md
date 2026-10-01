@@ -200,14 +200,25 @@ CURATOR_MODEL_TRANSPORT
 CURATOR_MODEL_TIMEOUT_SECONDS
 ```
 
-The audited proof of concept uses `centaur_subscription`, Centaur's private
+The reference configuration uses `centaur_subscription`, Centaur's private
 inference URL, a purpose-bound `CENTAUR_CONTEXT_API_KEY`, and exact model
-`gpt-5.6-luna`. That private inference route is another change in the
+`gpt-6-luna`, matching [`.env.example`](../.env.example). That private inference
+route is another change in the
 maintainer's Centaur fork. It is separate from the two Slack hooks described in
 Step 6 and is not available in stock Centaur. Use the actual **private**
 api-rs address from the deployment plan, not an example hostname. Context
 must be able to reach that route; its token must not grant broader Centaur API
 access.
+
+Context also accepts explicit legacy `gpt-5.6-luna` subscription configuration;
+it never translates that name to `gpt-6-luna`. The
+[reviewed broker source](https://github.com/bradwmorris/centaur/blob/f44ce662f3b3fca63bd4c162add332cb43ec035c/services/api-rs/crates/centaur-api-server/src/curator_inference.rs)
+accepts only `gpt-6-luna`, so the legacy setting needs a different compatible
+broker. Extraction and Chat summaries request Low effort; optional Memory
+maintenance independently requests `gpt-6-luna` High and its maintenance schema.
+Subscription receipts must match the requested model and effort. This is source
+compatibility guidance, not an end-to-end tested revision pin. Verify the actual
+broker/model pair before enabling it; see [Memory transport guidance](memory.md#paired-broker-configuration-and-failures).
 
 Without model settings, Curator Runs stay queued. `direct_api` exists as a
 rollback path. If its model provider is outside the cluster, review
@@ -358,18 +369,31 @@ The original hook commits are history, not an installation recipe.
 [`compatibility.toml`](../compatibility.toml) must pin a current, tested Centaur
 revision before this can be presented as a supported working installation.
 
-### Optional agent tool
+### Optional agent tools
 
-The hooks are automatic. The Python tool in [`tools/centaur_context`](../tools/centaur_context)
-is different: an agent can use it when it needs an extra search or an authorized
-Note or Task write.
+The hooks are automatic. For deliberate agent interaction, load this release's
+[`tools/centaur_context`](../tools/centaur_context) through Centaur's approved
+overlay mechanism. The normal record tools are `context_search`, `context_read`,
+and `context_apply`. They use the agent listener on port `8081` for both reads
+and writes. `context_apply` can create, update, archive, and connect ordinary
+Tasks, Entities, Sources, Notes, and Themes, subject to the
+[Context contract](context-contract.md); protected and system-managed records
+retain their restrictions.
 
-If the developer wants explicit agent searches or authorized Note/Task writes,
-load this release's `tools` directory through Centaur's overlay mechanism. Give
-iron-proxy `AGENT_API_TOKEN` for reads and the separate `NOTE_WRITE_API_TOKEN`
-for writes. Never give either real token to the agent sandbox. This tool is
-optional; an overlay can deliver the tool, but an overlay alone does not add
-the automatic Slackbot hooks.
+Configure `CENTAUR_CONTEXT_URL` for that private listener. In Centaur's trusted
+credential proxy, map the tool secret `CENTAUR_CONTEXT_API_TOKEN` to Context's
+`AGENT_API_TOKEN`. Adapt the tool manifest's allowed host to the chosen service
+hostname. The sandbox uses proxy placeholders, never the real token or a database
+DSN. Requests require `X-Centaur-Principal-Id` and `X-Centaur-Thread-Key`;
+`X-Centaur-Execution-Id` is optional. The Python client resolves the principal
+from Centaur's permissions API or supplied principal context and reads
+`CENTAUR_THREAD_KEY`. It copies an apply body's stable `idempotency_key` to the
+required matching `Idempotency-Key` header. See [API authentication](api.md#authentication).
+
+The separate Note/Task writer on `8084` remains a compatibility interface for
+callers using those endpoints. It is not required by `context_apply` and its
+token is not a prerequisite for ordinary agent writes. An overlay can deliver
+these optional tools, but does not add the automatic Slackbot hooks.
 
 ### Hook configuration
 
@@ -403,10 +427,10 @@ The required paths for the features shown above are:
 
 - Slackbot v2 to port `8082` for conversation ingestion.
 - Slackbot v2 to port `8081` for automatic context retrieval.
-- Iron-proxy to port `8081` for explicit agent reads **only if the optional
-  tool is enabled**.
-- Iron-proxy to port `8084` for authorized Note and Task writes **only if
-  those writes are enabled**.
+- Iron-proxy to port `8081` for explicit agent search/read/apply **only if the
+  optional tools are enabled**.
+- Iron-proxy to port `8084` **only if a caller uses the retained Note/Task
+  writer endpoints**.
 - Context to api-rs port `8080` **only if subscription Curator inference is
   enabled**; direct-provider mode instead needs reviewed provider egress.
 
@@ -591,11 +615,11 @@ For one-time imports, embedding rollout, and trace accounting, see
 the [agent client](../tools/centaur_context/client.py) and
 [CLI](../tools/centaur_context/cli.py) define the tool contract.
 
-General reads use `CENTAUR_CONTEXT_API_TOKEN`. Note creation and Task creation or
-updates require the separate
-`CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`, a per-operation idempotency key, and the private
-`centaur-context-note-write:8084` service. It never falls back to the read token.
-Theme creation is human-controlled; authorized agents can assign existing Themes.
+Normal agent search/read/apply uses `CENTAUR_CONTEXT_API_TOKEN` on port `8081`,
+including Theme creation and explained Connections. Retained Note/Task writer
+calls instead use `CENTAUR_CONTEXT_NOTE_WRITE_TOKEN`, a per-operation idempotency
+key, and `centaur-context-note-write:8084`; those calls never fall back to the
+agent token. Keep specialist credentials separate from normal agent authority.
 Optional Source-intake and External-action services are disabled unless their
 own credentials and allowed principals are configured. Source intake requires
 `SOURCE_INTAKE_API_TOKEN` and `SOURCE_INTAKE_ALLOWED_PRINCIPAL`; research
