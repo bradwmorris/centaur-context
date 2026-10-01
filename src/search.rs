@@ -207,13 +207,15 @@ pub async fn context(
         .map(|item| {
             let id = item.object.id;
             let connection_count = item.connection_count;
+            let subtype = general_subtypes.remove(&id);
+            let corrections = subtype_corrections(subtype.as_ref());
             RetrievedObject {
                 id,
                 kind: item.object.kind,
                 title: item.object.title,
                 description: item.object.description,
                 revision: item.object.revision,
-                subtype: general_subtypes.remove(&id),
+                subtype,
                 relevance: Relevance {
                     score: connection_count as f64,
                     rationale: format!(
@@ -222,7 +224,7 @@ pub async fn context(
                 },
                 evidence: None,
                 connections: general_connections.remove(&id).unwrap_or_default(),
-                corrections: Vec::new(),
+                corrections,
             }
         })
         .collect::<Vec<_>>();
@@ -359,6 +361,14 @@ async fn retrieve(
     Ok((retrieval.to_owned(), fused))
 }
 
+fn subtype_corrections(subtype: Option<&Value>) -> Vec<Value> {
+    subtype
+        .and_then(|value| value.get("corrections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn retrieved(
     item: Fused,
     subtype: Option<Value>,
@@ -369,6 +379,7 @@ fn retrieved(
         score: item.score,
         rationale: rationale(&item, context_builder),
     };
+    let corrections = subtype_corrections(subtype.as_ref());
     RetrievedObject {
         id: item.object.id,
         kind: item.object.kind,
@@ -379,7 +390,7 @@ fn retrieved(
         relevance,
         evidence: item.evidence,
         connections,
-        corrections: Vec::new(),
+        corrections,
     }
 }
 

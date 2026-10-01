@@ -63,7 +63,7 @@ These are distinct stored values, not automatic aliases: an old Insight is not
 silently rewritten as a Fact, nor a Question as an Idea. Universal creation
 defaults an omitted `intent` to `idea`; the separate Note-create endpoint requires
 an explicit current value. Existing Notes can retain their legacy value or be
-explicitly reclassified on update, subject to evidence and protection rules.
+explicitly reclassified on update, subject to evidence integrity rules.
 Idea and Fact Notes may stand alone; the contract also retains that allowance
 for legacy Insight and Question values.
 

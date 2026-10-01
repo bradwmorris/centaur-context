@@ -36,9 +36,9 @@ header is accepted by the API but is not automatically added by this Python
 client. Configure the service URL and proxy host together as described in
 [tool setup](setup.md#optional-agent-tools).
 
-Universal writes cover ordinary Tasks, Entities, Sources, Notes, Themes, and
-explained Connections under the [Context contract](context-contract.md).
-System-managed records and protected-record restrictions still apply. The
+Universal writes cover all eight Object kinds and explained Connections under
+the [Context contract](context-contract.md). Explicit corrections can edit
+protected and imported records while preserving original evidence. The
 separate Note/Task writer and purpose-bound workflow listeners remain available
 for existing specialist callers; their credentials do not replace agent
 authentication or grant general maintenance authority.

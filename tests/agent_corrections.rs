@@ -513,6 +513,22 @@ async fn producer_replay_preserves_explicit_user_chat_and_message_corrections() 
             .to_string()
             .contains("Original capture had a transcription error.")
     );
+    let packet = centaur_context::search::context(
+        &pool,
+        None,
+        TextSearchConfig::SIMPLE,
+        "uniquecorrectionsearchword",
+        None,
+        chat,
+        10,
+    )
+    .await
+    .unwrap();
+    let corrected = packet.objects.iter().find(|item| item.id == chat).unwrap();
+    assert_eq!(
+        corrected.corrections[0]["representation"]["content"],
+        "uniquecorrectionsearchword"
+    );
     db::queue_missing_embeddings(
         &pool,
         "synthetic-correction-model",

@@ -2,7 +2,7 @@
 
 Issue: https://github.com/bradwmorris/centaur-context/issues/132
 
-Status: implementation design; release requires owner approval of the concrete
+Status: implemented and synthetically verified; release requires owner approval of the concrete
 PR revision and deployment destination. Synthetic checks do not establish live
 acceptance.
 
@@ -86,13 +86,14 @@ self-review exact diff and publish draft PR with family-by-family evidence.
 
 ## Acceptance evidence
 
-Implementation and synthetic verification are in progress; final evidence is
-recorded in docs/verification/132/README.md. No release/live acceptance is claimed.
+Implementation and synthetic verification evidence is recorded in
+[the verification report](../verification/132/README.md). No release/live acceptance is claimed.
 
 ## Concurrent integration
 
-Readiness PR #133 at `2215da4d239c34a49e27e26a1d82af947cf50165` shares the
-`b822d841294c814f1e04bb4358f6bde53a08d402` base. Its transport, compatibility
-qualification and Note-intent documentation should be retained. This Issue
-supersedes its blanket-protection descriptions and increments schema to 37.
-Recheck both heads and reconcile documentation before any approved release.
+Readiness PR #133 merged as `13987f7e14aeac32cdfc40fbe7a8f4cd516fb079` and
+is integrated in this branch. Its authentication, onboarding, Task requirements,
+and Note-intent guidance are preserved. This change supersedes blanket-protection
+descriptions and increments schema to 37. Verification runs against that
+integrated base; live rollout still requires approval of the exact revision and
+destination.
