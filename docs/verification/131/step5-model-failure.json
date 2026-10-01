@@ -1,0 +1,17 @@
+{
+  "fixture": "synthetic Project Harbor conversation",
+  "run_status_at_stop": "running",
+  "attempts_at_stop": 2,
+  "inference_failure": {
+    "model": "gpt-6-luna",
+    "retryable": true,
+    "request_id": "curator-c8463c70-23b2-433b-b90a-8e93095ff671-initial",
+    "duration_ms": 92607,
+    "execution_id": "5b79c6ca-2b36-4928-ad96-a07986291ecd",
+    "provider_code": null,
+    "classification": "transport",
+    "provider_status": null,
+    "reasoning_effort": "low"
+  },
+  "model_output_observed": false
+}

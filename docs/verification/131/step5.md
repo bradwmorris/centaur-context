@@ -5,6 +5,11 @@ This receipt does not establish a tested Centaur/Context release pair or authori
 Step 6. Synthetic caller pods exercised the real Context application and database;
 Centaur, Slackbot, iron-proxy, and a model were not running in this fixture.
 
+This is the initial checkpoint. The [follow-up](step5-followup.md) records later
+Slack-send authorization, a source-linked Context build, and a failed attempt to
+use the existing supported model broker. It supersedes the prerequisites below
+where explicitly stated; full paired acceptance remains incomplete.
+
 ## Versions and scope
 
 - Context deployment examples and installer: branch commit
