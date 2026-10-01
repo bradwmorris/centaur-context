@@ -18,7 +18,7 @@ The current Object types are:
 - **Entity:** a subject such as a project, organization, product, or concept.
 - **Memory:** an event or insight worth retaining.
 - **Source:** a work used as evidence, such as an article or paper.
-- **Note:** one atomic excerpt, insight, or question. Legacy Notes may remain
+- **Note:** one atomic Idea, Excerpt, or Fact. Legacy Notes may remain
   unclassified until a human reviews them.
 - **Theme:** an approved category for organizing knowledge.
 
@@ -46,10 +46,30 @@ The Object types and allowed relationships form the **ontology**: the shared voc
 
 Objects are the main knowledge records, but they do not hold everything. Chat messages keep the underlying conversation. Artifacts can preserve captured text, files, or references attached to an Object. A Source identifies a work; its current Artifact is the canonical captured content selected by Source intake, while other Artifacts are supporting material and never silently replace it.
 
-Atomic Notes have one of three intents: `excerpt`, `insight`, or `question`.
+### Note intents and compatibility
+
+New Notes use the current UI choices and matching lowercase API/storage values:
+
+| Display name | API/storage `intent` | Compatibility |
+| --- | --- | --- |
+| Idea | `idea` | Accepted for creation and updates. |
+| Excerpt | `excerpt` | Accepted for creation and updates; requires exact Source evidence. |
+| Fact | `fact` | Accepted for creation and updates. |
+| Insight / Question (legacy) | `insight` / `question` | Retained in storage and reads; accepted on updates, not new Note creation. |
+| Legacy / unclassified | `null` | Retained for unclassified Notes; not a new Note creation choice. |
+
+These are distinct stored values, not automatic aliases: an old Insight is not
+silently rewritten as a Fact, nor a Question as an Idea. Universal creation
+defaults an omitted `intent` to `idea`; the separate Note-create endpoint requires
+an explicit current value. Existing Notes can retain their legacy value or be
+explicitly reclassified on update, subject to evidence and protection rules.
+Idea and Fact Notes may stand alone; the contract also retains that allowance
+for legacy Insight and Question values.
+
 An Excerpt preserves exact wording and identifies one Source, one of that
 Source's Artifacts, and a validated timestamp, page, section, or text-offset
-locator. Insights and Questions can be `derived_from` Sources and other Notes.
+locator. Idea and Fact Notes, and legacy Insights and Questions, can be
+`derived_from` Sources and other Notes.
 This keeps source evidence separate from interpretation without introducing
 parallel Object types.
 

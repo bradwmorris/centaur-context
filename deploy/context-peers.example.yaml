@@ -1,0 +1,65 @@
+# Opt-in additions to the Centaur chart's existing policies, NOT installed by
+# install-kubernetes.sh. Review docs/kubernetes-reference.md before applying.
+# Same namespace, Helm release/name "centaur", single Slackbot instance.
+# The base chart must retain DNS and its ordinary Centaur/Slack egress rules.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-context-slackbot-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: centaur
+      app.kubernetes.io/instance: centaur
+      app.kubernetes.io/component: slackbotv2
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: centaur-context
+      ports:
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8082
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-context-proxy-egress
+spec:
+  podSelector:
+    matchLabels:
+      centaur.ai/iron-proxy: "true"
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: centaur-context
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+# This selects the database server, not a database or role. Context still uses
+# only its separate database and centaur_context_app credentials.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-context-postgres-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: centaur
+      app.kubernetes.io/instance: centaur
+      app.kubernetes.io/component: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: centaur-context
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -14,7 +14,7 @@ deployment_profile = "single-organization-local-or-private-network"
 [centaur]
 integration = "pinned overlay tool source plus authenticated Slack post-response ingestion"
 compatibility = "contract-based"
-notes = "The full Slack loop requires interaction-sink and context-builder hooks carried in the maintainer's Centaur fork. The tested subscription Curator transport also uses a fork-only inference route. No upstream Centaur semantic-version range is claimed. See docs/centaur-integration.md."
+notes = "The full Slack loop requires interaction-sink and context-builder hooks carried in the maintainer's Centaur fork. Optional subscription Curator transport also requires a compatible fork-only inference route; no fresh paired-release certification is claimed. No upstream Centaur semantic-version range is claimed. See docs/centaur-integration.md."
 
 [policy]
 public_ingress = false

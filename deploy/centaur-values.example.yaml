@@ -1,0 +1,32 @@
+# Adapt to your reviewed Centaur configuration; this is not a complete install.
+# See docs/kubernetes-reference.md. Preserve existing release names and instances
+# unless intentionally changing them, and adapt peer selectors to match. No credentials.
+# Do not pass this whole file as a Helm override for an existing installation.
+nameOverride: centaur
+fullnameOverride: centaur
+networkPolicy:
+  enabled: true
+  apiIngressSourceNamespaces: []
+ingress:
+  enabled: false
+# Optional subscription inference: omit this apiRs/sandbox fragment when not
+# enabling a model connection; retain your existing Centaur authentication setup.
+apiRs:
+  curatorInference:
+    enabled: true
+sandbox:
+  codexAuthMode: access_token
+slackbotv2:
+  enabled: true
+  instances: []
+  interactionSink:
+    url: http://centaur-context:8082/api/v2/ingest/slack/interactions
+    timeoutMs: 5000
+    secretName: centaur-context-env
+    secretKey: CHAT_INGEST_API_TOKEN
+  contextBuilder:
+    url: http://centaur-context:8081/api/v2/context
+    timeoutMs: 1500
+    limit: 10
+    secretName: centaur-context-env
+    secretKey: AGENT_API_TOKEN
