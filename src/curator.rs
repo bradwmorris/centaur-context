@@ -418,6 +418,7 @@ pub async fn run_detail(pool: &PgPool, id: Uuid) -> Result<CuratorRunDetail, Cur
     let messages: Vec<crate::db::ChatMessage> = sqlx::query_as(
         r#"SELECT m.id,m.chat_object_id,m.provider_message_id,m.sender_user_object_id,
                   o.title AS sender_title,u.user_kind AS sender_kind,m.content,
+                  (SELECT to_jsonb(c) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id AND c.object_id=m.chat_object_id ORDER BY object_revision DESC LIMIT 1) AS correction,
                   m.source_created_at,m.ingestion_sequence,m.ingested_at
            FROM chat_messages m
            JOIN users u ON u.object_id=m.sender_user_object_id
@@ -1555,6 +1556,7 @@ async fn restore_object(
 
 #[derive(Debug, FromRow, Serialize)]
 struct WorkerMessage {
+    correction: Option<Value>,
     id: Uuid,
     provider_message_id: String,
     sender_user_object_id: Uuid,
@@ -1890,7 +1892,8 @@ async fn worker_context(
 ) -> Result<(Vec<WorkerMessage>, crate::search::SearchPacket), CuratorError> {
     let messages: Vec<WorkerMessage> = sqlx::query_as(
         r#"SELECT m.id,m.provider_message_id,m.sender_user_object_id,o.title AS sender_title,
-                  u.user_kind AS sender_kind,m.content,m.source_created_at
+                  u.user_kind AS sender_kind,m.content,m.source_created_at,
+                  (SELECT to_jsonb(c) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id AND c.object_id=m.chat_object_id ORDER BY object_revision DESC LIMIT 1) AS correction
            FROM chat_messages m
            JOIN objects o ON o.id=m.sender_user_object_id
            JOIN users u ON u.object_id=m.sender_user_object_id
@@ -2039,7 +2042,7 @@ Create zero or more Memories only for a meaningful event, explicit decision, sta
 
 Never create an Entity, Source, Note, Task, Chat, User, Theme, or any other non-Memory Object. Never update or delete any Object, including a Memory. Never update or delete a Connection. A human request proves only that the request was made: without a trusted workflow-result message, describe what the human asked for and never claim the workflow succeeded, completed, created, updated, or connected anything.
 
-Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description is normally ONE plain sentence of about 15–35 words, at most two short sentences when essential. There is no minimum length. Name the actor, truthful action and concrete subject. Use the actual event time in happened_at; avoid relative time such as just or today. Use a truthful verb such as asked instead of adding caveats about what was not established. Keep IDs and evidence in provenance and Connections, not narrative boilerplate. Link only direct participants and affected objects, never incidental mentions or guessed themes. A request and a completed action are different events. Do not re-create an event already supported by the same message IDs in an existing Memory. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
+Read attached correction assertions alongside original messages; preserve their distinct authorship and do not present a correction as an original quotation. Never create a Memory from an unanswered question, a failed or empty search, an authentication or authorization error, a timeout, missing tool access, agent uncertainty, or an assistant report that evidence could not be verified. Those are transient operational outcomes, not durable knowledge. Every operation cites supporting_message_ids from this run. Use only IDs from candidate_objects for existing non-Chat endpoints. A Memory description is normally ONE plain sentence of about 15–35 words, at most two short sentences when essential. There is no minimum length. Name the actor, truthful action and concrete subject. Use the actual event time in happened_at; avoid relative time such as just or today. Use a truthful verb such as asked instead of adding caveats about what was not established. Keep IDs and evidence in provenance and Connections, not narrative boilerplate. Link only direct participants and affected objects, never incidental mentions or guessed themes. A request and a completed action are different events. Do not re-create an event already supported by the same message IDs in an existing Memory. Never repeat only the title, use placeholders or vague meta text, copy transcript fragments, mention the model or generation process, or use connection counts for reconciliation."#;
     let system = if event_capture_enabled() {
         format!(
             "{system}\nActual Source, Note and Task creation outcomes are captured separately from committed Object Events. Do not duplicate those outcomes from chat prose, even if a human reports them. You may selectively record a meaningful request, decision or discussion instead."
@@ -2643,6 +2646,7 @@ mod tests {
 
     fn worker_message(id: Uuid, sender_kind: &str) -> WorkerMessage {
         WorkerMessage {
+            correction: None,
             id,
             provider_message_id: id.to_string(),
             sender_user_object_id: Uuid::new_v4(),
@@ -2815,6 +2819,7 @@ mod tests {
             },
             evidence: None,
             connections: vec![],
+            corrections: Vec::new(),
         };
         let candidates = crate::search::SearchPacket {
             query: "same person".into(),

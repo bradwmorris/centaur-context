@@ -69,20 +69,38 @@ pub(super) async fn insert_event(
     .bind(json!({"affected_object_ids":[object_id],"summary":changes.clone()}))
     .execute(&mut **tx)
     .await?;
-    insert_event_for_run(
-        tx,
-        run_id,
-        1,
-        actor,
-        entity_type,
-        entity_id,
-        object_id,
-        action,
-        idempotency_key,
-        from_revision,
-        to_revision,
-    )
-    .await?;
+    if let Some(before) = changes.get("before_state") {
+        insert_event_for_run_with_before(
+            tx,
+            run_id,
+            1,
+            actor,
+            entity_type,
+            entity_id,
+            object_id,
+            action,
+            idempotency_key,
+            from_revision,
+            to_revision,
+            Some(before.clone()),
+        )
+        .await?;
+    } else {
+        insert_event_for_run(
+            tx,
+            run_id,
+            1,
+            actor,
+            entity_type,
+            entity_id,
+            object_id,
+            action,
+            idempotency_key,
+            from_revision,
+            to_revision,
+        )
+        .await?;
+    }
     Ok(run_id)
 }
 
@@ -226,6 +244,7 @@ pub(crate) async fn target_snapshot(
           END)
           || jsonb_build_object('artifacts',COALESCE(
             (SELECT jsonb_agg(to_jsonb(a)-'content' ORDER BY a.created_at,a.id) FROM artifacts a WHERE a.object_id=o.id),'[]'::jsonb))
+          || jsonb_build_object('corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.object_id=o.id),'[]'::jsonb))
           FROM objects o WHERE o.id=$1"#,
     )
     .bind(target_id)

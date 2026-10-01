@@ -268,6 +268,11 @@ pub async fn update_connection(
         .unwrap_or_else(|| current.provenance.clone());
     let protected = changes.protected.unwrap_or(current.protected);
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM connections WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "connection", id).await?;
     let updated: Option<Connection> = sqlx::query_as(
         r#"UPDATE connections
            SET kind=$3,description=$4,provenance=$5,protected=$6,
@@ -295,7 +300,7 @@ pub async fn update_connection(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"kind": kind, "description": description, "protected": protected}),
+        json!({"before_state":before,"kind": kind, "description": description, "protected": protected}),
     )
     .await?;
     tx.commit().await?;
@@ -349,6 +354,11 @@ pub async fn archive_connection(
             .map_err(DbError::from);
     }
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM connections WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "connection", id).await?;
     let updated: Option<Connection> = sqlx::query_as(
         r#"UPDATE connections SET archived_at=now(),revision=revision+1,
            updated_by_type=$3,updated_by_id=$4,updated_at=now()
@@ -371,7 +381,7 @@ pub async fn archive_connection(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"archived": true}),
+        json!({"before_state":before,"archived": true}),
     )
     .await?;
     tx.commit().await?;

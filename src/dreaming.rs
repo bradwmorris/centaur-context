@@ -203,7 +203,7 @@ async fn read_selected_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Batch, db::D
     let connections:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(c) FROM connections c WHERE c.archived_at IS NULL AND (c.source_object_id=ANY($1) OR c.target_object_id=ANY($1)) ORDER BY c.id LIMIT 101")
         .bind(ids).fetch_all(&mut *tx).await?;
     let mut evidence:Vec<Value>=sqlx::query_scalar(
-        "SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'truncated',false,'at',m.source_created_at) \
+        "SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'correction',(SELECT to_jsonb(c) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id AND c.object_id=m.chat_object_id ORDER BY object_revision DESC LIMIT 1),'truncated',false,'at',m.source_created_at) \
          FROM chat_messages m JOIN objects o ON o.id=m.sender_user_object_id WHERE m.id::text IN \
           (SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(provenance->'supporting_message_ids')='array' THEN provenance->'supporting_message_ids' ELSE '[]'::jsonb END) FROM objects WHERE id=ANY($1)) \
          ORDER BY m.ingestion_sequence LIMIT 50")
@@ -227,7 +227,7 @@ async fn read_selected_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Batch, db::D
     // people and related events. These are read-only candidates, never authority.
     let connected: Vec<Uuid> = sqlx::query_scalar("WITH direct AS (SELECT source_object_id AS id FROM connections WHERE archived_at IS NULL AND target_object_id=ANY($1) UNION SELECT target_object_id FROM connections WHERE archived_at IS NULL AND source_object_id=ANY($1)) SELECT id FROM direct UNION SELECT c.source_object_id FROM connections c JOIN direct d ON c.target_object_id=d.id WHERE c.archived_at IS NULL UNION SELECT c.target_object_id FROM connections c JOIN direct d ON c.source_object_id=d.id WHERE c.archived_at IS NULL LIMIT 100")
         .bind(ids).fetch_all(&mut *tx).await?;
-    let origin_messages: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'truncated',false,'at',m.source_created_at,'context_only',true) FROM chat_messages m JOIN objects o ON o.id=m.sender_user_object_id WHERE m.chat_object_id=ANY($1) ORDER BY (SELECT min(abs(extract(epoch FROM (m.source_created_at-sm.happened_at)))) FROM memories sm WHERE sm.object_id=ANY($2)),m.ingestion_sequence LIMIT 50")
+    let origin_messages: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'chat_object_id',m.chat_object_id,'sender',o.title,'sender_id',o.id,'content',m.content,'correction',(SELECT to_jsonb(c) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id AND c.object_id=m.chat_object_id ORDER BY object_revision DESC LIMIT 1),'truncated',false,'at',m.source_created_at,'context_only',true) FROM chat_messages m JOIN objects o ON o.id=m.sender_user_object_id WHERE m.chat_object_id=ANY($1) ORDER BY (SELECT min(abs(extract(epoch FROM (m.source_created_at-sm.happened_at)))) FROM memories sm WHERE sm.object_id=ANY($2)),m.ingestion_sequence LIMIT 50")
         .bind(&connected).bind(ids).fetch_all(&mut *tx).await?;
     for message in origin_messages {
         if !evidence.iter().any(|e| e["id"] == message["id"]) {

@@ -378,8 +378,13 @@ pub async fn update_task(
     let brief_changed = changes.brief_markdown.is_some();
     let brief_markdown = changes.brief_markdown.unwrap_or(current.brief_markdown);
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM objects WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "object", id).await?;
     let updated: Option<Object> = sqlx::query_as(
-        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,revision=revision+1,
+        r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,explicitly_corrected=true,revision=revision+1,
            updated_by_type=$7,updated_by_id=$8,updated_at=now()
            WHERE id=$1 AND revision=$2 AND kind='task'
            RETURNING id,kind,title,description,protected,
@@ -430,7 +435,7 @@ pub async fn update_task(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_suitable": agent_suitable, "blocked_reason": blocked_reason, "completed_at": completed_at, "github_issue_url": github_issue_url, "brief_changed": brief_changed, "protected": protected}),
+        json!({"before_state":before,"title": title, "status": status, "priority": priority, "owner_object_id": owner_object_id, "agent_suitable": agent_suitable, "blocked_reason": blocked_reason, "completed_at": completed_at, "github_issue_url": github_issue_url, "brief_changed": brief_changed, "protected": protected}),
     )
     .await?;
     tx.commit().await?;

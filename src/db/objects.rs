@@ -399,9 +399,14 @@ pub async fn update_object(
         current.archived_at
     };
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM objects WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "object", id).await?;
     let updated: Option<Object> = sqlx::query_as(
         r#"UPDATE objects SET title=$3, description=$4, provenance=$5, protected=$6,
-           archived_at=$7, revision=revision+1, updated_by_type=$8, updated_by_id=$9,
+           archived_at=$7, explicitly_corrected=true,revision=revision+1, updated_by_type=$8, updated_by_id=$9,
            updated_at=now() WHERE id=$1 AND revision=$2
            RETURNING id,kind,title,description,protected,
              CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END AS lifecycle,
@@ -434,7 +439,7 @@ pub async fn update_object(
         idempotency_key,
         Some(expected_revision),
         updated.revision,
-        json!({"title": title, "description_changed": description != current.description, "protected": protected, "lifecycle": lifecycle}),
+        json!({"before_state":before,"title": title, "description_changed": description != current.description, "protected": protected, "lifecycle": lifecycle}),
     )
     .await?;
     tx.commit().await?;

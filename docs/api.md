@@ -36,9 +36,9 @@ header is accepted by the API but is not automatically added by this Python
 client. Configure the service URL and proxy host together as described in
 [tool setup](setup.md#optional-agent-tools).
 
-Universal writes cover ordinary Tasks, Entities, Sources, Notes, Themes, and
-explained Connections under the [Context contract](context-contract.md).
-System-managed records and protected-record restrictions still apply. The
+Universal writes cover all eight Object kinds and explained Connections under
+the [Context contract](context-contract.md). Explicit corrections can edit
+protected and imported records while preserving original evidence. The
 separate Note/Task writer and purpose-bound workflow listeners remain available
 for existing specialist callers; their credentials do not replace agent
 authentication or grant general maintenance authority.
@@ -303,7 +303,7 @@ may call Entity creation only when no match remains. An approved Task and its
 Entity link use separate stable Task and Connection keys so a partial failure
 can safely resume without duplicating either record.
 
-Owner-reviewed protected-record maintenance is available only on the optional
+Owner-reviewed operational maintenance is available on the optional
 intake listener with a separate maintenance credential and configured principal.
 See [reviewed maintenance](operations.md#reviewed-maintenance-on-the-intake-listener)
 for inventory, readback, exact-request approval and `/api/v2/maintenance/apply`.
@@ -320,7 +320,7 @@ These routes are not part of the interactive-agent tool contract.
 | Slack ingestion | GET | `/api/v2/ingest/routine-runs/{id}` | Read occurrence and current eligibility. |
 | Slack ingestion | PATCH | `/api/v2/ingest/routine-runs/{id}` | Bind execution thread/link or finish an occurrence. |
 
-The human API supports the same configuration/read/result paths and can accept a Review result. Agent authentication cannot access ingestion paths. Routine configuration requires an expected task revision and increments it, with an Object Event; protected tasks reject agent configuration. Enabling requires explicit confirmation, an active Ready/Review task, an owner, a review date and an execution brief.
+The human API supports the same configuration/read/result paths and can accept a Review result. Agent authentication cannot access ingestion paths. Routine configuration requires an expected task revision and increments it, with an Object Event; protection does not block explicit agent configuration. Enabling requires explicit confirmation, an active Ready/Review task, an owner, a review date and an execution brief.
 
 Schedules contain `timezone` and either `every_minutes` (1–525600), or `local_time` (`HH:MM`) with `weekdays` (Monday 1 through Sunday 7). PostgreSQL timezone rules apply: a missing local time shifts by the DST gap; an ambiguous time uses standard time. Claiming advances to the next future occurrence and skips catch-up. The unique active occurrence prevents overlapping work. Task edits pause its schedule. Due dates are unrelated to scheduling.
 
@@ -328,3 +328,29 @@ Occurrence statuses are pending, running, completed (uneventful success), review
 
 
 The authenticated maintenance listener also exposes `POST /api/v2/maintenance/memory-review` for exact saved Memory-preview validation/application. It reuses server-configured approval hashes, accepts only a preview Run ID and explicit `validate_only`, and never re-infers. See [Memory review](memory.md#apply-an-exact-reviewed-preview).
+
+## Current-state and historical corrections
+
+The agent and human listeners expose `/api/v2/read` and `/api/v2/apply` with the
+same correction model. The authenticated principal supplies attribution; domain
+User metadata never grants credentials. `restore_object`, `restore_connection`,
+`promote_source_artifact`, `correct_evidence` and `rebuild_derived` require the
+current owning revision. `reassign_identity` moves an existing provider binding
+between Users, requiring both revisions; original messages retain their sender.
+It does not replace an authenticated Codex principal or configured human identity.
+`reassign_chat` transfers an imported routing identity to a new active Chat with
+no imported identity, also requiring both revisions. Existing messages, Runs and
+processing cursors stay with the original Chat; future captures use the new one.
+Callers must refresh their verified Chat ID after reassignment. Original routing
+metadata remains in immutable Events and correction assertions.
+
+`correct_evidence` takes `object_id`, `expected_revision`, `target_type`
+(`object`, `artifact`, `message`, `event`, `run`), `target_id`, `reason`, and an
+object-valued `representation`. It annotates rather than mutates original evidence.
+Normal read results return all corrections; search returns latest assertions,
+and message/Artifact content reads expose the latest assertion alongside original
+text. Empty representation withdraws an earlier assertion without deleting it.
+Derived search text and Object embedding hashes track latest assertions.
+Canonical promotion reports `retained_citation_note_ids`; these Notes keep their
+exact retained evidence until explicitly corrected. A changed Excerpt citation
+must still match verbatim and agree with active derivation Connections.

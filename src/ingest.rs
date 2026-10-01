@@ -622,7 +622,7 @@ pub async fn ingest(
     sqlx::query(
         r#"UPDATE chats
            SET latest_source_message_at=GREATEST(COALESCE(latest_source_message_at, $2), $2),
-               channel_name=COALESCE($3, channel_name),
+               channel_name=CASE WHEN (SELECT explicitly_corrected FROM objects WHERE id=$1) THEN channel_name ELSE COALESCE($3, channel_name) END,
                processing_updated_at=now()
            WHERE object_id=$1"#,
     )
@@ -923,7 +923,7 @@ async fn get_or_create_user(
                 object.insert("profile_refreshed_at".into(), json!(value));
             }
         }
-        sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1")
+        sqlx::query("UPDATE users SET identities=$2 WHERE object_id=$1 AND NOT (SELECT explicitly_corrected FROM objects WHERE id=$1)")
             .bind(id)
             .bind(identities)
             .execute(&mut **tx)
@@ -942,7 +942,7 @@ async fn get_or_create_user(
             r#"UPDATE objects SET title=$2,
                description=$3,
                revision=revision+1,updated_by_type=$4,updated_by_id=$5,updated_at=now()
-               WHERE id=$1 AND title IS DISTINCT FROM $2 RETURNING revision"#,
+               WHERE id=$1 AND NOT explicitly_corrected AND title IS DISTINCT FROM $2 RETURNING revision"#,
         )
         .bind(id)
         .bind(&sender.display_name)

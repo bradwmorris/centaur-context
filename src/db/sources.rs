@@ -150,10 +150,15 @@ pub async fn update_source(
     };
     let archived_at = changes.archive.then(OffsetDateTime::now_utc);
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM objects WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let before = target_snapshot(&mut tx, "object", id).await?;
     let updated_revision: Option<i64> = sqlx::query_scalar(
         r#"UPDATE objects SET title=$3,description=$4,provenance=$5,protected=$6,
            archived_at=CASE WHEN $7 THEN COALESCE(archived_at,$8) ELSE archived_at END,
-           revision=revision+1,updated_by_type=$9,updated_by_id=$10,updated_at=now()
+           explicitly_corrected=true,revision=revision+1,updated_by_type=$9,updated_by_id=$10,updated_at=now()
            WHERE id=$1 AND kind='source' AND revision=$2 RETURNING revision"#,
     )
     .bind(id)
@@ -203,7 +208,7 @@ pub async fn update_source(
         idempotency_key,
         Some(expected_revision),
         updated_revision,
-        json!({"kind":"source","metadata_changed":true,"lifecycle":lifecycle}),
+        json!({"before_state":before,"kind":"source","metadata_changed":true,"lifecycle":lifecycle}),
     )
     .await?;
     tx.commit().await?;

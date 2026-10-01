@@ -297,3 +297,13 @@ def test_empty_registration_and_missing_original_report_coverage(setup, monkeypa
     count = len(pending(s))
     b.flush(s)
     assert len(pending(s)) == count
+
+
+def test_correction_tool_schema_exposes_revisioned_representation_and_identity_repair():
+    tool = next(item for item in b.tool_schema() if item["name"] == "context_apply")
+    variants = tool["inputSchema"]["properties"]["operations"]["items"]["oneOf"]
+    operations = {item["properties"]["operation"]["const"]: item for item in variants}
+    assert operations["correct_evidence"]["properties"]["representation"]["type"] == "object"
+    assert operations["reassign_identity"]["properties"]["expected_target_revision"]["type"] == "integer"
+    assert operations["reassign_chat"]["properties"]["expected_target_revision"]["type"] == "integer"
+    assert {"restore_object", "restore_connection", "rebuild_derived", "promote_source_artifact"} <= operations.keys()

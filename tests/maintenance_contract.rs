@@ -228,11 +228,15 @@ async fn exact_reviewed_source_artifact_promotion_is_narrow_audited_and_replay_s
             "/api/v2/apply",
             "ordinary-token-32-characters-long",
             "ordinary-agent",
-            body.clone(),
+            {
+                let mut dry = body.clone();
+                dry["validate_only"] = json!(true);
+                dry
+            },
         )
         .await
         .0,
-        StatusCode::UNPROCESSABLE_ENTITY
+        StatusCode::OK
     );
     let unapproved = app(&pool, &[]);
     assert_eq!(
@@ -825,7 +829,7 @@ async fn exact_reviewed_maintenance_preserves_protection_history_and_replay() {
     assert_eq!(full_note["data"]["content"], "Original unedited wording");
     let ordinary = agent_router(state(&pool), "ordinary-token-32-characters-long".into());
     let correction = batch(
-        json!([{"operation":"update_object","object_id":note,"expected_revision":3,"changes":{"content":"Not authorized"}}]),
+        json!([{"operation":"update_object","object_id":note,"expected_revision":3,"changes":{"content":"Explicit correction"}}]),
     );
     assert_eq!(
         call(
@@ -838,7 +842,7 @@ async fn exact_reviewed_maintenance_preserves_protection_history_and_replay() {
         )
         .await
         .0,
-        StatusCode::UNPROCESSABLE_ENTITY
+        StatusCode::OK
     );
     let (_, archived) = call(
         &approved,

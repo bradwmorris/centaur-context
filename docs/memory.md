@@ -171,3 +171,13 @@ quota or invalid request) pause the reviewer. Nonretryable content failures such
 as output limits, malformed output or prohibited tools defer the affected batch;
 the worker immediately continues with other pending Memories. Transient failure
 backoff and the three-attempt budget are unchanged.
+
+## Explicit corrections
+
+The automatic maintenance eligibility rules above govern background review.
+Explicitly authorized agents can correct any Memory using revisioned
+`context_apply`, including protected/imported content, happened-at time and current
+metadata. Original assertions remain in Events; `correct_evidence` records
+qualifications to historical evidence. Manual edits exclude the Memory from
+automatic rewriting. Background readers receive original message evidence and
+attached correction assertions separately.

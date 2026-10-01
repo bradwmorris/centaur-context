@@ -216,6 +216,9 @@ fn service_router(state: AppState) -> Router {
             "/api/v2",
             Router::new()
                 .route("/meta", get(api_meta))
+                .route("/contract", get(read_contract))
+                .route("/read", post(universal_read))
+                .route("/apply", post(universal_apply))
                 .route("/embeddings/status", get(read_embedding_status))
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/object-visuals", get(list_object_visuals))
@@ -513,6 +516,7 @@ pub(crate) async fn universal_read(
         let mut value = json!({
             "object": object,
             "subtype": subtypes.remove(&id),
+            "corrections": db::list_corrections(&state.pool, id).await?,
         });
         if object.kind == "note" {
             let note = db::get_note(&state.pool, id).await?;

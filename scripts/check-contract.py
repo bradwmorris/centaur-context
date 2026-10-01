@@ -18,7 +18,7 @@ DESCRIPTION_MIGRATION = ROOT / "migrations/0026_object_description_policy.sql"
 
 EXPECTED_TYPES = {"task", "chat", "user", "entity", "memory", "source", "note", "theme"}
 EXPECTED_TOOLS = {"context_search", "context_read", "context_apply"}
-EXPECTED_WRITABLE = {"task", "entity", "source", "note", "theme"}
+EXPECTED_WRITABLE = EXPECTED_TYPES
 EXPECTED_APPLY_OPERATIONS = {
     "create_object",
     "update_object",
@@ -27,6 +27,13 @@ EXPECTED_APPLY_OPERATIONS = {
     "update_connection",
     "archive_connection",
     "append_artifact",
+    "promote_source_artifact",
+    "restore_object",
+    "restore_connection",
+    "correct_evidence",
+    "rebuild_derived",
+    "reassign_identity",
+    "reassign_chat",
 }
 
 

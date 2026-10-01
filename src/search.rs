@@ -27,6 +27,7 @@ pub struct RetrievedObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<db::SearchEvidence>,
     pub connections: Vec<ContextConnection>,
+    pub corrections: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,13 +113,17 @@ pub async fn search_filtered(
     )
     .await?;
     fused.truncate(limit as usize);
+    let mut objects = Vec::new();
+    for item in fused {
+        let corrections = db::list_current_corrections(pool, item.object.id).await?;
+        let mut object = retrieved(item, None, Vec::new(), false);
+        object.corrections = corrections;
+        objects.push(object);
+    }
     Ok(SearchPacket {
         query: query.to_owned(),
         retrieval,
-        objects: fused
-            .into_iter()
-            .map(|item| retrieved(item, None, Vec::new(), false))
-            .collect(),
+        objects,
         budget: None,
     })
 }
@@ -202,13 +207,15 @@ pub async fn context(
         .map(|item| {
             let id = item.object.id;
             let connection_count = item.connection_count;
+            let subtype = general_subtypes.remove(&id);
+            let corrections = subtype_corrections(subtype.as_ref());
             RetrievedObject {
                 id,
                 kind: item.object.kind,
                 title: item.object.title,
                 description: item.object.description,
                 revision: item.object.revision,
-                subtype: general_subtypes.remove(&id),
+                subtype,
                 relevance: Relevance {
                     score: connection_count as f64,
                     rationale: format!(
@@ -217,6 +224,7 @@ pub async fn context(
                 },
                 evidence: None,
                 connections: general_connections.remove(&id).unwrap_or_default(),
+                corrections,
             }
         })
         .collect::<Vec<_>>();
@@ -248,6 +256,7 @@ pub async fn read_object(pool: &PgPool, id: Uuid) -> Result<RetrievedObject, DbE
         },
         evidence: None,
         connections: connections.remove(&id).unwrap_or_default(),
+        corrections: db::list_current_corrections(pool, id).await?,
     })
 }
 
@@ -352,6 +361,14 @@ async fn retrieve(
     Ok((retrieval.to_owned(), fused))
 }
 
+fn subtype_corrections(subtype: Option<&Value>) -> Vec<Value> {
+    subtype
+        .and_then(|value| value.get("corrections"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn retrieved(
     item: Fused,
     subtype: Option<Value>,
@@ -362,6 +379,7 @@ fn retrieved(
         score: item.score,
         rationale: rationale(&item, context_builder),
     };
+    let corrections = subtype_corrections(subtype.as_ref());
     RetrievedObject {
         id: item.object.id,
         kind: item.object.kind,
@@ -372,6 +390,7 @@ fn retrieved(
         relevance,
         evidence: item.evidence,
         connections,
+        corrections,
     }
 }
 
@@ -591,6 +610,7 @@ mod tests {
     fn candidate(description: &str, connections: usize) -> RetrievedObject {
         RetrievedObject {
             id: Uuid::new_v4(),
+            corrections: Vec::new(),
             kind: "memory".to_owned(),
             title: "A complete event".to_owned(),
             description: description.to_owned(),
