@@ -78,8 +78,9 @@ before the setup values can work.
    Secret references, and approved Slack surfaces to your installation. Review
    caller egress, receiver ingress, DNS, and service ports using the
    [setup network checklist](setup.md#hook-configuration). Neither hook needs
-   access to Centaur's database. First exercise success and outage behavior in a
-   disposable environment and record the exact revisions and configuration.
+   access to Centaur's database. Record the revisions and configuration you use.
+   When validating adapter failure handling, reserve deliberate outage checks
+   for a disposable environment; they are not a prerequisite for this guide.
 
 The following public files were source-reviewed at fork revision
 `f44ce662f3b3fca63bd4c162add332cb43ec035c`. This is a source reference, **not a
