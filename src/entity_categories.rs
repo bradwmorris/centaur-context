@@ -17,7 +17,9 @@ pub async fn catalogue(pool: &PgPool) -> Result<Value, DbError> {
         "{:x}",
         Sha256::digest(serde_json::to_vec(&rows).expect("JSON values"))
     );
-    Ok(json!({"categories":rows,"revision":hash}))
+    Ok(
+        json!({"categories":rows,"revision":hash,"guidance":crate::contract::document()["ontology_guide"]}),
+    )
 }
 fn text(fields: &Map<String, Value>, key: &'static str, max: usize) -> Result<String, DbError> {
     Ok(required_text(
