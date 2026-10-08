@@ -393,13 +393,16 @@ class CentaurContextClient:
         self, query: str, *, object_types: list[str] | None = None,
         limit: int = 20, lexical_only: bool = False,
         task_filters: dict[str, Any] | None = None,
+        entity_filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Search Objects, or use a deterministic filtered Task queue."""
-        query = query.strip() if task_filters is not None else _required(query, "query")
+        query = query.strip() if task_filters is not None or entity_filters is not None else _required(query, "query")
         body = {"query": query, "object_types": [_required(v, "object_type") for v in (object_types or [])],
                 "limit": _bounded_limit(limit), "lexical_only": bool(lexical_only)}
         if task_filters is not None:
             body["task_filters"] = task_filters
+        if entity_filters is not None:
+            body["entity_filters"] = entity_filters
         return self._request("POST", "/api/v2/search", json=body)
 
     def context_read(
@@ -412,7 +415,7 @@ class CentaurContextClient:
     ) -> dict[str, Any]:
         """Read one or more canonical Objects through the universal API."""
         ids = [_required(value, "object_id") for value in object_ids]
-        if not 1 <= len(ids) <= 20:
+        if len(ids) > 20 or (not ids and "entity_categories" not in (include or [])):
             raise ValueError("object_ids must contain between 1 and 20 IDs")
         includes = [_required(value, "include") for value in (include or [])]
         return self._request(

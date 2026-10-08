@@ -71,8 +71,8 @@ mod tests {
 
     #[test]
     fn embedded_contract_has_the_three_tools_and_expected_write_boundary() {
-        assert_eq!(version(), "1.1.0");
-        assert_eq!(tool_version(), "1.1.0");
+        assert_eq!(version(), "1.2.0");
+        assert_eq!(tool_version(), "1.2.0");
         assert_eq!(object_description_max_characters(), 600);
         assert!(interactive_writable("task"));
         assert!(interactive_writable("source"));

@@ -88,7 +88,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
     );
     let key = format!("universal-test-{}", Uuid::new_v4());
     let apply = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":key,
         "operations":[
             {"operation":"create_object","local_ref":"task","kind":"task","title":"Universal task","description":"A disposable Task created by the universal contract test.","fields":{"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Review this task and record verification evidence."}},
@@ -171,7 +171,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let update_key = format!("universal-test-update-{}", Uuid::new_v4());
     let update = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":update_key,
         "operations":[
             {"operation":"update_object","object_id":object_id,"expected_revision":1,"changes":{"title":"Updated universal task"}},
@@ -187,7 +187,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let archive_key = format!("universal-test-archive-{}", Uuid::new_v4());
     let archive = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":archive_key,
         "operations":[
             {"operation":"archive_connection","connection_id":connection_id,"expected_revision":2},
@@ -203,7 +203,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let system_key = format!("universal-test-system-{}", Uuid::new_v4());
     let system_owned = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":system_key,
         "operations":[
             {"operation":"create_object","local_ref":"memory","kind":"memory","title":"Explicit memory","description":"An agent explicitly creates a durable Memory.","fields":{}},
@@ -228,7 +228,7 @@ async fn three_tool_flow_is_atomic_connected_and_idempotent() {
 
     let invalid_key = format!("universal-test-invalid-{}", Uuid::new_v4());
     let invalid = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":invalid_key,
         "operations":[
             {"operation":"create_object","local_ref":"orphan","kind":"entity","title":"Orphan","description":"This Object must roll back.","fields":{"entity_kind":"concept"}},
@@ -294,7 +294,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
         token.clone(),
     );
     let create = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("description-create-{}", Uuid::new_v4()),
         "operations":[
             {"operation":"create_object","local_ref":"task","kind":"task","title":"Evaluate retrieval launch","description":"Evaluate the obsoletequartz retrieval launch criteria. This Task records the current release decision.","fields":{"status":"todo","priority":"medium","owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Review this task and record verification evidence."}},
@@ -334,7 +334,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
         .unwrap();
 
     let first_update = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("description-update-{}", Uuid::new_v4()),
         "operations":[
             {"operation":"update_object","object_id":object_id,"expected_revision":1,"changes":{"description":"Evaluate the newheliotrope retrieval launch after the quality review. The latest evidence removed the earlier release blocker."}},
@@ -389,7 +389,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
 
     let final_description = "Approve the finalvermillion retrieval launch after the quality review. This Task now records the evidence-backed release outcome.";
     let second_update = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("description-update-{}", Uuid::new_v4()),
         "operations":[
             {"operation":"update_object","object_id":object_id,"expected_revision":2,"changes":{"title":"Approve retrieval launch","description":final_description}}
@@ -500,7 +500,7 @@ async fn description_updates_are_audited_lexical_and_latest_embedding_safe() {
     );
 
     let no_op = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("description-no-op-{}", Uuid::new_v4()),
         "operations":[
             {"operation":"update_object","object_id":object_id,"expected_revision":3,"changes":{"title":"Approve retrieval launch","description":final_description}}
@@ -540,7 +540,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
     );
     let mut ids = Vec::new();
     for intent in ["idea", "fact"] {
-        let body = json!({"contract_version":"1.1.0","idempotency_key":format!("standalone-{intent}-{}",Uuid::new_v4()),"operations":[{
+        let body = json!({"contract_version":"1.2.0","idempotency_key":format!("standalone-{intent}-{}",Uuid::new_v4()),"operations":[{
             "operation":"create_object","local_ref":"note","kind":"note","title":format!("Standalone {intent}"),
             "description":"An independently captured research thought awaiting further evidence.","fields":{"intent":intent,"content":"What makes research context useful?"}
         }]});
@@ -589,7 +589,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         );
         ids.push(id);
     }
-    let connect = json!({"contract_version":"1.1.0","idempotency_key":format!("later-link-{}",Uuid::new_v4()),"operations":[{
+    let connect = json!({"contract_version":"1.2.0","idempotency_key":format!("later-link-{}",Uuid::new_v4()),"operations":[{
         "operation":"create_connection","source":{"object_id":ids[1]},"target":{"object_id":ids[0]},"kind":"derived_from","description":"This fact develops the earlier research thought."
     }]});
     let response = app
@@ -609,7 +609,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
             json!({"intent":"excerpt","content":"Unverified quotation."}),
         ),
     ] {
-        let body = json!({"contract_version":"1.1.0","idempotency_key":format!("not-exempt-{}",Uuid::new_v4()),"operations":[{
+        let body = json!({"contract_version":"1.2.0","idempotency_key":format!("not-exempt-{}",Uuid::new_v4()),"operations":[{
             "operation":"create_object","local_ref":"object","kind":kind,"title":"Must not create","description":"A negative case for the standalone exemption.","fields":fields
         }]});
         let response = app
@@ -620,7 +620,7 @@ async fn standalone_notes_retain_attribution_and_can_be_connected_later() {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
     // A linked Excerpt must still supply verifiable captured evidence.
-    let invalid_excerpt = json!({"contract_version":"1.1.0","idempotency_key":format!("invalid-evidence-{}",Uuid::new_v4()),"operations":[
+    let invalid_excerpt = json!({"contract_version":"1.2.0","idempotency_key":format!("invalid-evidence-{}",Uuid::new_v4()),"operations":[
         {"operation":"create_object","local_ref":"excerpt","kind":"note","title":"Missing evidence","description":"A negative excerpt evidence case.","fields":{"intent":"excerpt","content":"Unverified quotation."}},
         {"operation":"create_connection","source":{"local_ref":"excerpt"},"target":{"object_id":ids[0]},"kind":"derived_from","description":"A link cannot substitute for captured evidence."}
     ]});
@@ -653,7 +653,7 @@ async fn legacy_note_intents_survive_unrelated_universal_edits() {
         sqlx::query("INSERT INTO notes(object_id,content,content_format,intent) VALUES($1,'Original words','plain_text',$2)")
             .bind(id).bind(legacy).execute(&mut *seed).await.unwrap();
         seed.commit().await.unwrap();
-        let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+        let body = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
             {"operation":"update_object","object_id":id,"expected_revision":1,"changes":{"title":"Legacy thought retitled"}}
         ]});
         let response = app
@@ -691,7 +691,7 @@ async fn universal_artifact_revision_keeps_predecessor_and_note_content() {
         },
         token.clone(),
     );
-    let create = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+    let create = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
         {"operation":"create_object","local_ref":"idea","kind":"note","title":"Synthetic idea","description":"A source-free synthetic Idea.","fields":{"intent":"idea","content":"Original idea wording."}}
     ]});
     let created = json_body(
@@ -708,7 +708,7 @@ async fn universal_artifact_revision_keeps_predecessor_and_note_content() {
         .unwrap();
     let mut predecessor = None;
     for (revision, copy) in [(1, "Draft copy"), (2, "Edited draft copy")] {
-        let apply = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+        let apply = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
             {"operation":"append_artifact","object":{"object_id":note},"expected_revision":revision,"kind":"publication_receipt","content":json!({"status":"draft","copy":copy}).to_string(),"media_type":"application/json","metadata":{"status":"draft"},"supersedes_artifact_id":predecessor}
         ]});
         let response = app
@@ -777,7 +777,7 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
         },
         token.clone(),
     );
-    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("protected-excerpt-{}",Uuid::new_v4()),"chat_object_id":chat,"operations":[
+    let body = json!({"contract_version":"1.2.0","idempotency_key":format!("protected-excerpt-{}",Uuid::new_v4()),"chat_object_id":chat,"operations":[
         {"operation":"create_object","local_ref":"excerpt","kind":"note","title":"Primitive agent messaging","description":"Verbatim synthetic evidence of agent collaboration.","fields":{"intent":"excerpt","content":content,"source_artifact_id":artifact,"source_locator":{"type":"character_range","start":0,"end":content.len()}}},
         {"operation":"create_connection","source":{"local_ref":"excerpt"},"target":{"object_id":source},"kind":"derived_from","description":"This exact excerpt comes from the protected Source's transcript."}
     ]});
@@ -895,7 +895,7 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
             "about",
         ),
     ] {
-        let research = json!({"contract_version":"1.1.0","idempotency_key":format!("research-{}",Uuid::new_v4()),"chat_object_id":chat,"validate_only":true,"operations":[
+        let research = json!({"contract_version":"1.2.0","idempotency_key":format!("research-{}",Uuid::new_v4()),"chat_object_id":chat,"validate_only":true,"operations":[
             {"operation":"create_object","local_ref":"research","kind":kind,"title":"Research follow-up","description":"A synthetic follow-up to the selected Source.","fields":fields},
             {"operation":"create_connection","source":{"local_ref":"research"},"target":{"object_id":source},"kind":relation,"description":"This research follows directly from the selected Source."}
         ]});
@@ -905,10 +905,10 @@ async fn protected_excerpt_capture_accepts_runtime_chat_identity_without_broaden
         assert_eq!(status, StatusCode::OK, "{response}");
     }
     // Caller-supplied links to the protected Chat do not inherit the automatic exception.
-    let explicit = json!({"contract_version":"1.1.0","idempotency_key":format!("explicit-chat-{}",Uuid::new_v4()),"operations":[{"operation":"create_connection","source":{"object_id":chat},"target":{"object_id":note},"kind":"about","description":"A caller cannot claim the server-generated provenance exception."}]});
+    let explicit = json!({"contract_version":"1.2.0","idempotency_key":format!("explicit-chat-{}",Uuid::new_v4()),"operations":[{"operation":"create_connection","source":{"object_id":chat},"target":{"object_id":note},"kind":"about","description":"A caller cannot claim the server-generated provenance exception."}]});
     let r = app.clone().oneshot(req(explicit, &short)).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    let update = json!({"contract_version":"1.1.0","idempotency_key":format!("protected-edit-{}",Uuid::new_v4()),"operations":[{"operation":"update_object","object_id":source,"expected_revision":1,"changes":{"description":"Unauthorized edit."}}]});
+    let update = json!({"contract_version":"1.2.0","idempotency_key":format!("protected-edit-{}",Uuid::new_v4()),"operations":[{"operation":"update_object","object_id":source,"expected_revision":1,"changes":{"description":"Unauthorized edit."}}]});
     let r = app.clone().oneshot(req(update, &short)).await.unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     // A second workspace using the same short identity makes that identity ambiguous.
@@ -1006,7 +1006,7 @@ async fn protected_source_research_notes_are_versioned_without_changing_source_e
                 "/api/v2/apply",
                 &token,
                 json!({
-                    "contract_version":"1.1.0",
+                    "contract_version":"1.2.0",
                     "idempotency_key":key,
                     "operations":[operation]
                 }),
@@ -1156,7 +1156,7 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
     seed.commit().await.unwrap();
 
     let apply_request = json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("archive-preserved-note-{}",Uuid::new_v4()),
         "operations":[
             {"operation":"archive_connection","connection_id":related,"expected_revision":1},
@@ -1247,7 +1247,7 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
         .bind(bad_connection).bind(bad_note).bind(bad_source).execute(&mut *seed).await.unwrap();
     seed.commit().await.unwrap();
     let denied = app.clone().oneshot(request("POST","/api/v2/apply",&token,json!({
-        "contract_version":"1.1.0",
+        "contract_version":"1.2.0",
         "idempotency_key":format!("deny-unpreserved-note-{}",Uuid::new_v4()),
         "operations":[
             {"operation":"archive_connection","connection_id":bad_connection,"expected_revision":1},
@@ -1361,7 +1361,7 @@ async fn protected_preserved_notes_and_their_connections_can_be_archived_atomica
                 "/api/v2/apply",
                 &token,
                 json!({
-                    "contract_version":"1.1.0",
+                    "contract_version":"1.2.0",
                     "idempotency_key":format!("deny-{case}-{}",Uuid::new_v4()),
                     "operations":operations
                 }),
@@ -1449,7 +1449,7 @@ async fn slack_chat_identity_accepts_bot_routes_but_rejects_other_conversations(
         ),
     ];
     for (key, expected) in keys {
-        let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"task","kind":"task","title":"Synthetic chat-linked task","description":"Task for verifying the authenticated conversation boundary.","fields":{"owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Verify task creation in the matching conversation."}}]});
+        let body = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"task","kind":"task","title":"Synthetic chat-linked task","description":"Task for verifying the authenticated conversation boundary.","fields":{"owner_object_id":owner,"due_at":"2099-01-01T00:00:00Z","brief_markdown":"Verify task creation in the matching conversation."}}]});
         let mut req = request("POST", "/api/v2/apply", &token, body);
         req.headers_mut()
             .insert("x-centaur-thread-key", key.parse().unwrap());
@@ -1559,7 +1559,7 @@ async fn protected_research_connections_allow_explicit_edits_with_active_endpoin
                 "/api/v2/apply",
                 &token,
                 json!({
-                    "contract_version":"1.1.0", "idempotency_key":key,
+                    "contract_version":"1.2.0", "idempotency_key":key,
                     "validate_only":validate_only, "operations":[operation]
                 }),
             ))
@@ -1828,7 +1828,7 @@ async fn explicit_note_windows_preserve_unicode_and_report_continuation() {
         token.clone(),
     );
     let content = format!("{}exact tail", "東京 evidence ".repeat(1000));
-    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("long-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Long evidence note","description":"A synthetic long Note for explicit content access.","fields":{"intent":"idea","content":content}}]});
+    let body = json!({"contract_version":"1.2.0","idempotency_key":format!("long-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Long evidence note","description":"A synthetic long Note for explicit content access.","fields":{"intent":"idea","content":content}}]});
     let created = app
         .clone()
         .oneshot(request("POST", "/api/v2/apply", &token, body))
@@ -1892,7 +1892,7 @@ async fn authenticated_audit_is_bounded_and_includes_archived_objects() {
         },
         token.clone(),
     );
-    let body = json!({"contract_version":"1.1.0","idempotency_key":format!("audit-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Inventory boundary","description":"A synthetic archived Object for audit pagination.","fields":{"intent":"idea","content":"Preserve original evidence."}}]});
+    let body = json!({"contract_version":"1.2.0","idempotency_key":format!("audit-note-{}",Uuid::new_v4()),"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Inventory boundary","description":"A synthetic archived Object for audit pagination.","fields":{"intent":"idea","content":"Preserve original evidence."}}]});
     let response = app
         .clone()
         .oneshot(request("POST", "/api/v2/apply", &token, body))
@@ -1901,7 +1901,7 @@ async fn authenticated_audit_is_bounded_and_includes_archived_objects() {
     assert_eq!(response.status(), StatusCode::OK);
     let data = json_body(response).await;
     let id = &data["data"]["results"][0]["data"]["id"];
-    let archive = json!({"contract_version":"1.1.0","idempotency_key":format!("audit-archive-{}",Uuid::new_v4()),"operations":[{"operation":"archive_object","object_id":id,"expected_revision":1}]});
+    let archive = json!({"contract_version":"1.2.0","idempotency_key":format!("audit-archive-{}",Uuid::new_v4()),"operations":[{"operation":"archive_object","object_id":id,"expected_revision":1}]});
     assert_eq!(
         app.clone()
             .oneshot(request("POST", "/api/v2/apply", &token, archive))
@@ -1964,4 +1964,206 @@ async fn authenticated_audit_is_bounded_and_includes_archived_objects() {
         .status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn events_categories_atomic_graph_and_catalogue_lifecycle() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("SKIP Events/category database flow: no TEST_DATABASE_URL");
+        return;
+    };
+    let token = "z".repeat(32);
+    let app = agent_router(
+        AppState {
+            pool: pool.clone(),
+            embeddings: None,
+            text_search_config: TextSearchConfig::SIMPLE,
+        },
+        token.clone(),
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v2/read",
+            &token,
+            json!({"object_ids":[],"include":["entity_categories"]}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let catalogue = json_body(response).await;
+    let model = catalogue["data"]["entity_categories"]["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["slug"] == "model")
+        .unwrap()["id"]
+        .clone();
+    let product = catalogue["data"]["entity_categories"]["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["slug"] == "product")
+        .unwrap()["id"]
+        .clone();
+    let key = format!("events-{}", Uuid::new_v4());
+    let payload = json!({"contract_version":"1.2.0","idempotency_key":key,"operations":[
+        {"operation":"create_object","local_ref":"event","kind":"event","title":"Synthetic workshop","description":"A planned evaluation workshop used to verify precise calendar ranges.","fields":{"starts_at":"2026-10-08","starts_at_precision":"day","ends_at":"2026-10-09","ends_at_precision":"day"}},
+        {"operation":"create_object","local_ref":"model","kind":"entity","title":"Synthetic cost model","description":"A named cost estimator also offered as a product in this synthetic test.","fields":{"category_ids":[model,product],"primary_category_id":model}},
+        {"operation":"create_object","local_ref":"note1","kind":"note","title":"Workshop reflection","description":"A reflection separate from the occurrence being represented.","fields":{"content":"A synthetic reflection.","intent":"idea"}},
+        {"operation":"create_object","local_ref":"note2","kind":"note","title":"Model explanation","description":"An explanation separate from the named model identity.","fields":{"content":"The synthetic model estimates costs.","intent":"fact"}},
+        {"operation":"create_connection","source":{"local_ref":"note1"},"target":{"local_ref":"event"},"kind":"about","description":"The reflection concerns this occurrence."},
+        {"operation":"create_connection","source":{"local_ref":"note2"},"target":{"local_ref":"model"},"kind":"about","description":"The explanation describes this named model."}
+    ]});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, payload.clone()))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let event = body["data"]["results"][0]["data"]["id"].clone();
+    let entity = body["data"]["results"][1]["data"]["id"].clone();
+    assert_eq!(
+        body["data"]["results"][1]["data"]["subtype"]["entity_kind"],
+        "concept"
+    );
+    let replay = json_body(
+        app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, payload))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(replay["data"]["replayed"], true);
+    let read = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/read",
+                &token,
+                json!({"object_ids":[event,entity],"include":["events","connections"]}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        read["data"]["objects"][0]["subtype"]["starts_at"],
+        "2026-10-08"
+    );
+    assert_eq!(
+        read["data"]["objects"][1]["subtype"]["category_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let filtered = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/search",
+                &token,
+                json!({"query":"","entity_filters":{"category_ids":[model,product],"match":"all"}}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        filtered["data"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["id"] == entity)
+    );
+    let update = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-update"),"operations":[{"operation":"update_object","object_id":event,"expected_revision":1,"changes":{"starts_at":"2026-10","starts_at_precision":"month","ends_at":"2026-11","ends_at_precision":"month"}},{"operation":"update_object","object_id":entity,"expected_revision":1,"changes":{"entity_kind":"concept"}}]});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/api/v2/apply", &token, update))
+        .await
+        .unwrap();
+    let status = response.status();
+    let updated = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        updated["data"]["results"][1]["data"]["subtype"]["category_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        updated["data"]["results"][0]["before"]["subtype"]["starts_at"],
+        "2026-10-08"
+    );
+    let bad = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-bad"),"operations":[{"operation":"update_object","object_id":entity,"expected_revision":2,"changes":{"entity_kind":"person"}}]});
+    assert!(
+        !app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, bad))
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let id = Uuid::parse_str(event.as_str().unwrap()).unwrap();
+    let run = Uuid::parse_str(updated["data"]["run_id"].as_str().unwrap()).unwrap();
+    centaur_context::curator::undo_as(&pool, run, &centaur_context::domain::ActorContext::human())
+        .await
+        .unwrap();
+    let read = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/read",
+                &token,
+                json!({"object_ids":[id]}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        read["data"]["objects"][0]["subtype"]["starts_at"],
+        "2026-10-08"
+    );
+    let category_request = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-category"),"operations":[{"operation":"create_entity_category","slug":format!("synthetic-{}",Uuid::new_v4()),"label":format!("Synthetic {key}"),"definition":"An explicitly requested synthetic classification for the integration test.","legacy_kind":"concept","aliases":[]}]});
+    let category = json_body(
+        app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, category_request))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let cid = category["data"]["results"][0]["data"]["id"].clone();
+    assert!(cid.is_string(), "{category}");
+    let assigned = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-assign"),"operations":[{"operation":"update_object","object_id":entity,"expected_revision":3,"changes":{"category_ids":[model,product,cid],"primary_category_id":model}}]});
+    assert!(
+        app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, assigned))
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let archive = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-archive"),"operations":[{"operation":"archive_entity_category","category_id":cid,"expected_revision":1}]});
+    assert!(
+        !app.clone()
+            .oneshot(request("POST", "/api/v2/apply", &token, archive))
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let unassign = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-unassign"),"operations":[{"operation":"update_object","object_id":entity,"expected_revision":4,"changes":{"category_ids":[model,product],"primary_category_id":model}},{"operation":"archive_entity_category","category_id":cid,"expected_revision":1}]});
+    let response = app
+        .oneshot(request("POST", "/api/v2/apply", &token, unassign))
+        .await
+        .unwrap();
+    let status = response.status();
+    let result = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
 }

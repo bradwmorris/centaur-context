@@ -31,12 +31,12 @@ pub(super) async fn insert_event(
     changes: Value,
 ) -> Result<Uuid, DbError> {
     crate::runs::assert_thread_not_fenced(tx, actor.centaur_thread_key.as_deref()).await?;
-    let target_type = if entity_type == "connection" {
-        "connection"
+    let target_type = if matches!(entity_type, "connection" | "entity_category") {
+        entity_type
     } else {
         "object"
     };
-    let target_id = if target_type == "connection" {
+    let target_id = if matches!(target_type, "connection" | "entity_category") {
         entity_id
     } else {
         object_id
@@ -118,12 +118,12 @@ pub(crate) async fn insert_event_for_run(
     from_revision: Option<i64>,
     to_revision: i64,
 ) -> Result<Uuid, DbError> {
-    let target_type = if entity_type == "connection" {
-        "connection"
+    let target_type = if matches!(entity_type, "connection" | "entity_category") {
+        entity_type
     } else {
         "object"
     };
-    let target_id = if target_type == "connection" {
+    let target_id = if matches!(target_type, "connection" | "entity_category") {
         entity_id
     } else {
         object_id
@@ -180,12 +180,12 @@ pub(crate) async fn insert_event_for_run_with_before(
     to_revision: i64,
     before_state: Option<Value>,
 ) -> Result<Uuid, DbError> {
-    let target_type = if entity_type == "connection" {
-        "connection"
+    let target_type = if matches!(entity_type, "connection" | "entity_category") {
+        entity_type
     } else {
         "object"
     };
-    let target_id = if target_type == "connection" {
+    let target_id = if matches!(target_type, "connection" | "entity_category") {
         entity_id
     } else {
         object_id
@@ -221,6 +221,13 @@ pub(crate) async fn target_snapshot(
     target_type: &str,
     target_id: Uuid,
 ) -> Result<Value, DbError> {
+    if target_type == "entity_category" {
+        return sqlx::query_scalar("SELECT to_jsonb(c) FROM entity_categories c WHERE id=$1")
+            .bind(target_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(DbError::NotFound);
+    }
     if target_type == "connection" {
         return Ok(
             sqlx::query_scalar("SELECT to_jsonb(c) FROM connections c WHERE id=$1")
@@ -236,7 +243,8 @@ pub(crate) async fn target_snapshot(
             WHEN 'task' THEN (SELECT to_jsonb(t)-'object_id' FROM tasks t WHERE t.object_id=o.id)
             WHEN 'chat' THEN (SELECT to_jsonb(c)-'object_id' FROM chats c WHERE c.object_id=o.id)
             WHEN 'user' THEN (SELECT to_jsonb(u)-'object_id' FROM users u WHERE u.object_id=o.id)
-            WHEN 'entity' THEN (SELECT to_jsonb(e)-'object_id' FROM entities e WHERE e.object_id=o.id)
+            WHEN 'entity' THEN (SELECT (to_jsonb(e)-'object_id') || jsonb_build_object('category_ids',(SELECT jsonb_agg(category_id ORDER BY category_id) FROM entity_category_assignments WHERE entity_object_id=o.id)) FROM entities e WHERE e.object_id=o.id)
+            WHEN 'event' THEN (SELECT to_jsonb(e)-'object_id' FROM real_world_events e WHERE e.object_id=o.id)
             WHEN 'memory' THEN (SELECT to_jsonb(m)-'object_id' FROM memories m WHERE m.object_id=o.id)
             WHEN 'source' THEN (SELECT to_jsonb(s)-'object_id' FROM sources s WHERE s.object_id=o.id)
             WHEN 'note' THEN (SELECT to_jsonb(n)-'object_id' FROM notes n WHERE n.object_id=o.id)

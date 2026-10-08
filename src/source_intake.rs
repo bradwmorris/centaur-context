@@ -268,7 +268,7 @@ async fn resolve_connections(
             .objects
             .into_iter()
             .filter(|candidate| {
-                matches!(candidate.kind.as_str(), "entity" | "theme")
+                matches!(candidate.kind.as_str(), "entity" | "theme" | "event")
                     && candidate.title.eq_ignore_ascii_case(query)
             })
             .collect::<Vec<_>>();
@@ -280,10 +280,13 @@ async fn resolve_connections(
                 "target_object_id": candidate.id,
                 "target_kind": candidate.kind,
                 "title": candidate.title,
+                "subtype": crate::db::context_subtypes(&state.app.pool, &[candidate.id], None).await?.remove(&candidate.id),
             }));
         }
     }
-    Ok(Json(json!({"data":{"connections":resolved}})))
+    Ok(Json(
+        json!({"data":{"connections":resolved,"entity_categories":crate::entity_categories::catalogue(&state.app.pool).await?}}),
+    ))
 }
 
 async fn prepared(
@@ -546,6 +549,8 @@ fn source_batch(mut request: SourceIntakeRequest) -> Result<IntakeBatchRequest, 
             user_kind: None,
             identities: Vec::new(),
             entity_kind: None,
+            category_ids: None,
+            primary_category_id: None,
             source: Some(IntakeSource {
                 source_kind: source.source_kind,
                 canonical_uri: source.canonical_uri,

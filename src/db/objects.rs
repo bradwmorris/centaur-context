@@ -446,6 +446,47 @@ pub async fn update_object(
     Ok(updated)
 }
 
+/// Typed human/networking creation using the shared subtype validators and audit snapshots.
+pub async fn create_classified_object(
+    pool: &PgPool,
+    actor: &ActorContext,
+    input: NewObject,
+    fields: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Object, DbError> {
+    if let Some(id) = idempotent_entity(pool, actor, key).await? {
+        return get_object(pool, id).await;
+    }
+    let mut tx = pool.begin().await?;
+    let id = Uuid::new_v4();
+    crate::universal::create_object(
+        &mut tx,
+        actor,
+        id,
+        &input.kind,
+        &input.title,
+        &input.description,
+        Some(input.provenance),
+        fields,
+    )
+    .await?;
+    insert_event(
+        &mut tx,
+        actor,
+        "object",
+        id,
+        id,
+        "created",
+        Some(key),
+        None,
+        1,
+        json!({}),
+    )
+    .await?;
+    tx.commit().await?;
+    get_object(pool, id).await
+}
+
 #[cfg(test)]
 mod rename_compatibility_tests {
     use super::allowed_database_name;

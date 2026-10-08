@@ -187,3 +187,8 @@ payloads remain intact; only the additive wire field is omitted for legacy
 destinations. Keep repository bindings, activation cursors and destination
 identity unchanged. This allows one destination to adopt coverage reporting
 without upgrading other servers served by the same bridge.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+Client 1.2.0 and desktop bridge 0.2.0 package the same contract and instructions. Reinstall both together through the existing installer, preserving credentials, hooks, delivery queue and session mappings. Reload supported MCP sessions and inspect tools/list: Event fields, catalogue-only reads, category mutations and Entity filters must be available on the actual bound route.

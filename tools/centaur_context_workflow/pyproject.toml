@@ -1,7 +1,7 @@
 [project]
 name = "centaur-context-workflow"
 description = "Workflow-only compatibility adapter for Centaur Context"
-version = "1.1.0"
+version = "1.2.0"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"

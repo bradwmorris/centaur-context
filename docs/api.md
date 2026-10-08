@@ -36,7 +36,7 @@ header is accepted by the API but is not automatically added by this Python
 client. Configure the service URL and proxy host together as described in
 [tool setup](setup.md#optional-agent-tools).
 
-Universal writes cover all eight Object kinds and explained Connections under
+Universal writes cover all nine Object kinds and explained Connections under
 the [Context contract](context-contract.md). Explicit corrections can edit
 protected and imported records while preserving original evidence. The
 separate Note/Task writer and purpose-bound workflow listeners remain available
@@ -354,3 +354,8 @@ Derived search text and Object embedding hashes track latest assertions.
 Canonical promotion reports `retained_citation_note_ids`; these Notes keep their
 exact retained evidence until explicitly corrected. A changed Excerpt citation
 must still match verbatim and agree with active derivation Connections.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+See the embedded `ontology_guide` and [Events/classification RD](../dev/rd/events-classifications.md) for exact fields, definitions and examples. `real_world_events` is a matching Object subtype; `object_events` remains immutable change history. Calendar timing preserves precision and supplied offsets. Entity categories are supporting catalogue metadata, with multiple assignments and one primary determining legacy `entity_kind`. Initial backfill preserves all existing classifications and Object revisions. Catalogue mutations use the three universal tools and attributed Run snapshots; vocabulary changes require explicit user instruction. Empty-ID reads require `include:["entity_categories"]`. `entity_filters` accepts category UUIDs with `match:any|all`; results use ascending UUID order and an exclusive UUID cursor, active Entities only. Text remains title/description discovery. Legacy 1.1.0 writes remain accepted with conflict protection for richer classifications.

@@ -1,3 +1,4 @@
+import { CategoryManager, EntityFields, EventFields, EventEntityDetail, fieldsFromForm } from "./EventEntityFields";
 import { TaskRoutine } from "./TaskRoutine";
 import { projectPresentation, taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,12 +20,13 @@ import type { Artifact, ChatMessage, Connection, ConnectionGraphSnapshot, Extern
 
 const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
-const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", evals: "Evals", schema: "Schema" };
-const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
-const sectionKinds = { chats: "chat", users: "user", entities: "entity", memories: "memory" } as const;
-const createSections = new Set<Section>(["objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
+const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", events: "Events", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", evals: "Evals", schema: "Schema" };
+const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", events: "event", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
+const sectionKinds = { chats: "chat", users: "user", entities: "entity", events: "event", memories: "memory" } as const;
+const createSections = new Set<Section>(["events", "objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
 type CreateSection = keyof typeof sectionSingular;
 const descriptionExamples: Record<ObjectKind, string> = {
+  event: "A planned workshop on evaluation methods, with its evidenced calendar dates.",
   "task": "Define and test concise Object descriptions across creation, capture and maintenance paths.",
   "entity": "Jane Lee studies how agents retain and retrieve useful memories.",
   "source": "An interview with Jane Lee comparing retrieval evaluation methods for agent memory.",
@@ -49,12 +51,22 @@ export default function App() {
   const [visuals, setVisuals] = useState<ObjectVisual[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [entityFilter, setEntityFilter] = useState("");
+  const [categoryChoices, setCategoryChoices] = useState<import("./EventEntityFields").EntityCategory[]>([]);
+
   const [showDone, setShowDone] = useState(false);
   const [sort, setSort] = useState<ListSort>("recent");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshState, setRefreshState] = useState<"idle" | "refreshing" | "done" | "error">("idle");
+  useEffect(() => {
+    if (section !== "entities") return;
+    let active = true;
+    const reload = () => { void api.entityCategories().then(c => { if (active) setCategoryChoices(c.categories); }).catch(e => { if (active) setError(message(e)); }); };
+    reload(); window.addEventListener("entity-categories-changed", reload);
+    return () => { active = false; window.removeEventListener("entity-categories-changed", reload); };
+  }, [section, refreshKey]);
   const requestGeneration = useRef(0);
 
   const load = useCallback(async () => {
@@ -70,7 +82,7 @@ export default function App() {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
       const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs" || section === "evals";
       const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
-        needsObjects ? api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, sort) : Promise.resolve(null),
+        needsObjects ? section === "entities" && entityFilter && !selectedId ? api.filteredEntities(query, [entityFilter]) : api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, sort) : Promise.resolve(null),
         section === "tasks" ? api.tasks(sort) : Promise.resolve(null),
         section === "sources" ? api.sources(selectedId ? "" : query, sort) : Promise.resolve(null),
         section === "notes" ? api.notes(selectedId ? "" : query, sort) : Promise.resolve(null),
@@ -93,7 +105,7 @@ export default function App() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [query, section, selectedId, connectionId, sort, refreshKey]);
+  }, [query, section, selectedId, connectionId, sort, refreshKey, entityFilter]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute(window.location.pathname));
@@ -166,6 +178,7 @@ export default function App() {
           <NavButton active={section === "tasks"} compact={collapsed} icon="✓" label="Tasks" onClick={() => selectSection("tasks")} />
           <NavButton active={section === "chats"} compact={collapsed} icon="◌" label="Chats" onClick={() => selectSection("chats")} />
           <NavButton active={section === "users"} compact={collapsed} icon="♙" label="Users" onClick={() => selectSection("users")} />
+          <NavButton active={section === "events"} compact={collapsed} icon="◷" label="Events" onClick={() => selectSection("events")} />
           <NavButton active={section === "entities"} compact={collapsed} icon="◎" label="Entities" onClick={() => selectSection("entities")} />
           <NavButton active={section === "memories"} compact={collapsed} icon="✦" label="Memories" onClick={() => selectSection("memories")} />
           <NavButton active={section === "sources"} compact={collapsed} icon="▤" label="Sources" onClick={() => selectSection("sources")} />
@@ -187,6 +200,7 @@ export default function App() {
           {!collection && <div id="workspace-toolbar-slot" />}
           {collection && <>
             <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={section === "tasks" && activeModule?.id === "kanban" ? "Search task board" : `Search ${sectionLabel.toLowerCase()}`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search…" /></label>
+            {section === "entities" && <label>Category<select aria-label="Filter Entity category" value={entityFilter} onChange={e => setEntityFilter(e.target.value)}><option value="">All categories</option>{categoryChoices.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>}
             {section === "tasks" && <label className="project-filter"><span className="sr-only">Filter task projects</span><select aria-label="Filter task projects" value={selectedProject} onChange={event => filterProject(event.target.value)}><option value="">All projects</option>{projectChoices.map(project => { const display = projectPresentation(project === "_none" ? null : project); return <option key={project} value={project}>{display.icon} {display.label}</option>; })}</select></label>}
             {isObjectBackedSection(section) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={event => setSort(event.target.value as ListSort)}><option value="recent">Recent</option><option value="connections">Connected</option></select></label>}
             <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
@@ -202,6 +216,7 @@ export default function App() {
 
         <div className="workspace">
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+            {section === "entities" && <CategoryManager />}
             {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
             <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
@@ -341,7 +356,7 @@ function runActualResult(run: Run, objects: SharedObject[] | RunObject[]) {
 }
 function isCreateSection(section: Section): section is CreateSection { return createSections.has(section); }
 function isObjectBackedSection(section: Section) { return !["connections", "runs", "evals", "schema"].includes(section); }
-function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | undefined { return section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
+function fixedCreateKind(section: CreateSection): "chat" | "entity" | "memory" | "event" | undefined { return section === "events" ? "event" : section === "chats" ? "chat" : section === "entities" ? "entity" : section === "memories" ? "memory" : undefined; }
 
 function useSerializedSave() {
   const chain = useRef<Promise<void>>(Promise.resolve());
@@ -456,31 +471,35 @@ function NewTheme({ onCancel, onCreated }: { onCancel: () => void; onCreated: (i
   return <CreateModal title="New theme" onClose={onCancel}><form className="create-form" onSubmit={submit}><input className="create-title" name="title" required maxLength={300} autoFocus placeholder="Theme title" aria-label="Theme title" /><Field label="Slug"><input name="slug" required maxLength={100} pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="research-vertical" /></Field><textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples.theme} aria-label="Theme description" />{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="text-button" onClick={onCancel}>Cancel</button><button disabled={busy}>{busy ? "Creating…" : "Create approved theme"}</button></div></form></CreateModal>;
 }
 
-function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
+function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "chat" | "entity" | "memory" | "event"; label: string; onCancel: () => void; onCreated: (item: SharedObject) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [kind, setKind] = useState<"chat" | "entity" | "memory">(fixedKind ?? "memory");
+  const [kind, setKind] = useState<"chat" | "entity" | "memory" | "event">(fixedKind ?? "memory");
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setBusy(true); setError(null);
     const data = new FormData(event.currentTarget);
     try {
+      if (kind === "entity" || kind === "event") {
+        onCreated(await api.createTypedObject(kind, String(data.get("title")), String(data.get("description")), fieldsFromForm(kind, data))); return;
+      }
       onCreated(await api.createObject({
         kind, title: String(data.get("title")), description: String(data.get("description")),
         provenance: { source_type: "human", note: "Created in Centaur Context" },
-        entity_kind: kind === "entity" ? String(data.get("entity_kind")) : undefined,
+
         happened_at:
           kind === "memory" ? (optionalDate(data, "happened_at") ?? undefined) : undefined,
       }));
     } catch (cause) { setError(message(cause)); setBusy(false); }
   };
   const name = label.charAt(0).toUpperCase() + label.slice(1);
-  return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form" onSubmit={submit}>
+  return <CreateModal title={`New ${label}`} onClose={onCancel}><form className="create-form typed-create-form" onSubmit={submit}>
     <input className="create-title" name="title" required maxLength={300} autoFocus placeholder={`${name} title`} aria-label={`${name} title`} />
     <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} />
-    {kind === "entity" && <Field label="Entity kind"><select name="entity_kind" defaultValue="person"><option value="person">Person</option><option value="organization">Organization</option><option value="product">Product</option><option value="project">Project</option><option value="publication">Publication</option><option value="place">Place</option><option value="concept">Concept</option><option value="other">Other</option></select></Field>}
+    {kind === "entity" && <EntityFields />}
+    {kind === "event" && <EventFields />}
     {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
     {error && <p className="form-error">{error}</p>}
-    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
+    <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="event">Event</option><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
 }
 
@@ -746,6 +765,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
   };
   return <div className="record-page">
     <div className="record-primary">
+      {item.kind === "entity" && <CategoryManager />}
       <div className="detail-form">
         <InlineEditor label="Object title" value={item.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveField("title", value)} onReload={load} />
         <section className="properties-block" aria-label="Object properties">
@@ -762,6 +782,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
         <InlineEditor label="Object description" value={item.description} multiline required maxLength={600} placeholder={descriptionExamples[item.kind]} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
       </div>
       {error && <p className="form-error">{error}</p>}
+      {(item.kind === "event" || item.kind === "entity") && <EventEntityDetail id={item.id} kind={item.kind} revision={item.revision} onChanged={async () => { await load(); await onChanged(); }} />}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
       {(item.kind === "source" || item.kind === "note") && <Artifacts section="objects" objectId={id} artifacts={artifacts} onCreated={load} />}

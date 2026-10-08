@@ -1,9 +1,9 @@
 [centaur_context]
 version = "0.3.0"
 api_version = "v2"
-ontology_version = "v3"
-database_schema_version = 37
-tool_version = "1.1.0"
+ontology_version = "v4"
+database_schema_version = 38
+tool_version = "1.2.0"
 
 [runtime]
 postgres_major = 16

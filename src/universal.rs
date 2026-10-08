@@ -34,6 +34,27 @@ pub struct ApplyRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApplyOperation {
+    CreateEntityCategory {
+        slug: String,
+        label: String,
+        definition: String,
+        legacy_kind: String,
+        #[serde(default)]
+        aliases: Vec<String>,
+    },
+    UpdateEntityCategory {
+        category_id: Uuid,
+        expected_revision: i64,
+        changes: Map<String, Value>,
+    },
+    ArchiveEntityCategory {
+        category_id: Uuid,
+        expected_revision: i64,
+    },
+    RestoreEntityCategory {
+        category_id: Uuid,
+        expected_revision: i64,
+    },
     CreateObject {
         local_ref: String,
         kind: String,
@@ -305,6 +326,11 @@ async fn apply_with_authority(
     for operation in &request.operations {
         let before = {
             let target = match operation {
+                ApplyOperation::UpdateEntityCategory { category_id, .. }
+                | ApplyOperation::ArchiveEntityCategory { category_id, .. }
+                | ApplyOperation::RestoreEntityCategory { category_id, .. } => {
+                    Some(("entity_category", "entity_categories", *category_id))
+                }
                 ApplyOperation::UpdateObject { object_id, .. }
                 | ApplyOperation::UpdateDescription { object_id, .. }
                 | ApplyOperation::PromoteSourceArtifact {
@@ -434,7 +460,7 @@ async fn apply_with_authority(
 }
 
 fn validate_request(request: &ApplyRequest) -> Result<(), DbError> {
-    if request.contract_version != contract::version() {
+    if request.contract_version != contract::version() && request.contract_version != "1.1.0" {
         return Err(DbError::Invalid(format!(
             "unsupported contract version {}; expected {}",
             request.contract_version,
@@ -544,6 +570,91 @@ async fn execute_operation(
     authority: WriteAuthority,
 ) -> Result<Value, DbError> {
     match operation {
+        ApplyOperation::CreateEntityCategory {
+            slug,
+            label,
+            definition,
+            legacy_kind,
+            aliases,
+        } => {
+            let id = Uuid::new_v4();
+            let fields = json!({"slug":slug,"label":label,"definition":definition,"legacy_kind":legacy_kind,"aliases":aliases});
+            let value = crate::entity_categories::mutate(
+                tx,
+                actor,
+                id,
+                None,
+                "create",
+                fields.as_object().unwrap(),
+            )
+            .await?;
+            record_event(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "entity_category",
+                id,
+                id,
+                "created",
+                None,
+                1,
+            )
+            .await?;
+            Ok(json!({"operation":"create_entity_category","data":value}))
+        }
+        ApplyOperation::UpdateEntityCategory {
+            category_id,
+            expected_revision,
+            ..
+        }
+        | ApplyOperation::ArchiveEntityCategory {
+            category_id,
+            expected_revision,
+        }
+        | ApplyOperation::RestoreEntityCategory {
+            category_id,
+            expected_revision,
+        } => {
+            let empty = Map::new();
+            let (action, changes) = match operation {
+                ApplyOperation::UpdateEntityCategory { changes, .. } => ("update", changes),
+                ApplyOperation::ArchiveEntityCategory { .. } => ("archive", &empty),
+                _ => ("restore", &empty),
+            };
+            let value = crate::entity_categories::mutate(
+                tx,
+                actor,
+                *category_id,
+                Some(*expected_revision),
+                action,
+                changes,
+            )
+            .await?;
+            let audit_action = match action {
+                "archive" => "archived",
+                "restore" => "restored",
+                _ => "updated",
+            };
+            record_event_with_before(
+                tx,
+                run_id,
+                sequence,
+                event_ids,
+                actor,
+                "entity_category",
+                *category_id,
+                *category_id,
+                audit_action,
+                Some(*expected_revision),
+                *expected_revision + 1,
+                before,
+            )
+            .await?;
+            Ok(json!({"operation":format!("{action}_entity_category"),"data":value}))
+        }
+
         ApplyOperation::CreateObject {
             local_ref,
             kind,
@@ -1170,7 +1281,7 @@ async fn record_event(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn create_object(
+pub(crate) async fn create_object(
     tx: &mut Transaction<'_, Postgres>,
     actor: &ActorContext,
     id: Uuid,
@@ -1252,26 +1363,10 @@ async fn insert_subtype(
             .await?;
         }
         "entity" => {
-            let entity_kind = required_field_string(fields, "entity_kind")?;
-            allowed(
-                entity_kind.clone(),
-                "entity_kind",
-                &[
-                    "person",
-                    "organization",
-                    "product",
-                    "project",
-                    "publication",
-                    "place",
-                    "concept",
-                    "other",
-                ],
-            )?;
-            sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
-                .bind(id)
-                .bind(entity_kind)
-                .execute(&mut **tx)
-                .await?;
+            crate::entity_classification::write(tx, id, fields, true).await?;
+        }
+        "event" => {
+            write_event_time(tx, id, fields).await?;
         }
         "source" => {
             let source_kind = string_or(fields, "source_kind", "other")?;
@@ -1625,7 +1720,7 @@ async fn promote_source_artifact(
     Ok(result)
 }
 
-async fn update_subtype(
+pub(crate) async fn update_subtype(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     kind: &str,
@@ -1687,26 +1782,10 @@ async fn update_subtype(
             .execute(&mut **tx).await?;
         }
         "entity" => {
-            let entity_kind = required_field_string(&fields, "entity_kind")?;
-            allowed(
-                entity_kind.clone(),
-                "entity_kind",
-                &[
-                    "person",
-                    "organization",
-                    "product",
-                    "project",
-                    "publication",
-                    "place",
-                    "concept",
-                    "other",
-                ],
-            )?;
-            sqlx::query("UPDATE entities SET entity_kind=$2 WHERE object_id=$1")
-                .bind(id)
-                .bind(entity_kind)
-                .execute(&mut **tx)
-                .await?;
+            crate::entity_classification::write(tx, id, changes, false).await?;
+        }
+        "event" => {
+            write_event_time(tx, id, &fields).await?;
         }
         "source" => {
             let source_kind = required_field_string(&fields, "source_kind")?;
@@ -2417,6 +2496,21 @@ fn bool_or(fields: &Map<String, Value>, name: &str, default: bool) -> Result<boo
         .map(|value| value.unwrap_or(default))
 }
 
+async fn write_event_time(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    fields: &Map<String, Value>,
+) -> Result<(), DbError> {
+    let timing: crate::event_time::EventTime =
+        serde_json::from_value(Value::Object(fields.clone()))
+            .map_err(|e| DbError::Invalid(format!("invalid Event timing: {e}")))?;
+    timing.validate()?;
+    sqlx::query("INSERT INTO real_world_events(object_id,starts_at,starts_at_precision,ends_at,ends_at_precision,timezone) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(object_id) DO UPDATE SET starts_at=$2,starts_at_precision=$3,ends_at=$4,ends_at_precision=$5,timezone=$6")
+        .bind(id).bind(timing.starts_at).bind(timing.starts_at_precision).bind(timing.ends_at).bind(timing.ends_at_precision).bind(timing.timezone)
+        .execute(&mut **tx).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2424,7 +2518,7 @@ mod tests {
     #[test]
     fn request_hash_is_stable() {
         let request = ApplyRequest {
-            contract_version: "1.1.0".into(),
+            contract_version: "1.2.0".into(),
             idempotency_key: "test".into(),
             chat_object_id: None,
             validate_only: false,
@@ -2442,7 +2536,7 @@ mod tests {
     #[test]
     fn unconnected_local_object_is_rejected_without_chat() {
         let request = ApplyRequest {
-            contract_version: "1.1.0".into(),
+            contract_version: "1.2.0".into(),
             idempotency_key: "test".into(),
             chat_object_id: None,
             validate_only: false,

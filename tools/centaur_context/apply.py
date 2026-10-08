@@ -9,6 +9,7 @@ from .tool_common import print_json, read_json_object, run
 
 
 DESCRIPTION_EXAMPLES = {
+    "event": "A planned workshop on evaluation methods, with its evidenced calendar dates.",
     "task": "Define and test concise Object descriptions across creation, capture and maintenance paths.",
     "entity": "Jane Lee studies how agents retain and retrieve useful memories.",
     "source": "An interview with Jane Lee comparing retrieval evaluation methods for agent memory.",
@@ -21,7 +22,7 @@ DESCRIPTION_EXAMPLES = {
 
 EXAMPLE_DOCUMENT = {
     "standalone_idea": {
-        "contract_version": "1.1.0",
+        "contract_version": "1.2.0",
         "idempotency_key": "replace-with-one-stable-note-key",
         "validate_only": True,
         "operations": [{
@@ -37,7 +38,7 @@ EXAMPLE_DOCUMENT = {
         "examples": DESCRIPTION_EXAMPLES,
     },
     "create_and_connect": {
-        "contract_version": "1.1.0",
+        "contract_version": "1.2.0",
         "idempotency_key": "replace-with-one-stable-create-key",
         "validate_only": True,
         "operations": [
@@ -62,7 +63,7 @@ EXAMPLE_DOCUMENT = {
         ],
     },
     "update_current_snapshot": {
-        "contract_version": "1.1.0",
+        "contract_version": "1.2.0",
         "idempotency_key": "replace-with-one-stable-update-key",
         "validate_only": True,
         "operations": [

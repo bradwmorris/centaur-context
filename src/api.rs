@@ -377,6 +377,7 @@ pub(crate) struct UniversalSearchRequest {
     #[serde(default)]
     query: String,
     task_filters: Option<db::TaskQueueFilter>,
+    entity_filters: Option<crate::entity_categories::EntityFilter>,
     #[serde(default)]
     object_types: Vec<String>,
     limit: Option<i64>,
@@ -388,6 +389,20 @@ pub(crate) async fn universal_search(
     State(state): State<AppState>,
     Json(input): Json<UniversalSearchRequest>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(filters) = input.entity_filters {
+        if input.task_filters.is_some()
+            || input.object_types.iter().any(|k| k != "entity")
+            || input.query.chars().count() > 1000
+        {
+            return Err(ApiError::BadRequest(
+                "entity_filters accept only Entity queries and cannot combine with task_filters"
+                    .into(),
+            ));
+        }
+        return Ok(Json(
+            json!({"data":crate::entity_categories::filtered(&state.pool,&input.query,filters,input.limit.unwrap_or(20).clamp(1,100)).await?}),
+        ));
+    }
     if let Some(filters) = input.task_filters {
         if input.query.chars().count() > 1000 || input.object_types.iter().any(|v| v != "task") {
             return Err(ApiError::BadRequest(
@@ -485,12 +500,20 @@ pub(crate) async fn universal_read(
     State(state): State<AppState>,
     Json(input): Json<UniversalReadRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    if input.object_ids.is_empty() || input.object_ids.len() > 20 {
+    if (input.object_ids.is_empty() && !input.include.iter().any(|v| v == "entity_categories"))
+        || input.object_ids.len() > 20
+    {
         return Err(ApiError::BadRequest(
             "object_ids must contain between 1 and 20 IDs".into(),
         ));
     }
-    let supported = ["connections", "artifacts", "events", "messages"];
+    let supported = [
+        "connections",
+        "artifacts",
+        "events",
+        "messages",
+        "entity_categories",
+    ];
     for include in &input.include {
         if !supported.contains(&include.as_str()) {
             return Err(ApiError::BadRequest(format!(
@@ -574,6 +597,7 @@ pub(crate) async fn universal_read(
     Ok(Json(json!({
         "data":{
             "objects":values,
+            "entity_categories":if input.include.iter().any(|v|v=="entity_categories") {Some(crate::entity_categories::catalogue(&state.pool).await?)} else {None},
             "artifact_windows":artifact_windows,
             "note_windows":note_windows,
             "contract_version":crate::contract::version(),
@@ -1972,6 +1996,13 @@ struct CreateObjectRequest {
     provenance: Option<Value>,
     entity_kind: Option<String>,
     happened_at: Option<String>,
+    category_ids: Option<Vec<Uuid>>,
+    primary_category_id: Option<Uuid>,
+    starts_at: Option<String>,
+    starts_at_precision: Option<String>,
+    ends_at: Option<String>,
+    ends_at_precision: Option<String>,
+    timezone: Option<String>,
 }
 
 async fn create_object(
@@ -1982,6 +2013,80 @@ async fn create_object(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let key = idempotency_key(&headers, true, &actor)?.expect("required idempotency key");
     let kind = allowed(input.kind, "kind", OBJECT_KINDS)?;
+    if kind != "event"
+        && (input.starts_at.is_some()
+            || input.starts_at_precision.is_some()
+            || input.ends_at.is_some()
+            || input.ends_at_precision.is_some()
+            || input.timezone.is_some())
+    {
+        return Err(ApiError::BadRequest(
+            "Event timing fields belong only to Events".into(),
+        ));
+    }
+    if kind != "entity" && (input.category_ids.is_some() || input.primary_category_id.is_some()) {
+        return Err(ApiError::BadRequest(
+            "Entity classification fields belong only to Entities".into(),
+        ));
+    }
+    if kind == "event"
+        || (kind == "entity"
+            && (input.category_ids.is_some() || input.primary_category_id.is_some()))
+    {
+        if input.happened_at.is_some() {
+            return Err(ApiError::BadRequest(
+                "happened_at belongs only to Memories".into(),
+            ));
+        }
+        let mut fields = serde_json::Map::new();
+        if kind == "event" {
+            if input.entity_kind.is_some()
+                || input.category_ids.is_some()
+                || input.primary_category_id.is_some()
+            {
+                return Err(ApiError::BadRequest(
+                    "Entity classification fields do not belong to Events".into(),
+                ));
+            }
+            fields = serde_json::to_value(crate::event_time::EventTime {
+                starts_at: input.starts_at,
+                starts_at_precision: input.starts_at_precision,
+                ends_at: input.ends_at,
+                ends_at_precision: input.ends_at_precision,
+                timezone: input.timezone,
+            })
+            .expect("Event fields")
+            .as_object()
+            .unwrap()
+            .clone();
+        } else {
+            if let Some(value) = input.entity_kind {
+                fields.insert("entity_kind".into(), json!(value));
+            }
+            if let Some(value) = input.category_ids {
+                fields.insert("category_ids".into(), json!(value));
+            }
+            if let Some(value) = input.primary_category_id {
+                fields.insert("primary_category_id".into(), json!(value));
+            }
+        }
+        let object = db::create_classified_object(
+            &state.pool,
+            &actor,
+            NewObject {
+                kind,
+                title: input.title,
+                description: input.description,
+                provenance: provenance(input.provenance)?,
+                entity_kind: None,
+                happened_at: None,
+            },
+            &fields,
+            &key,
+        )
+        .await?;
+        return Ok((StatusCode::CREATED, Json(json!({"data":object}))));
+    }
     if !matches!(kind.as_str(), "chat" | "entity" | "memory") {
         return Err(ApiError::BadRequest(format!(
             "use the typed endpoint to create a {kind}"
@@ -2895,11 +3000,19 @@ impl IntoResponse for ApiError {
                 if error
                     .as_database_error()
                     .and_then(|e| e.constraint())
-                    .is_some_and(|name| name.starts_with("task_")) =>
+                    .is_some_and(|name| {
+                        name.starts_with("task_") || name == "entity_classification"
+                    }) =>
             {
                 (
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "invalid_task",
+                    if error.as_database_error().and_then(|e| e.constraint())
+                        == Some("entity_classification")
+                    {
+                        "invalid_classification"
+                    } else {
+                        "invalid_task"
+                    },
                     error
                         .as_database_error()
                         .map(|e| e.message().to_owned())

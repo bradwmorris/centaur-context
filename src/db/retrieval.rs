@@ -122,7 +122,8 @@ pub async fn context_subtypes(
                         'kind','user','user_kind',u.user_kind,
                         'display_name',identity.display_name))
                     WHEN 'entity' THEN jsonb_build_object(
-                        'kind','entity','entity_kind',e.entity_kind)
+                        'kind','entity','entity_kind',e.entity_kind,'primary_category_id',e.primary_category_id,'category_ids',(SELECT jsonb_agg(category_id ORDER BY category_id) FROM entity_category_assignments WHERE entity_object_id=o.id))
+                    WHEN 'event' THEN (SELECT to_jsonb(ev)-'object_id' || jsonb_build_object('kind','event') FROM real_world_events ev WHERE ev.object_id=o.id)
                     WHEN 'memory' THEN jsonb_build_object(
                         'kind','memory','happened_at',m.happened_at)
                     WHEN 'source' THEN jsonb_strip_nulls(jsonb_build_object(

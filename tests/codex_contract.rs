@@ -167,7 +167,7 @@ async fn captures_replays_curates_and_supplies_canonical_write_provenance() {
         .0,
         StatusCode::CONFLICT
     );
-    let apply = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Release rationale","description":"The owner chose Friday for the documentation release.","fields":{"intent":"idea","content":"A deliberately requested note."}}]});
+    let apply = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"idea","kind":"note","title":"Release rationale","description":"The owner chose Friday for the documentation release.","fields":{"intent":"idea","content":"A deliberately requested note."}}]});
     let (status, result) = response(
         app.clone(),
         request(
@@ -289,7 +289,7 @@ async fn credentials_targets_and_system_objects_are_separate() {
         StatusCode::BAD_REQUEST
     );
     for kind in ["memory", "chat", "user"] {
-        let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"explicit","kind":kind,"title":"Explicit domain record","description":"Explicit creation records authenticated attribution.","fields":{}}]});
+        let body = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[{"operation":"create_object","local_ref":"explicit","kind":kind,"title":"Explicit domain record","description":"Explicit creation records authenticated attribution.","fields":{}}]});
         assert_eq!(
             response(
                 app.clone(),
@@ -306,7 +306,7 @@ async fn credentials_targets_and_system_objects_are_separate() {
             StatusCode::OK
         );
     }
-    let body = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[]});
+    let body = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"chat_object_id":chat,"operations":[]});
     assert_ne!(
         response(
             app,

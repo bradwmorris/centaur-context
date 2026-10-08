@@ -127,7 +127,7 @@ def test_universal_tools_use_the_three_v2_routes():
     ) == {"ok": True}
     assert value.context_apply(
         {
-            "contract_version": "1.1.0",
+            "contract_version": "1.2.0",
             "idempotency_key": "apply-1",
             "operations": [{"operation": "archive_object"}],
         }

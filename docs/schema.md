@@ -33,7 +33,7 @@ A Connection joins two Objects. It names the relationship and includes an explan
 For example, a Chat might involve a User. A Task agreed in that conversation might be `derived_from` the Chat and `depend_on` another Task. These links let the system find an Object and then inspect nearby knowledge. The explanation makes each link reviewable; it is not merely an unexplained edge in a graph.
 
 Explicit authenticated corrections can edit protected Objects and Connections.
-`protected` remains an autonomous-curation preference. All eight Object kinds
+`protected` remains an autonomous-curation preference. All nine Object kinds
 have revisioned current metadata, archival and restoration paths. Stable UUIDs,
 Object kinds, original message authorship, Artifact bytes and audit Events remain
 historical evidence. Use replacement Objects and relink current relationships for
@@ -77,3 +77,8 @@ parallel Object types.
 Runs record operations such as curation. Immutable Object Events record changes to Objects and Connections, so you can see what changed and why. These supporting records are **not** additional Object types. They help keep the knowledge traceable and reviewable.
 
 This structure is deliberately modest. PostgreSQL stores the Objects, relationships, evidence, and history together. If much deeper relationship traversal becomes a real requirement, a graph database may be worth revisiting. For now, the more important work is checking that the system stores the right knowledge and actually brings it back when an agent needs it.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+See the embedded `ontology_guide` and [Events/classification RD](../dev/rd/events-classifications.md) for exact fields, definitions and examples. `real_world_events` is a matching Object subtype; `object_events` remains immutable change history. Calendar timing preserves precision and supplied offsets. Entity categories are supporting catalogue metadata, with multiple assignments and one primary determining legacy `entity_kind`. Initial backfill preserves all existing classifications and Object revisions. Catalogue mutations use the three universal tools and attributed Run snapshots; vocabulary changes require explicit user instruction. Empty-ID reads require `include:["entity_categories"]`. `entity_filters` accepts category UUIDs with `match:any|all`; results use ascending UUID order and an exclusive UUID cursor, active Entities only. Text remains title/description discovery. Legacy 1.1.0 writes remain accepted with conflict protection for richer classifications.

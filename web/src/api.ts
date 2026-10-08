@@ -56,10 +56,25 @@ function write(method: "POST" | "PATCH" | "PUT", body: unknown): RequestInit {
 }
 
 export const api = {
+  async filteredEntities(query: string, categories: string[]) {
+    const items: SharedObject[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: { objects: SharedObject[]; next_cursor: string | null } = await request("/api/v2/search", write("POST", { query, object_types: ["entity"], entity_filters: { category_ids: categories, match: "any", cursor }, limit: 100 }));
+      items.push(...page.objects);
+      cursor = page.next_cursor;
+    } while (cursor);
+    return items;
+  },
+  async entityCategories() { const data = await request<{ entity_categories: { categories: import("./EventEntityFields").EntityCategory[]; revision: string } }>("/api/v2/read", write("POST", { object_ids: [], include: ["entity_categories"] })); return data.entity_categories; },
+  async readSubtype(id: string) { const data = await request<{ objects: { subtype: Record<string, unknown> }[] }>("/api/v2/read", write("POST", { object_ids: [id] })); return data.objects[0].subtype; },
+  createTypedObject(kind: string, title: string, description: string, fields: Record<string, unknown>) {
+    return request<SharedObject>("/api/v2/objects", write("POST", { kind, title, description, ...fields, provenance: { source_type: "human", note: "Created in Centaur Context" } }));
+  },
   readCorrections(id: string, messages: boolean) { return request("/api/v2/read", { method: "POST", body: JSON.stringify({object_ids: [id], include: ["events", "artifacts", ...(messages ? ["messages"] : [])]}) }); },
   applyCorrections(operations: Record<string, unknown>[]) {
     const key = crypto.randomUUID();
-    return request("/api/v2/apply", { method: "POST", headers: {"Idempotency-Key": key}, body: JSON.stringify({contract_version: "1.1.0", idempotency_key: key, operations}) });
+    return request("/api/v2/apply", { method: "POST", headers: {"Idempotency-Key": key}, body: JSON.stringify({contract_version: "1.2.0", idempotency_key: key, operations}) });
   },
   routine(id: string) { return request<import("./TaskRoutine").RoutineDetail>(`/api/v2/tasks/${id}/routine`); },
   configureRoutine(id: string, body: unknown) { return request(`/api/v2/tasks/${id}/routine`, write("PUT", body)); },

@@ -181,3 +181,8 @@ metadata. Original assertions remain in Events; `correct_evidence` records
 qualifications to historical evidence. Manual edits exclude the Memory from
 automatic rewriting. Background readers receive original message evidence and
 attached correction assertions separately.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+A real-world Event is a canonical occurrence, not an audit event or an automatic Memory. Existing capture/curation remains Memory-only. A distinct meaningful interaction may link to an Event; an Event existing is not by itself a reason for a duplicate Memory.

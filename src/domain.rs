@@ -224,7 +224,7 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
 }
 
 pub const OBJECT_KINDS: &[&str] = &[
-    "task", "chat", "user", "entity", "memory", "source", "note", "theme",
+    "event", "task", "chat", "user", "entity", "memory", "source", "note", "theme",
 ];
 pub const CONNECTION_KINDS: &[&str] = &[
     "involves",

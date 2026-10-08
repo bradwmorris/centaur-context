@@ -16,10 +16,11 @@ RUNTIME_INSTRUCTIONS = ROOT / "services/sandbox/SYSTEM_PROMPT.md"
 APPLY_TOOL = ROOT / "tools/centaur_context/apply.py"
 DESCRIPTION_MIGRATION = ROOT / "migrations/0026_object_description_policy.sql"
 
-EXPECTED_TYPES = {"task", "chat", "user", "entity", "memory", "source", "note", "theme"}
+EXPECTED_TYPES = {"task", "chat", "user", "entity", "memory", "source", "note", "theme", "event"}
 EXPECTED_TOOLS = {"context_search", "context_read", "context_apply"}
 EXPECTED_WRITABLE = EXPECTED_TYPES
 EXPECTED_APPLY_OPERATIONS = {
+    "create_entity_category", "update_entity_category", "archive_entity_category", "restore_entity_category",
     "create_object",
     "update_object",
     "archive_object",
