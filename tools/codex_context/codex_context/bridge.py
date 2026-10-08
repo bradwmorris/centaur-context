@@ -481,7 +481,7 @@ def serve(settings: Settings, incoming=sys.stdin, outgoing=sys.stdout) -> None:
             method = message.get("method")
             if method == "initialize":
                 result = {"protocolVersion":"2025-06-18","capabilities":{"tools":{}},
-                    "serverInfo":{"name":"centaur-context","version":"0.1.0"},
+                    "serverInfo":{"name":"centaur-context","version":"0.2.0"},
                     "instructions":contract.guidance()}
             elif method == "tools/list": result = {"tools":tool_schema()}
             elif method == "tools/call":
