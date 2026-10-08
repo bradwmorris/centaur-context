@@ -50,7 +50,7 @@ export function CorrectionHistory({ id, kind, onChanged }: { id: string; kind: s
             <option value={`object:${id}`}>Record identity or historical metadata</option>
             {snapshot.artifacts?.map((item) => <option key={item.id} value={`artifact:${item.id}`}>Artifact: {item.title ?? item.id}</option>)}
             {snapshot.messages?.map((item) => <option key={item.id} value={`message:${item.id}`}>Message: {item.content?.slice(0, 80) ?? item.id}</option>)}
-            {snapshot.events?.map((item) => <option key={item.id} value={`event:${item.id}`}>Event: {item.action} {item.id.slice(0, 8)}</option>)}
+            {snapshot.events?.map((item) => <option key={item.id} value={`event:${item.id}`}>Change: {item.action} {item.id.slice(0, 8)}</option>)}
           </select></label>
           <label>Corrected representation<textarea name="content" maxLength={20000} /></label>
           <label>Reason<textarea name="reason" required maxLength={2000} /></label>

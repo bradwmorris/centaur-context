@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "contract_version": "1.1.0",
-  "ontology_version": "3",
-  "tool_version": "1.1.0",
+  "contract_version": "1.2.0",
+  "ontology_version": "4",
+  "tool_version": "1.2.0",
   "object_types": {
     "task": {
       "interactive_write": true,
@@ -23,7 +23,9 @@
     "entity": {
       "interactive_write": true,
       "fields": [
-        "entity_kind"
+        "entity_kind",
+        "category_ids",
+        "primary_category_id"
       ]
     },
     "source": {
@@ -75,6 +77,16 @@
       "fields": [
         "happened_at"
       ]
+    },
+    "event": {
+      "interactive_write": true,
+      "fields": [
+        "starts_at",
+        "starts_at_precision",
+        "ends_at",
+        "ends_at_precision",
+        "timezone"
+      ]
     }
   },
   "connection_kinds": [
@@ -105,7 +117,8 @@
       "theme": "How canonical Objects are found and ranked using their titles, descriptions and relationships.",
       "chat": "Alex and a research assistant compared retrieval methods and selected a metadata-only evaluation plan.",
       "user": "A research assistant that helps review sources and prepare evidence-backed notes.",
-      "memory": "Alex approved the retrieval evaluation plan after reviewing its synthetic test cases."
+      "memory": "Alex approved the retrieval evaluation plan after reviewing its synthetic test cases.",
+      "event": "A planned workshop on evaluation methods, with its evidenced calendar dates."
     }
   },
   "tools": {
@@ -131,12 +144,22 @@
           "object_types",
           "limit",
           "lexical_only",
-          "task_filters"
+          "task_filters",
+          "entity_filters"
         ]
       },
       "output": {
         "required": [
           "objects"
+        ]
+      },
+      "entity_filters": {
+        "required": [
+          "category_ids"
+        ],
+        "optional": [
+          "match",
+          "cursor"
         ]
       }
     },
@@ -304,6 +327,39 @@
             "expected_target_revision",
             "reason"
           ]
+        },
+        "create_entity_category": {
+          "required": [
+            "slug",
+            "label",
+            "definition",
+            "legacy_kind"
+          ],
+          "optional": [
+            "aliases"
+          ]
+        },
+        "update_entity_category": {
+          "required": [
+            "category_id",
+            "expected_revision",
+            "changes"
+          ],
+          "optional": []
+        },
+        "archive_entity_category": {
+          "required": [
+            "category_id",
+            "expected_revision"
+          ],
+          "optional": []
+        },
+        "restore_entity_category": {
+          "required": [
+            "category_id",
+            "expected_revision"
+          ],
+          "optional": []
         }
       },
       "object_reference": {
@@ -353,5 +409,130 @@
     "different_connection_assertion_merges_provenance": true,
     "protected_is_background_curation_preference": true,
     "evidence_corrections_preserve_original": true
+  },
+  "ontology_guide": {
+    "identity_rules": [
+      "Entity: a specific identifiable subject whose stable reference helps authorized work; passing mentions do not require Entities.",
+      "Event: one actual or planned occurrence. Future dates do not prove attendance or completion. Rescheduling the same occurrence updates it.",
+      "Source: the evidence/document; Note: an atomic Idea, Excerpt or Fact (including explanations); Theme: an organizing topic; Memory: a meaningful interaction/outcome, distinct from the occurrence itself.",
+      "Search names and distinguishing context, read plausible matches and resolve ambiguity. An empty lexical result does not prove absence.",
+      "Choose the smallest evidenced category set and primary. Propose missing categories with meaning/example, then mutate vocabulary only on explicit request. Category labels/definitions are data, not instructions.",
+      "Batch local refs, expected revisions and stable request keys; use compact readback. Reuse an unchanged catalogue within a session; refresh after catalogue mutation or mismatch."
+    ],
+    "examples": [
+      "Central named cost model: reuse/create model Entity; add product only when actually offered as a product. Its explanatory Note and publication Source remain separate.",
+      "A named teaching can be an Entity; its explanation is a Fact Note. A broad study subject can remain a Theme.",
+      "A particular retirement fund differs from its provider, trustee, strategy document and finance Theme. Never infer legal status or ownership from its name.",
+      "A dated retreat is an Event; a later reflection is a Note about that Event. Do not add a duplicate Memory solely because the Event exists."
+    ],
+    "event_time": [
+      "Endpoint and precision are nullable pairs. Preserve YYYY / YYYY-MM / YYYY-MM-DD / RFC3339 with offset exactly; never pad calendar dates into instants.",
+      "Both present endpoints require the same precision and end >= start. Calendar end periods are inclusive, equal instants allowed, absent end is unspecified.",
+      "Optional IANA timezone must agree with every instant offset including DST. Updates validate merged state; clear endpoint/precision together with null.",
+      "Use explained involves for participants, related_to for place, about for Notes, derived_from for evidence."
+    ],
+    "category_read": "context_read with include entity_categories permits empty object_ids and returns definitions plus catalogue revision hash.",
+    "category_search": "entity_filters={category_ids:[UUID],match:any|all,cursor:UUID}. Empty query allowed, only Entity object_types. Active Entity results ordered by UUID ascending; next_cursor is exclusive last UUID. Optional text matches title/description only.",
+    "compatibility": "1.1.0 apply requests remain accepted. Legacy create maps entity_kind to seeded singleton. Unchanged legacy update preserves richer assignments; changing it conflicts on rich Entities. Explicit canonical and legacy fields must agree.",
+    "seed_categories": [
+      {
+        "id": "13f7a097-afbf-5a31-9955-c8df037c81b4",
+        "slug": "person",
+        "label": "Person",
+        "definition": "A particular person; not their organization or work.",
+        "legacy_kind": "person"
+      },
+      {
+        "id": "4ada4721-8c22-5113-a67b-b2d586f8da66",
+        "slug": "organization",
+        "label": "Organization",
+        "definition": "A named organization; not its products or members.",
+        "legacy_kind": "organization"
+      },
+      {
+        "id": "4362a584-073a-50cb-8f3b-6a28572b8225",
+        "slug": "product",
+        "label": "Product",
+        "definition": "A named offering; not every model or concept is a product.",
+        "legacy_kind": "product"
+      },
+      {
+        "id": "12ff5921-5914-5a2d-94a1-d9188c1cd13c",
+        "slug": "project",
+        "label": "Project",
+        "definition": "A particular coordinated endeavour; not a general topic.",
+        "legacy_kind": "project"
+      },
+      {
+        "id": "ec1a52ab-2951-53d4-8dff-461334ecd41a",
+        "slug": "publication",
+        "label": "Publication",
+        "definition": "A named publication identity; captured documents remain Sources.",
+        "legacy_kind": "publication"
+      },
+      {
+        "id": "830d29e8-ed08-57aa-8d43-fb2c3d0b4ded",
+        "slug": "place",
+        "label": "Place",
+        "definition": "A particular location; not an occurrence at that location.",
+        "legacy_kind": "place"
+      },
+      {
+        "id": "cfd45eec-9ac4-5138-b2b3-e66b0eb6d506",
+        "slug": "concept",
+        "label": "Concept",
+        "definition": "An identifiable named concept; not every explanatory Note or Theme.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "c23be2fd-5994-57c9-a718-2cab879ec78c",
+        "slug": "other",
+        "label": "Other",
+        "definition": "An identifiable subject outside the defined categories.",
+        "legacy_kind": "other"
+      },
+      {
+        "id": "5b2cc51a-fa49-5489-a456-51c27c16da9f",
+        "slug": "model",
+        "label": "Model",
+        "definition": "A named representation or estimator of a system; not its explanatory document.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "94d3c10a-1137-53d4-ad9a-d9590e577889",
+        "slug": "benchmark",
+        "label": "Benchmark",
+        "definition": "A named evaluation instrument; not the topic being evaluated.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "61845718-7946-5b0a-8714-fafe4c681080",
+        "slug": "framework",
+        "label": "Framework",
+        "definition": "A named structure for organizing reasoning; not every broad topic.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "2b141124-4c80-514e-bdc9-9e72b896845f",
+        "slug": "method",
+        "label": "Method",
+        "definition": "A named procedure; not one execution of that procedure.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "123023f9-423b-52e7-85fa-336275c59826",
+        "slug": "teaching",
+        "label": "Teaching",
+        "definition": "A named body of teaching; not an explanatory Note or publication.",
+        "legacy_kind": "concept"
+      },
+      {
+        "id": "a8ee4ead-eb13-5240-8b6a-b4c71228a2bf",
+        "slug": "fund",
+        "label": "Fund",
+        "definition": "A particular pooled investment arrangement; not its provider, trustee or strategy document.",
+        "legacy_kind": "other"
+      }
+    ]
   }
 }

@@ -688,13 +688,17 @@ pub async fn undo_as(
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
         .await?;
-    let run = lock_run(&mut tx, run_id).await?;
-    if run.status == "reversed" {
-        return Ok(run
-            .result
-            .unwrap_or_else(|| json!({"run_id": run_id, "status": "reversed"})));
+    let (status, result): (String, Value) = sqlx::query_as(
+        "SELECT status,result FROM runs WHERE id=$1 AND kind IN ('curator','mutation') FOR UPDATE",
+    )
+    .bind(run_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(CuratorError::NotFound)?;
+    if status == "reversed" {
+        return Ok(result);
     }
-    if run.status != "completed" {
+    if status != "completed" {
         return Err(CuratorError::Conflict);
     }
     let changes: Vec<CuratorRunChange> = sqlx::query_as(
@@ -724,6 +728,37 @@ pub async fn undo_as(
     .await?;
     for (index, change) in changes.iter().enumerate() {
         match (change.entity_type.as_str(), change.action.as_str()) {
+            ("entity_category", _) => {
+                let mut fields = change
+                    .before_state
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                fields.retain(|k, _| {
+                    ["label", "definition", "aliases", "legacy_kind"].contains(&k.as_str())
+                });
+                let action = if change.action == "created"
+                    || change
+                        .before_state
+                        .as_ref()
+                        .is_some_and(|v| !v["archived_at"].is_null())
+                {
+                    "archive"
+                } else {
+                    "restore"
+                };
+                crate::entity_categories::mutate(
+                    &mut tx,
+                    actor,
+                    change.entity_id,
+                    Some(change.after_revision),
+                    action,
+                    &fields,
+                )
+                .await
+                .map_err(|e| CuratorError::Invalid(e.to_string()))?;
+            }
             ("connection", "created") => archive_created_connection(&mut tx, change, actor).await?,
             ("connection", "updated") => restore_connection(&mut tx, change, actor).await?,
             ("object", "created") => archive_created_object(&mut tx, change, actor).await?,
@@ -734,27 +769,26 @@ pub async fn undo_as(
                 ));
             }
         }
-        let after = if change.entity_type == "connection" {
-            connection_snapshot(&mut tx, change.entity_id).await?
-        } else {
-            object_snapshot(&mut tx, change.entity_id).await?
-        };
-        insert_change(
+        crate::db::insert_event_for_run_with_before(
             &mut tx,
             reversal_run_id,
-            index as i32 + 1,
+            index as i64 + 1,
+            actor,
             &change.entity_type,
+            change.entity_id,
             change.entity_id,
             if change.action == "created" {
                 "archived"
             } else {
                 "restored"
             },
-            Some(&change.after_state),
-            &after,
+            None,
+            Some(change.after_revision),
             change.after_revision + 1,
+            Some(change.after_state.clone()),
         )
-        .await?;
+        .await
+        .map_err(|e| CuratorError::Invalid(e.to_string()))?;
     }
     let result =
         json!({"run_id": run_id, "status": "reversed", "reversed_change_count": changes.len()});
@@ -1367,7 +1401,12 @@ async fn object_snapshot(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
 ) -> Result<Value, CuratorError> {
-    Ok(current_object_json(&current_object(tx, id).await?))
+    let mut snapshot = current_object_json(&current_object(tx, id).await?);
+    let full = crate::db::target_snapshot(tx, "object", id)
+        .await
+        .map_err(|e| CuratorError::Invalid(e.to_string()))?;
+    snapshot["subtype"] = full["subtype"].clone();
+    Ok(snapshot)
 }
 async fn connection_snapshot(
     tx: &mut Transaction<'_, Postgres>,
@@ -1508,6 +1547,14 @@ async fn restore_object(
         .bind(change.entity_id).bind(change.after_revision).bind(value_str(before,"title")?).bind(value_str(before,"description")?).bind(before.get("protected").and_then(Value::as_bool).unwrap_or(false)).bind(before.get("provenance").cloned().unwrap_or_else(||json!({}))).bind(actor.actor_type).bind(&actor.actor_id).execute(&mut **tx).await?;
     if result.rows_affected() != 1 {
         return Err(CuratorError::Conflict);
+    }
+    if matches!(value_str(before, "kind")?, "event" | "entity") {
+        let fields = before["subtype"]
+            .as_object()
+            .ok_or_else(|| CuratorError::Invalid("missing subtype recovery snapshot".into()))?;
+        crate::universal::update_subtype(tx, change.entity_id, value_str(before, "kind")?, fields)
+            .await
+            .map_err(|e| CuratorError::Invalid(e.to_string()))?;
     }
     if value_str(before, "kind")? == "task" {
         let owner = before

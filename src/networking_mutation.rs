@@ -233,6 +233,8 @@ async fn canonical_entity(pool: &sqlx::PgPool, object: db::Object) -> Result<Val
         .remove(&id)
         .ok_or(db::DbError::NotFound)?;
     record["entity_kind"] = subtype["entity_kind"].clone();
+    record["category_ids"] = subtype["category_ids"].clone();
+    record["primary_category_id"] = subtype["primary_category_id"].clone();
     Ok(record)
 }
 
@@ -242,7 +244,9 @@ struct CreateEntityRequest {
     kind: String,
     title: String,
     description: String,
-    entity_kind: String,
+    entity_kind: Option<String>,
+    category_ids: Option<Vec<Uuid>>,
+    primary_category_id: Option<Uuid>,
     provenance: Value,
 }
 
@@ -260,7 +264,20 @@ async fn create_entity(
     let key = idempotency_key(&headers)?;
     let title = required_text(input.title, "title", 300)?;
     let description = object_description(&title, input.description)?;
-    let entity_kind = allowed(input.entity_kind, "entity_kind", ENTITY_KINDS)?;
+    let entity_kind = input
+        .entity_kind
+        .map(|kind| allowed(kind, "entity_kind", ENTITY_KINDS))
+        .transpose()?;
+    let mut fields = serde_json::Map::new();
+    if let Some(kind) = &entity_kind {
+        fields.insert("entity_kind".into(), json!(kind));
+    }
+    if let Some(ids) = input.category_ids {
+        fields.insert("category_ids".into(), json!(ids));
+    }
+    if let Some(id) = input.primary_category_id {
+        fields.insert("primary_category_id".into(), json!(id));
+    }
     let provenance = required_provenance(input.provenance)?;
     let expected = json!({
         "title": &title,
@@ -268,7 +285,7 @@ async fn create_entity(
         "entity_kind": &entity_kind,
         "provenance": &provenance,
     });
-    let object = db::create_object(
+    let object = db::create_classified_object(
         &state.app.pool,
         &actor,
         NewObject {
@@ -276,9 +293,10 @@ async fn create_entity(
             title,
             description,
             provenance,
-            entity_kind: Some(entity_kind),
+            entity_kind,
             happened_at: None,
         },
+        &fields,
         &key,
     )
     .await?;
@@ -286,11 +304,21 @@ async fn create_entity(
         return Err(ApiError::Db(db::DbError::Conflict));
     }
     let record = canonical_entity(&state.app.pool, object).await?;
-    ensure_replay_fields(
-        &record,
-        &expected,
-        &["title", "description", "entity_kind", "provenance"],
-    )?;
+    ensure_replay_fields(&record, &expected, &["title", "description", "provenance"])?;
+    for (key, value) in &fields {
+        if key == "category_ids" {
+            let mut expected: Vec<Uuid> = serde_json::from_value(value.clone()).expect("typed IDs");
+            let mut actual: Vec<Uuid> = serde_json::from_value(record[key].clone())
+                .map_err(|_| ApiError::Db(db::DbError::Conflict))?;
+            expected.sort();
+            actual.sort();
+            if expected != actual {
+                return Err(ApiError::Db(db::DbError::Conflict));
+            }
+        } else if record[key] != *value {
+            return Err(ApiError::Db(db::DbError::Conflict));
+        }
+    }
     Ok((StatusCode::CREATED, Json(json!({"data":record}))))
 }
 

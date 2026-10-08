@@ -20,11 +20,11 @@ def _parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("object_ids", nargs="+", help="One or more Object UUIDs.")
+    parser.add_argument("object_ids", nargs="*", help="One or more Object UUIDs.")
     parser.add_argument(
         "--include",
         action="append",
-        choices=("connections", "artifacts", "events", "messages"),
+        choices=("connections", "artifacts", "events", "messages", "entity_categories"),
         help="Include related data; repeat for multiple kinds.",
     )
     parser.add_argument(
@@ -33,6 +33,7 @@ def _parser() -> argparse.ArgumentParser:
         help='JSON object with "artifact_id" and optional "offset" and "limit".',
     )
     parser.add_argument("--note-window", action="append", help='JSON object with "object_id" and optional "offset" and "limit".')
+    parser.add_argument("--entity-categories", action="store_true", help="Read category definitions without Object IDs.")
     return parser
 
 
@@ -41,7 +42,7 @@ def app(argv: list[str] | None = None) -> None:
     run(
         lambda: _client().context_read(
             values.object_ids,
-            include=values.include,
+            include=(values.include or []) + (["entity_categories"] if values.entity_categories else []),
             note_windows=[json.loads(value) for value in values.note_window or []],
             artifact_windows=[
                 json.loads(value) for value in values.artifact_window or []

@@ -64,7 +64,7 @@ async fn call(app: &Router, path: &str, body: Value) -> (StatusCode, Value) {
     (status, value)
 }
 fn batch(ops: Value) -> Value {
-    json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4(),"operations":ops})
+    json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4(),"operations":ops})
 }
 async fn apply(app: &Router, ops: Value) -> Value {
     let (status, value) = call(app, "/api/v2/apply", batch(ops)).await;

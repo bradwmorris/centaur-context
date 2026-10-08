@@ -127,7 +127,7 @@ def test_universal_tools_use_the_three_v2_routes():
     ) == {"ok": True}
     assert value.context_apply(
         {
-            "contract_version": "1.1.0",
+            "contract_version": "1.2.0",
             "idempotency_key": "apply-1",
             "operations": [{"operation": "archive_object"}],
         }
@@ -559,3 +559,18 @@ def test_routine_client_uses_current_identity_and_preserves_response():
     value.routine_configure("task",{"expected_revision":1,"enabled":False})
     value.routine_result("run","review","Synthetic evidence")
     assert seen == [("GET","/api/v2/tasks/task/routine"),("PUT","/api/v2/tasks/task/routine"),("PATCH","/api/v2/routine-runs/run")]
+
+
+def test_catalogue_only_read_and_category_filter_round_trip():
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return response({"entity_categories": {"revision": "synthetic", "categories": []}})
+    scoped = client(handler)
+    assert scoped.context_read([], include=["entity_categories"])["entity_categories"]["revision"] == "synthetic"
+    with pytest.raises(ValueError):
+        scoped.context_read([])
+    filters = {"category_ids": ["5b2cc51a-fa49-5489-a456-51c27c16da9f"], "match": "all", "cursor": "00000000-0000-0000-0000-000000000001"}
+    scoped.context_search("", entity_filters=filters)
+    assert seen[0]["object_ids"] == []
+    assert seen[1]["entity_filters"] == filters

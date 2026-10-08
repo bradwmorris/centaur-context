@@ -1,9 +1,9 @@
 [project]
 name = "centaur-codex-context"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local Codex Chat capture and three Context MCP tools"
 requires-python = ">=3.11"
-dependencies = ["centaur-context==1.1.0"]
+dependencies = ["centaur-context==1.2.0"]
 
 [project.scripts]
 centaur-codex-context = "codex_context.bridge:main"

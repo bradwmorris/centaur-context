@@ -11,6 +11,8 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 axum = "0.8.9"
 imagesize = { version = "0.14", default-features = false, features = ["jpeg", "png", "webp"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

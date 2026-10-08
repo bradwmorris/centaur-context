@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ObjectKind, ObjectVisual, SourceKind, TaskStatus, UserAttribution } from "./types";
 
 const typeVisuals: Record<ObjectKind, { icon: string; label: string; code: string }> = {
+  event: { icon: "◷", label: "Event", code: "EVT" },
   task: { icon: "✓", label: "Task", code: "TAS" },
   chat: { icon: "◌", label: "Chat", code: "CHA" },
   user: { icon: "♙", label: "User", code: "USE" },

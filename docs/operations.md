@@ -166,3 +166,8 @@ remove intake configuration too when no other owner operation needs that listene
 
 
 `POST /api/v2/maintenance/memory-review` validates or applies an exact saved Memory preview through the same token, allowed principal/thread and `MAINTENANCE_APPROVED_REQUEST_SHA256` authority. Keep the worker in preview for initial cleanup; validate the saved Run, approve its returned hash, then apply that exact Run without model inference. See [the procedure](memory.md#apply-an-exact-reviewed-preview). Autonomous apply is a separate ongoing-review enablement.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+The binary supports `--migrate-only`: normal transactional SQLx migrations, ledger log and exit before listeners/workers. `--disable-workers` suppresses all five background worker loops and embedding preparation while retaining listener authentication. Operators must gate producers separately. Prebuild, drain writers, preserve queues, take and verify a same-store backup, migrate, compare integrity, verify with workers disabled, then restore exact saved producer/worker states. A readable backup archive is not a tested restore; never restore an old backup over resumed writes.

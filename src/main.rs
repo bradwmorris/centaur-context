@@ -18,6 +18,15 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let mut migrate_only = false;
+    let mut workers_disabled = false;
+    for argument in std::env::args().skip(1) {
+        match argument.as_str() {
+            "--migrate-only" => migrate_only = true,
+            "--disable-workers" => workers_disabled = true,
+            _ => anyhow::bail!("unknown startup argument: {argument}"),
+        }
+    }
     let config = Config::from_env()?;
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -27,12 +36,27 @@ async fn main() -> Result<()> {
     db::migrate(&pool)
         .await
         .context("run centaur_context migrations")?;
+    if migrate_only {
+        let ledger: Vec<(i64, String, bool)> = sqlx::query_as(
+            "SELECT version, description, success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&pool)
+        .await?;
+        info!(
+            ?ledger,
+            "migrations complete; no listeners or workers started"
+        );
+        return Ok(());
+    }
+    if workers_disabled {
+        info!("maintenance mode: all background writers disabled; authentication unchanged");
+    }
     let embedding_client = config
         .embedding
         .as_ref()
         .map(centaur_context::embeddings::EmbeddingClient::new)
         .transpose()?;
-    if let Some(client) = embedding_client.as_ref() {
+    if let Some(client) = embedding_client.as_ref().filter(|_| !workers_disabled) {
         centaur_context::embeddings::prepare(&pool, client).await?;
     } else {
         info!("Object embeddings disabled; full-text search remains available");
@@ -335,11 +359,11 @@ async fn main() -> Result<()> {
         result = networking_mutation_server => result?,
         result = external_action_server => result?,
         result = codex_server => result?,
-        _ = inactivity_worker => unreachable!("inactivity worker runs until shutdown"),
-        _ = embedding_worker => unreachable!("embedding worker runs until shutdown"),
-        _ = memory_capture_worker => unreachable!("memory capture worker runs until shutdown"),
-        _ = dream_worker => unreachable!("dream worker runs until shutdown"),
-        _ = curator_worker => unreachable!("curator worker runs until shutdown"),
+        _ = inactivity_worker, if !workers_disabled => unreachable!("inactivity worker runs until shutdown"),
+        _ = embedding_worker, if !workers_disabled => unreachable!("embedding worker runs until shutdown"),
+        _ = memory_capture_worker, if !workers_disabled => unreachable!("memory capture worker runs until shutdown"),
+        _ = dream_worker, if !workers_disabled => unreachable!("dream worker runs until shutdown"),
+        _ = curator_worker, if !workers_disabled => unreachable!("curator worker runs until shutdown"),
         _ = shutdown_signal() => info!("shutdown signal received"),
     }
     Ok(())

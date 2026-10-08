@@ -37,6 +37,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-due-before", help="RFC3339 latest due instant.")
     parser.add_argument("--ready", action="store_true", help="Agent-suitable, assigned, dated backlog/todo Tasks with a brief and no incomplete Task dependency; inspect permission before claiming.")
     parser.add_argument("--task-cursor", help="next_cursor from the preceding filtered page.")
+    parser.add_argument("--entity-category", action="append", help="Category UUID; repeat for multiple categories.")
+    parser.add_argument("--entity-match", choices=["any","all"], default="any")
+    parser.add_argument("--entity-cursor")
     return parser
 
 
@@ -48,6 +51,8 @@ def app(argv: list[str] | None = None) -> None:
         "ready": values.ready or None, "cursor": values.task_cursor,
     }.items() if value is not None}
     extra = {"task_filters": filters} if filters else {}
+    if values.entity_category:
+        extra["entity_filters"] = {"category_ids": values.entity_category, "match": values.entity_match, "cursor": values.entity_cursor}
     run(
         lambda: _client().context_search(
             values.query,

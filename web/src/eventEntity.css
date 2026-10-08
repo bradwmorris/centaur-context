@@ -1,0 +1,15 @@
+.typed-properties { display: grid; gap: 14px; margin: 12px 0; padding: 16px; border: 1px solid var(--border, #34363c); border-radius: 8px; }
+.typed-properties legend { padding: 0 6px; font-weight: 600; }
+.typed-properties p { margin: 0; color: var(--text-secondary, #a3a5ad); font-size: 13px; }
+.typed-properties label, .category-manager form label { display: grid; gap: 6px; font-size: 13px; }
+.typed-properties input:not([type=checkbox]), .typed-properties select, .category-manager input, .category-manager textarea, .category-manager select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border, #34363c); border-radius: 5px; padding: 8px; font: inherit; background: var(--panel-raised, #202126); color: var(--text-primary, #ddd); }
+.typed-properties .category-choice { display: grid; grid-template-columns: 18px 1fr; align-items: start; gap: 6px; }
+.category-choice small { grid-column: 2; color: var(--text-secondary, #a3a5ad); line-height: 1.4; }
+.category-manager { margin: 16px; padding: 12px; border: 1px solid var(--border, #34363c); border-radius: 8px; }
+.category-manager summary { cursor: pointer; }
+.category-manager form { display: grid; gap: 12px; max-width: 650px; }
+.category-manager li { margin: 12px 0; line-height: 1.5; }
+.category-manager small { display: block; }
+.typed-create-form { max-height: calc(86vh - 70px); overflow-y: auto; }
+.typed-create-form .create-body { min-height: 72px; }
+.typed-create-form .create-footer { position: sticky; bottom: -14px; background: #151517; padding: 12px 0; }

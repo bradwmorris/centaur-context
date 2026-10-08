@@ -25,3 +25,7 @@ pub mod version;
 mod reviewed_purge;
 
 pub mod source_previews;
+
+pub mod entity_categories;
+pub mod entity_classification;
+pub mod event_time;

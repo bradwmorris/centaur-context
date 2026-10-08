@@ -141,3 +141,8 @@ the maintenance inventory reader on the agent/session-bound listener without
 granting maintenance writes. Inventory includes metadata/provenance, not original
 Note bodies or transcripts; use explicit reads for selected evidence. Record
 the collection interval because concurrent writes can change the live inventory.
+
+
+## Events and Entity classifications (contract 1.2.0, schema 38)
+
+See the embedded `ontology_guide` and [Events/classification RD](../dev/rd/events-classifications.md) for exact fields, definitions and examples. `real_world_events` is a matching Object subtype; `object_events` remains immutable change history. Calendar timing preserves precision and supplied offsets. Entity categories are supporting catalogue metadata, with multiple assignments and one primary determining legacy `entity_kind`. Initial backfill preserves all existing classifications and Object revisions. Catalogue mutations use the three universal tools and attributed Run snapshots; vocabulary changes require explicit user instruction. Empty-ID reads require `include:["entity_categories"]`. `entity_filters` accepts category UUIDs with `match:any|all`; results use ascending UUID order and an exclusive UUID cursor, active Entities only. Text remains title/description discovery. Legacy 1.1.0 writes remain accepted with conflict protection for richer classifications.

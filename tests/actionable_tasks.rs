@@ -52,14 +52,14 @@ fn create(owner: Uuid, fields: Value) -> Value {
         .as_object_mut()
         .unwrap()
         .extend(fields.as_object().unwrap().clone());
-    json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
+    json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[
         {"operation":"create_object","local_ref":"task","kind":"task","title":"Synthetic executable task",
          "description":"Verify task ownership, readiness and atomic execution using synthetic data.","fields":values},
         {"operation":"create_connection","source":{"local_ref":"task"},"kind":"involves","target":{"object_id":owner},"description":"The assigned agent owns delivery of this synthetic task."}
     ]})
 }
 fn update(id: &str, revision: i64, changes: Value) -> Value {
-    json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[{
+    json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[{
         "operation":"update_object","object_id":id,"expected_revision":revision,"changes":changes}]})
 }
 
@@ -254,7 +254,7 @@ async fn queue_orders_by_priority_then_due_date_and_skips_incomplete_dependencie
     let next=body(app.clone().oneshot(request("/api/v2/search","queue-worker",json!({"task_filters":{"owner_object_id":owner,"ready":true,"cursor":page["data"]["next_cursor"]}}))).await.unwrap()).await;
     assert_eq!(next["data"]["objects"].as_array().unwrap().len(), 1);
     assert_eq!(next["data"]["objects"][0]["id"], ids[0]);
-    let connection = json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[{"operation":"create_connection","source":{"object_id":ids[2]},"kind":"depends_on","target":{"object_id":ids[0]},"description":"The high-priority synthetic task needs the prerequisite completed first."}]});
+    let connection = json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":[{"operation":"create_connection","source":{"object_id":ids[2]},"kind":"depends_on","target":{"object_id":ids[0]},"description":"The high-priority synthetic task needs the prerequisite completed first."}]});
     assert_eq!(
         app.clone()
             .oneshot(request("/api/v2/apply", "queue-worker", connection))

@@ -79,7 +79,7 @@ async fn call(
     )
 }
 fn batch(operations: Value) -> Value {
-    json!({"contract_version":"1.1.0","idempotency_key":Uuid::new_v4().to_string(),"operations":operations})
+    json!({"contract_version":"1.2.0","idempotency_key":Uuid::new_v4().to_string(),"operations":operations})
 }
 async fn pool() -> Option<PgPool> {
     let url = std::env::var("TEST_DATABASE_URL").ok()?;

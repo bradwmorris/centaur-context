@@ -170,6 +170,10 @@ pub struct IntakeObject {
     pub identities: Vec<IntakeIdentity>,
     #[serde(default)]
     pub entity_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_ids: Option<Vec<Uuid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_category_id: Option<Uuid>,
     #[serde(default)]
     pub source: Option<IntakeSource>,
     #[serde(default)]
@@ -458,6 +462,27 @@ async fn validate_batch(
             "batch_id already has committed events; use status or retry commit".into(),
         ));
     }
+    for object in &prepared.request.objects {
+        if let Some(ids) = &object.category_ids {
+            let categories: Vec<(Uuid, String)> = sqlx::query_as(
+                "SELECT id,legacy_kind FROM entity_categories WHERE id=ANY($1) AND archived_at IS NULL",
+            ).bind(ids).fetch_all(&state.app.pool).await?;
+            if categories.len() != ids.len() {
+                return Err(IntakeError::BadRequest(
+                    "unknown or archived category; refresh entity_categories".into(),
+                ));
+            }
+            if let Some(legacy) = &object.entity_kind
+                && !categories.iter().any(|(id, projection)| {
+                    Some(*id) == object.primary_category_id && projection == legacy
+                })
+            {
+                return Err(IntakeError::BadRequest(
+                    "entity_kind conflicts with primary category legacy_kind".into(),
+                ));
+            }
+        }
+    }
     Ok(Json(json!({"data":{
         "batch_id":prepared.request.batch_id,
         "status":"validated",
@@ -575,6 +600,13 @@ pub(crate) async fn prepare_batch_for_app(
         object.title = required_text(object.title.clone(), "title", 300)?;
         object.description = object_description(&object.title, object.description.clone())?;
         object.provenance = Some(provenance(object.provenance.take())?);
+        if object.kind != "entity"
+            && (object.category_ids.is_some() || object.primary_category_id.is_some())
+        {
+            return Err(IntakeError::BadRequest(
+                "category fields belong only to Entities".into(),
+            ));
+        }
         match object.kind.as_str() {
             "user" => {
                 object.user_kind = Some(allowed(
@@ -619,22 +651,43 @@ pub(crate) async fn prepare_batch_for_app(
                         "only User Objects accept identities".into(),
                     ));
                 }
-                object.entity_kind = Some(allowed(
-                    object.entity_kind.clone().ok_or_else(|| {
-                        IntakeError::BadRequest("entity_kind is required for entity Objects".into())
-                    })?,
-                    "entity_kind",
-                    &[
-                        "person",
-                        "organization",
-                        "product",
-                        "project",
-                        "publication",
-                        "place",
-                        "concept",
-                        "other",
-                    ],
-                )?);
+                if object.entity_kind.is_none() && object.category_ids.is_none() {
+                    return Err(IntakeError::BadRequest(
+                        "Entity classification is required".into(),
+                    ));
+                }
+                if let Some(kind) = object.entity_kind.clone() {
+                    object.entity_kind = Some(allowed(
+                        kind,
+                        "entity_kind",
+                        &[
+                            "person",
+                            "organization",
+                            "product",
+                            "project",
+                            "publication",
+                            "place",
+                            "concept",
+                            "other",
+                        ],
+                    )?);
+                }
+                if let Some(ids) = &object.category_ids {
+                    if ids.is_empty()
+                        || ids.len() > 32
+                        || ids.iter().collect::<HashSet<_>>().len() != ids.len()
+                        || !object.primary_category_id.is_some_and(|p| ids.contains(&p))
+                    {
+                        return Err(IntakeError::BadRequest(
+                            "category_ids require distinct IDs and an assigned primary_category_id"
+                                .into(),
+                        ));
+                    }
+                } else if object.primary_category_id.is_some() {
+                    return Err(IntakeError::BadRequest(
+                        "primary_category_id requires category_ids".into(),
+                    ));
+                }
                 if object.user_kind.is_some()
                     || object.source.is_some()
                     || object.note.is_some()
@@ -1153,16 +1206,19 @@ pub(crate) async fn write_batch(
                     .await?;
             }
             "entity" => {
-                sqlx::query("INSERT INTO entities (object_id,entity_kind) VALUES ($1,$2)")
-                    .bind(id)
-                    .bind(
-                        object
-                            .entity_kind
-                            .as_deref()
-                            .expect("validated entity kind"),
-                    )
-                    .execute(&mut *tx)
-                    .await?;
+                let mut fields = serde_json::Map::new();
+                if let Some(kind) = &object.entity_kind {
+                    fields.insert("entity_kind".into(), json!(kind));
+                }
+                if let Some(ids) = &object.category_ids {
+                    fields.insert("category_ids".into(), json!(ids));
+                }
+                if let Some(primary) = object.primary_category_id {
+                    fields.insert("primary_category_id".into(), json!(primary));
+                }
+                crate::entity_classification::write(&mut tx, id, &fields, true)
+                    .await
+                    .map_err(|e| IntakeError::BadRequest(e.to_string()))?;
             }
             "note" => {
                 let note = object.note.as_ref().expect("validated note");
