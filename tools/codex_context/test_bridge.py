@@ -307,3 +307,16 @@ def test_correction_tool_schema_exposes_revisioned_representation_and_identity_r
     assert operations["reassign_identity"]["properties"]["expected_target_revision"]["type"] == "integer"
     assert operations["reassign_chat"]["properties"]["expected_target_revision"]["type"] == "integer"
     assert {"restore_object", "restore_connection", "rebuild_derived", "promote_source_artifact"} <= operations.keys()
+
+
+def test_catalogue_and_event_mcp_shapes():
+    tools = {item["name"]: item["inputSchema"] for item in b.tool_schema()}
+    assert "event" in tools["context_search"]["properties"]["object_types"]["items"]["enum"]
+    assert "entity_filters" in tools["context_search"]["properties"]
+    assert tools["context_read"]["properties"]["object_ids"]["minItems"] == 0
+    assert "entity_categories" in tools["context_read"]["properties"]["include"]["items"]["enum"]
+    variants = tools["context_apply"]["properties"]["operations"]["items"]["oneOf"]
+    operations = {item["properties"]["operation"]["const"]: item for item in variants}
+    assert {"create_entity_category", "update_entity_category", "archive_entity_category", "restore_entity_category"} <= operations.keys()
+    assert operations["create_entity_category"]["properties"]["aliases"]["type"] == "array"
+    assert "expected_revision" in operations["update_entity_category"]["required"]

@@ -2160,10 +2160,61 @@ async fn events_categories_atomic_graph_and_catalogue_lifecycle() {
     );
     let unassign = json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-unassign"),"operations":[{"operation":"update_object","object_id":entity,"expected_revision":4,"changes":{"category_ids":[model,product],"primary_category_id":model}},{"operation":"archive_entity_category","category_id":cid,"expected_revision":1}]});
     let response = app
+        .clone()
         .oneshot(request("POST", "/api/v2/apply", &token, unassign))
         .await
         .unwrap();
     let status = response.status();
     let result = json_body(response).await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    // Definition revisions are independent of Object revisions and preserve aliases.
+    for (suffix, operations, expected) in [
+        (
+            "restore-category",
+            json!([{"operation":"restore_entity_category","category_id":cid,"expected_revision":2}]),
+            StatusCode::OK,
+        ),
+        (
+            "alias-category",
+            json!([{"operation":"update_entity_category","category_id":cid,"expected_revision":3,"changes":{"aliases":[format!("Alias {key}")]}}]),
+            StatusCode::OK,
+        ),
+        (
+            "stale-category",
+            json!([{"operation":"update_entity_category","category_id":cid,"expected_revision":3,"changes":{"definition":"This stale definition must never be saved."}}]),
+            StatusCode::CONFLICT,
+        ),
+        (
+            "stale-object",
+            json!([{"operation":"update_object","object_id":entity,"expected_revision":1,"changes":{"description":"This stale description must never be saved."}}]),
+            StatusCode::CONFLICT,
+        ),
+    ] {
+        let response = app.clone().oneshot(request("POST", "/api/v2/apply", &token,
+            json!({"contract_version":"1.2.0","idempotency_key":format!("{key}-{suffix}"),"operations":operations}))).await.unwrap();
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, expected, "{suffix}: {body}");
+    }
+    let catalogue = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                "/api/v2/read",
+                &token,
+                json!({"object_ids":[],"include":["entity_categories"]}),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let definition = catalogue["data"]["entity_categories"]["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == cid)
+        .unwrap();
+    assert_eq!(definition["revision"], 4);
+    assert_eq!(definition["aliases"], json!([format!("Alias {key}")]));
+    assert!(definition["archived_at"].is_null());
 }

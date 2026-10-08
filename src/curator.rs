@@ -688,13 +688,17 @@ pub async fn undo_as(
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
         .await?;
-    let run = lock_run(&mut tx, run_id).await?;
-    if run.status == "reversed" {
-        return Ok(run
-            .result
-            .unwrap_or_else(|| json!({"run_id": run_id, "status": "reversed"})));
+    let (status, result): (String, Value) = sqlx::query_as(
+        "SELECT status,result FROM runs WHERE id=$1 AND kind IN ('curator','mutation') FOR UPDATE",
+    )
+    .bind(run_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(CuratorError::NotFound)?;
+    if status == "reversed" {
+        return Ok(result);
     }
-    if run.status != "completed" {
+    if status != "completed" {
         return Err(CuratorError::Conflict);
     }
     let changes: Vec<CuratorRunChange> = sqlx::query_as(

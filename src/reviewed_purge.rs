@@ -23,6 +23,8 @@ const TABLES: &[&str] = &[
     "chat_messages",
     "users",
     "entities",
+    "real_world_events",
+    "entity_category_assignments",
     "memories",
     "sources",
     "notes",
@@ -47,6 +49,8 @@ const DELETE_ORDER: &[&str] = &[
     "sources",
     "artifacts",
     "chats",
+    "entity_category_assignments",
+    "real_world_events",
     "entities",
     "memories",
     "themes",
@@ -54,7 +58,15 @@ const DELETE_ORDER: &[&str] = &[
     "objects",
 ];
 const SUBTYPES: &[&str] = &[
-    "tasks", "chats", "users", "entities", "memories", "sources", "notes", "themes",
+    "tasks",
+    "chats",
+    "users",
+    "entities",
+    "memories",
+    "sources",
+    "notes",
+    "themes",
+    "real_world_events",
 ];
 const MAX_SNAPSHOT_ROWS: i64 = 100_000;
 
@@ -62,7 +74,9 @@ fn digest(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 fn key(table: &str, row: &Value) -> Value {
-    if table == "context_apply_requests" {
+    if table == "entity_category_assignments" {
+        json!({"entity_object_id":row["entity_object_id"],"category_id":row["category_id"]})
+    } else if table == "context_apply_requests" {
         json!({"principal_id":row["principal_id"],"idempotency_key":row["idempotency_key"]})
     } else if table == "visual_upload_requests" {
         json!({"actor_type":row["actor_type"],"actor_id":row["actor_id"],"idempotency_key":row["idempotency_key"]})
@@ -663,6 +677,9 @@ async fn snapshot(tx: &mut Transaction<'_, Postgres>) -> Result<Snapshot, Intake
             && n != "artifact_binary_payloads"
             && n != "visual_upload_requests"
             && n != "evidence_corrections"
+            // Controlled definitions are retained, never fixture-owned rows.
+            && n != "entity_categories"
+            && n != "entity_category_names"
     }) {
         return Err(IntakeError::Conflict(
             "application schema changed: purge policy requires review".into(),
@@ -758,6 +775,7 @@ fn preview_rows_with_plan(
         if !TABLES.contains(&s.table.as_str())
             || SUBTYPES.contains(&s.table.as_str())
             || s.table == "embeddings"
+            || s.table == "entity_category_assignments"
             || s.reason.trim().is_empty()
             || s.reason.len() > 2000
         {
@@ -793,6 +811,12 @@ fn preview_rows_with_plan(
                     && selected_id(&set, "objects", &row["object_id"])
                 {
                     Some("owned subtype of selected fixture Object")
+                } else if table == "entity_category_assignments"
+                    && selected_id(&set, "objects", &row["entity_object_id"])
+                {
+                    Some(
+                        "classification assignment owned by selected fixture Entity; definition retained",
+                    )
                 } else if matches!(table.as_str(), "task_routines" | "task_routine_runs")
                     && selected_id(&set, "objects", &row["task_id"])
                 {
@@ -1151,6 +1175,11 @@ async fn execute_purge(
             (
                 "principal_id text, idempotency_key text",
                 "t.principal_id = k.principal_id AND t.idempotency_key = k.idempotency_key",
+            )
+        } else if *table == "entity_category_assignments" {
+            (
+                "entity_object_id uuid, category_id uuid",
+                "t.entity_object_id = k.entity_object_id AND t.category_id = k.category_id",
             )
         } else if *table == "task_routines" {
             ("task_id uuid", "t.task_id = k.task_id")

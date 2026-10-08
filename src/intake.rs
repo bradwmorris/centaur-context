@@ -462,6 +462,27 @@ async fn validate_batch(
             "batch_id already has committed events; use status or retry commit".into(),
         ));
     }
+    for object in &prepared.request.objects {
+        if let Some(ids) = &object.category_ids {
+            let categories: Vec<(Uuid, String)> = sqlx::query_as(
+                "SELECT id,legacy_kind FROM entity_categories WHERE id=ANY($1) AND archived_at IS NULL",
+            ).bind(ids).fetch_all(&state.app.pool).await?;
+            if categories.len() != ids.len() {
+                return Err(IntakeError::BadRequest(
+                    "unknown or archived category; refresh entity_categories".into(),
+                ));
+            }
+            if let Some(legacy) = &object.entity_kind
+                && !categories.iter().any(|(id, projection)| {
+                    Some(*id) == object.primary_category_id && projection == legacy
+                })
+            {
+                return Err(IntakeError::BadRequest(
+                    "entity_kind conflicts with primary category legacy_kind".into(),
+                ));
+            }
+        }
+    }
     Ok(Json(json!({"data":{
         "batch_id":prepared.request.batch_id,
         "status":"validated",
