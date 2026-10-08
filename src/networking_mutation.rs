@@ -104,6 +104,14 @@ async fn authenticate(
 }
 
 fn canonical_thread_key(value: String) -> Result<String, ApiError> {
+    if let Some(run_id) = value.strip_prefix("workflow:") {
+        if Uuid::parse_str(run_id).is_ok_and(|id| id.to_string() == run_id) {
+            return Ok(value);
+        }
+        return Err(ApiError::BadRequest(
+            "workflow thread keys require a canonical UUID".into(),
+        ));
+    }
     let parts = value.split(':').collect::<Vec<_>>();
     if value.len() > 1_000
         || parts.len() != 4
@@ -119,6 +127,36 @@ fn canonical_thread_key(value: String) -> Result<String, ApiError> {
         ));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod thread_key_tests {
+    use super::canonical_thread_key;
+
+    #[test]
+    fn accepts_workflow_runs_and_existing_provider_threads() {
+        for key in [
+            "workflow:01a11ac0-efde-7fe5-9881-1cbf18721088",
+            "slack:workspace:channel:123.456",
+        ] {
+            assert_eq!(canonical_thread_key(key.into()).unwrap(), key);
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_or_noncanonical_workflow_identity() {
+        for key in [
+            "workflow:",
+            "workflow:not-a-uuid",
+            "workflow:01A11AC0-EFDE-7FE5-9881-1CBF18721088",
+            "workflow:01a11ac0efde7fe598811cbf18721088",
+            "workflow:01a11ac0-efde-7fe5-9881-1cbf18721088:extra",
+            "workflow:workspace:channel:thread",
+            "slack:workspace::thread",
+        ] {
+            assert!(canonical_thread_key(key.into()).is_err(), "{key}");
+        }
+    }
 }
 
 fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, ApiError> {
