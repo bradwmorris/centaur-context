@@ -769,31 +769,26 @@ pub async fn undo_as(
                 ));
             }
         }
-        let after = if change.entity_type == "entity_category" {
-            crate::db::target_snapshot(&mut tx, "entity_category", change.entity_id)
-                .await
-                .map_err(|e| CuratorError::Invalid(e.to_string()))?
-        } else if change.entity_type == "connection" {
-            connection_snapshot(&mut tx, change.entity_id).await?
-        } else {
-            object_snapshot(&mut tx, change.entity_id).await?
-        };
-        insert_change(
+        crate::db::insert_event_for_run_with_before(
             &mut tx,
             reversal_run_id,
-            index as i32 + 1,
+            index as i64 + 1,
+            actor,
             &change.entity_type,
+            change.entity_id,
             change.entity_id,
             if change.action == "created" {
                 "archived"
             } else {
                 "restored"
             },
-            Some(&change.after_state),
-            &after,
+            None,
+            Some(change.after_revision),
             change.after_revision + 1,
+            Some(change.after_state.clone()),
         )
-        .await?;
+        .await
+        .map_err(|e| CuratorError::Invalid(e.to_string()))?;
     }
     let result =
         json!({"run_id": run_id, "status": "reversed", "reversed_change_count": changes.len()});

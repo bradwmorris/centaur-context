@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Rust
         run: |
@@ -100,6 +101,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
@@ -115,10 +119,11 @@ jobs:
 
       - name: Build stock image and export exact revision
         run: |
-          node scripts/context-ui.mjs image --tag "centaur-context:${GITHUB_SHA}"
+          CONTEXT_IMAGE_REVISION=$(git rev-parse HEAD)
+          node scripts/context-ui.mjs image --tag "centaur-context:${CONTEXT_IMAGE_REVISION}"
           mkdir "$RUNNER_TEMP/context-image"
-          docker save "centaur-context:${GITHUB_SHA}" | gzip > "$RUNNER_TEMP/context-image/image.tar.gz"
-          docker image inspect "centaur-context:${GITHUB_SHA}" > "$RUNNER_TEMP/context-image/image.json"
+          docker save "centaur-context:${CONTEXT_IMAGE_REVISION}" | gzip > "$RUNNER_TEMP/context-image/image.tar.gz"
+          docker image inspect "centaur-context:${CONTEXT_IMAGE_REVISION}" > "$RUNNER_TEMP/context-image/image.json"
           git rev-parse HEAD > "$RUNNER_TEMP/context-image/core-revision.txt"
           cd "$RUNNER_TEMP/context-image"
           sha256sum image.tar.gz > SHA256SUMS
