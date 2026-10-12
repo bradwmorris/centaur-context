@@ -359,3 +359,14 @@ must still match verbatim and agree with active derivation Connections.
 ## Events and Entity classifications (contract 1.2.0, schema 38)
 
 See the embedded `ontology_guide` and [Events/classification RD](../dev/rd/events-classifications.md) for exact fields, definitions and examples. `real_world_events` is a matching Object subtype; `object_events` remains immutable change history. Calendar timing preserves precision and supplied offsets. Entity categories are supporting catalogue metadata, with multiple assignments and one primary determining legacy `entity_kind`. Initial backfill preserves all existing classifications and Object revisions. Catalogue mutations use the three universal tools and attributed Run snapshots; vocabulary changes require explicit user instruction. Empty-ID reads require `include:["entity_categories"]`. `entity_filters` accepts category UUIDs with `match:any|all`; results use ascending UUID order and an exclusive UUID cursor, active Entities only. Text remains title/description discovery. Legacy 1.1.0 writes remain accepted with conflict protection for richer classifications.
+
+## Object collection name lookup
+
+The human UI's `GET /api/v2/objects?q=...` collection lookup matches literal,
+case-insensitive substrings of Object titles, as well as the existing configured
+full-text matches over titles and descriptions. SQL wildcard characters in the
+literal title match have no special meaning. Matching happens before the page
+limit; lifecycle, kind and cursor constraints apply to both matching branches.
+The Objects UI requests active Objects from its own deployment and follows result
+cursors with the same query. This does not change `/api/v2/search` hybrid discovery
+or add Artifact-body matching.

@@ -218,7 +218,7 @@ export default function App() {
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             {section === "entities" && <CategoryManager />}
             {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
-            <div className="list-group-head"><span className="status-ring" /><strong>All {sectionLabel.toLowerCase()}</strong><span>{currentItems.length}</span></div>
+            <div className="list-group-head"><span className="status-ring" /><strong>{section === "objects" ? "Active objects" : `All ${sectionLabel.toLowerCase()}`}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
               {currentItems.map((item) => (
                 <div key={itemRouteId(item)} className="record">
@@ -234,7 +234,7 @@ export default function App() {
                   <time>{relative(item.created_at)}</time>
                 </div>
               ))}
-              {!loading && currentItems.length === 0 && <div className="empty-list">Nothing here yet.</div>}
+              {!loading && !error && currentItems.length === 0 && <div className="empty-list">{section === "objects" && query.trim() ? "No active objects match your search." : "Nothing here yet."}</div>}
             </div>
             </>}
           </section> : <section className="detail-page">
