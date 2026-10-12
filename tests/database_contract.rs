@@ -29,6 +29,155 @@ async fn test_pool() -> Option<PgPool> {
 }
 
 #[tokio::test]
+async fn object_name_search_matches_literal_partial_titles_before_pagination() {
+    let Some((_guard, pool)) = migrated_pool().await else {
+        return;
+    };
+    let marker = format!("lookup{}", Uuid::new_v4().simple());
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let archived = Uuid::new_v4();
+    let wrong_kind = Uuid::new_v4();
+    let punctuation = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    for (id, kind, title, date, inactive) in [
+        (
+            first,
+            "entity",
+            format!("{marker} Northbridge Research"),
+            "2099-01-02",
+            false,
+        ),
+        (
+            second,
+            "entity",
+            format!("{marker} Northbridge Labs"),
+            "2099-01-01",
+            false,
+        ),
+        (
+            archived,
+            "entity",
+            format!("{marker} Northbridge Archived"),
+            "2099-01-04",
+            true,
+        ),
+        (
+            wrong_kind,
+            "theme",
+            format!("{marker} Northbridge Theme"),
+            "2099-01-05",
+            false,
+        ),
+        (
+            punctuation,
+            "entity",
+            format!("{marker} 50%_Research"),
+            "2099-01-03",
+            false,
+        ),
+    ] {
+        sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance,created_at,updated_at,archived_at) VALUES($1,$2,$3,'Synthetic observatories evidence','system','lookup-test','system','lookup-test','{}',$4::timestamptz,$4::timestamptz,CASE WHEN $5 THEN now() ELSE NULL END)")
+            .bind(id).bind(kind).bind(title).bind(date).bind(inactive).execute(&mut *tx).await.unwrap();
+        if kind == "entity" {
+            sqlx::query("INSERT INTO entities(object_id,entity_kind) VALUES($1,'concept')")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        } else {
+            sqlx::query("INSERT INTO themes(object_id,slug) VALUES($1,$2)")
+                .bind(id)
+                .bind(&marker)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+    }
+    tx.commit().await.unwrap();
+
+    for config in ["simple", "english"] {
+        let router = human_router(
+            AppState {
+                pool: pool.clone(),
+                embeddings: None,
+                text_search_config: centaur_context::config::TextSearchConfig::parse(config)
+                    .unwrap(),
+            },
+            PathBuf::from("web/dist"),
+            PathBuf::from("identity-assets"),
+        );
+        let get = |q: String, cursor: Option<Uuid>, sort: &str| {
+            let mut url = reqwest::Url::parse("http://localhost/api/v2/objects").unwrap();
+            url.query_pairs_mut()
+                .append_pair("q", &q)
+                .append_pair("kind", "entity")
+                .append_pair("lifecycle", "active")
+                .append_pair("limit", "1")
+                .append_pair("sort", sort);
+            if let Some(cursor) = cursor {
+                url.query_pairs_mut()
+                    .append_pair("cursor", &cursor.to_string());
+            }
+            let router = router.clone();
+            async move {
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("{}?{}", url.path(), url.query().unwrap()))
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let payload: serde_json::Value = serde_json::from_slice(
+                    &response.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                payload["data"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|o| Uuid::parse_str(o["id"].as_str().unwrap()).unwrap())
+                    .collect::<Vec<_>>()
+            }
+        };
+        // Target is outside the first page even within this synthetic fixture.
+        assert_eq!(get(marker.clone(), None, "recent").await, vec![punctuation]);
+        for sort in ["recent", "connections"] {
+            let partial = format!("{} nOrThB", marker.to_uppercase());
+            assert_eq!(get(partial.clone(), None, sort).await, vec![first]);
+            assert_eq!(get(partial.clone(), Some(first), sort).await, vec![second]);
+            assert!(get(partial, Some(second), sort).await.is_empty());
+        }
+        assert_eq!(
+            get(format!("{marker} Northbridge Research"), None, "recent").await,
+            vec![first]
+        );
+        assert_eq!(
+            get(format!("{marker} 50%_Res"), None, "recent").await,
+            vec![punctuation]
+        );
+        assert!(
+            get(format!("{marker} %_Northb"), None, "recent")
+                .await
+                .is_empty()
+        );
+        // Full-text matches may span title and description; English stemming still works.
+        let description_word = if config == "english" {
+            "observatory"
+        } else {
+            "observatories"
+        };
+        assert_eq!(
+            get(format!("{marker} {description_word}"), None, "recent").await,
+            vec![punctuation]
+        );
+    }
+}
+
+#[tokio::test]
 async fn object_lists_use_stable_recent_and_active_connection_density_ordering() {
     let Some((_guard, pool)) = migrated_pool().await else {
         return;

@@ -104,7 +104,12 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
         }
     }
     if let Some(search) = filter.query {
-        query.push(" AND ");
+        // Name lookup must work while typing, without interpreting SQL wildcards.
+        // Keep this OR grouped under the lifecycle, kind and cursor constraints.
+        query
+            .push(" AND (strpos(lower(o.title), lower(")
+            .push_bind(search.clone())
+            .push(")) > 0 OR ");
         if filter.text_search_config == crate::config::TextSearchConfig::SIMPLE {
             query.push("o.search_document");
         } else {
@@ -120,7 +125,7 @@ pub async fn list_objects(pool: &PgPool, filter: ObjectListFilter) -> Result<Vec
             .push_bind(filter.text_search_config.as_str())
             .push("::regconfig, ")
             .push_bind(search)
-            .push(")");
+            .push("))");
     }
     push_object_list_order(&mut query, &filter.sort);
     query.push(" LIMIT ").push_bind(filter.limit);

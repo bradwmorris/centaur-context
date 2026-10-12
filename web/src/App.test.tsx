@@ -299,3 +299,31 @@ it("keeps project and text filters across list/board without duplicate headings 
   expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveValue("absent");
   expect(screen.getByRole("combobox", { name: "Filter task projects" })).toHaveValue("alpha");
 });
+
+it("searches Objects on the server across pages and explains empty active results", async () => {
+  const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+  const organisation = { ...source, id: "organisation", kind: "entity", title: "Northbridge Research" };
+  const firstPage = Array.from({ length: 500 }, (_, index) => ({ ...source, id: `match-${index}`, title: `Matching record ${index}` }));
+  vi.mocked(fetch).mockImplementation((input, init) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname !== "/api/v2/objects") return defaultFetch(input, init);
+    expect(url.searchParams.get("lifecycle")).toBe("active");
+    expect(url.searchParams.has("kind")).toBe(false);
+    const query = url.searchParams.get("q");
+    if (!query) return envelope([source]);
+    if (query === "NoSuchName") return envelope([]);
+    expect(query).toBe("nOrThB");
+    return envelope(url.searchParams.get("cursor") === "match-499" ? [organisation] : firstPage);
+  });
+  render(<App />);
+  await screen.findByText(source.title);
+  expect(screen.getByText("Active objects")).toBeVisible();
+  expect(screen.queryByText(organisation.title)).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Search objects" }), { target: { value: " nOrThB " } });
+  expect(await screen.findByRole("button", { name: `Open ${organisation.title}` })).toBeVisible();
+  expect(fetch).toHaveBeenCalledWith(expect.stringContaining("q=nOrThB&sort=recent&cursor=match-499"), expect.anything());
+  fireEvent.change(screen.getByRole("textbox", { name: "Search objects" }), { target: { value: "NoSuchName" } });
+  expect(await screen.findByText("No active objects match your search.")).toBeVisible();
+  expect(screen.queryByText("Nothing here yet.")).toBeNull();
+  expect(screen.queryByText(organisation.title)).toBeNull();
+});
