@@ -175,11 +175,11 @@ export function ConnectionGraphWorkspace({ refreshKey = 0 }: { refreshKey?: numb
   </section>;
 }
 
-export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { objectId: string; objectTitle: string; refreshKey?: number }) {
+export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0, showHeading = true }: { objectId: string; objectTitle: string; refreshKey?: number; showHeading?: boolean }) {
   const [graph, setGraph] = useState<ConnectionGraphSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1.6);
+  const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
     let active = true;
@@ -190,7 +190,7 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
     return () => { active = false; };
   }, [objectId, refreshKey]);
 
-  useEffect(() => setZoom(1.6), [objectId]);
+  useEffect(() => setZoom(1), [objectId]);
 
   const neighbourhood = useMemo(() => {
     if (!graph) return null;
@@ -206,7 +206,7 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
   const viewBox = neighbourhood && neighbourhood.nodes.length > 0 ? focusedViewBox(neighbourhood.nodes, zoom) : "0 0 900 600";
 
   return <section className="detail-section focused-object-graph-section" aria-label={`Connection map for ${objectTitle}`}>
-    <header><h3>Connection map</h3><a className="text-button" href={fullGraphPath} onClick={(event) => interceptNavigation(event, fullGraphPath)}>Open in Connections</a></header>
+    <header>{showHeading && <h3>Connection map</h3>}<a className="text-button" href={fullGraphPath} onClick={(event) => interceptNavigation(event, fullGraphPath)}>Open in Connections</a></header>
     {error ? <div className="focused-graph-state error">{error}</div> : !neighbourhood ? <div className="focused-graph-state">Loading Connection map…</div> : neighbourhood.nodes.length === 0 ? <div className="focused-graph-state">This Object is not present in the active Connection graph.</div> : <div className="focused-object-graph">
       <div className="focused-graph-controls" role="group" aria-label="Focused graph controls"><button type="button" onClick={() => setZoom((value) => clamp(value / 1.25, 0.55, 2.5))} aria-label="Zoom out focused graph">−</button><button type="button" onClick={() => setZoom(1)}>Fit</button><button type="button" onClick={() => setZoom((value) => clamp(value * 1.25, 0.55, 2.5))} aria-label="Zoom in focused graph">+</button></div>
       <svg viewBox={viewBox} role="img" aria-label={`${objectTitle} with ${neighbourhood.nodes.length - 1} related Objects and ${neighbourhood.edges.length} direct Connections`}>

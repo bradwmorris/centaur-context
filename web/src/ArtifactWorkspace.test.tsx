@@ -90,7 +90,7 @@ describe("artifact reader", () => {
     const first = fixture("first", "research_notes", "First", "a");
     const latest = fixture("latest", "research_notes", "Second", "a", "first");
     const other = fixture("other", "research_notes", "Independent", "b");
-    render(<Artifacts section="sources" objectId={objectId} artifacts={[latest, first, other, transcript]} onCreated={async () => {}} />);
+    render(<Artifacts section="sources" objectId={objectId} artifacts={[latest, first, other, transcript]} />);
     expect(screen.getAllByRole("link")).toHaveLength(3);
     expect(screen.getByRole("link", { name: /Lab notes.*2 versions/ })).toHaveAttribute("href", `/sources/${objectId}/working/a`);
   });
@@ -108,31 +108,13 @@ describe("artifact reader", () => {
     expect(screen.getByRole("link", { name: /Previous version/ })).toHaveAttribute("href", `/objects/${objectId}/artifacts/first`);
   });
 
-  it("reconciles an uncertain working-notes creation without a duplicate", async () => {
-    const { posts } = server([], 4, false, true);
-    render(<Artifacts section="sources" objectId={objectId} artifacts={[]} onCreated={async () => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "+ Add research document" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "New notes" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Artifact body" }), { target: { value: "Synthetic draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("network timeout");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(window.location.pathname).toMatch(/\/working\//));
-    expect(posts).toHaveLength(1);
-  });
-
-  it("keeps the secondary generic creation fields", async () => {
-    const { posts } = server([]);
-    render(<Artifacts section="sources" objectId={objectId} artifacts={[]} onCreated={async () => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add artifact" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Kind" }), { target: { value: "transcript" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Language" }), { target: { value: "en" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Capture outcome" }), { target: { value: "incomplete" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Reason when not complete" }), { target: { value: "Excerpt only" } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Artifact body" }), { target: { value: "Synthetic excerpt" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toMatchObject({ kind: "transcript", language: "en", capture_outcome: "incomplete", capture_reason: "Excerpt only" });
+  it("omits empty artifacts and creation controls", () => {
+    const { rerender } = render(<Artifacts section="sources" objectId={objectId} artifacts={[]} />);
+    expect(screen.queryByRole("region", { name: "Artifacts" })).not.toBeInTheDocument();
+    const unavailable = { ...fixture("unavailable", "transcript", null), capture_outcome: "unavailable" as const, capture_reason: "Synthetic capture failed" };
+    rerender(<Artifacts section="sources" objectId={objectId} artifacts={[unavailable]} />);
+    expect(screen.getByRole("link", { name: /unavailable/ })).toHaveAttribute("href", `/sources/${objectId}/artifacts/unavailable`);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
   it("loads a long Unicode document before editing and saves its complete tail", async () => {
