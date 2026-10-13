@@ -327,3 +327,31 @@ it("searches Objects on the server across pages and explains empty active result
   expect(screen.queryByText("Nothing here yet.")).toBeNull();
   expect(screen.queryByText(organisation.title)).toBeNull();
 });
+
+it.each(["/objects/entity-example", "/entities/entity-example", "/entities"])("removes category management on %s", async path => {
+  const object = { ...source, id: "entity-example", kind: "entity", title: "Example organisation" };
+  const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input, init) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/v2/read") {
+      const body = JSON.parse(String(init?.body));
+      return envelope(body.object_ids.length ? { objects: [{ subtype: { category_ids: ["org"], primary_category_id: "org" } }] } : { entity_categories: { categories: [{ id: "org", label: "Organization", archived_at: null }], revision: "1" } });
+    }
+    if (url.pathname === "/api/v2/objects") return envelope([object]);
+    if (url.pathname === "/api/v2/objects/entity-example") return envelope(object);
+    return defaultFetch(input, init);
+  });
+  window.history.replaceState({}, "", path);
+  render(<App />);
+  await screen.findByText(object.title);
+  expect(screen.queryByText("Manage category definitions")).toBeNull();
+  if (path !== "/entities") {
+    const classifications = await screen.findByRole("region", { name: "Classifications" });
+    expect(await within(classifications).findByText("Organization")).toBeVisible();
+    expect(within(classifications).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(classifications).queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Save properties")).toBeNull();
+  } else {
+    expect(screen.getByRole("combobox", { name: "Filter Entity category" })).toBeVisible();
+  }
+});

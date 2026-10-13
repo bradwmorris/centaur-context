@@ -1,4 +1,4 @@
-import { CategoryManager, EntityFields, EventFields, EventEntityDetail, fieldsFromForm } from "./EventEntityFields";
+import { EntityFields, EventFields, EventEntityDetail, fieldsFromForm } from "./EventEntityFields";
 import { TaskRoutine } from "./TaskRoutine";
 import { projectPresentation, taskProject, withTaskProject } from "./taskProject";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -216,7 +216,6 @@ export default function App() {
 
         <div className="workspace">
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
-            {section === "entities" && <CategoryManager />}
             {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
             <div className="list-group-head"><span className="status-ring" /><strong>{section === "objects" ? "Active objects" : `All ${sectionLabel.toLowerCase()}`}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
@@ -238,7 +237,7 @@ export default function App() {
             </div>
             </>}
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "objects" || section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "objects" || section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail key={selectedId} id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
           </section>}
         </div>
       </section>
@@ -765,7 +764,6 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
   };
   return <div className="record-page">
     <div className="record-primary">
-      {item.kind === "entity" && <CategoryManager />}
       <div className="detail-form">
         <InlineEditor label="Object title" value={item.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveField("title", value)} onReload={load} />
         <section className="properties-block" aria-label="Object properties">
