@@ -1,7 +1,7 @@
 import { createHash, webcrypto } from "node:crypto";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { useLocalDateNow } from "./App";
 
 const now = "2026-08-31T00:00:00Z";
 const envelope = (data: unknown) => Promise.resolve(new Response(JSON.stringify({ data }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -354,4 +354,103 @@ it.each(["/objects/entity-example", "/entities/entity-example", "/entities"])("r
   } else {
     expect(screen.getByRole("combobox", { name: "Filter Entity category" })).toBeVisible();
   }
+});
+
+describe("Tasks List due-date mode", () => {
+  const makeTask = (object_id: string, title: string, due_at: string | null, status: "todo" | "done" = "todo", project = "dev") => ({
+    object_id, title, description: `Description for ${title}`, lifecycle: "active", revision: 1, provenance: {}, protected: true,
+    status, priority: "medium", owner_object_id: null, agent_suitable: false, blocked_reason: null, due_at,
+    completed_at: status === "done" ? now : null, github_issue_url: null, brief_markdown: `Project: ${project}`, created_at: now, updated_at: now,
+  });
+
+  function useTasksFixture(items: unknown[]) {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).includes("/api/v2/tasks?") ? envelope(items) : defaultFetch(input, init));
+    window.history.replaceState({}, "", "/tasks");
+  }
+
+  it("recomputes at local midnight and after a tab resumes", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 13, 23, 59, 50));
+      const { result } = renderHook(() => useLocalDateNow(true));
+      expect(result.current.getDate()).toBe(13);
+      act(() => vi.advanceTimersByTime(11_000));
+      expect(result.current.getDate()).toBe(14);
+
+      vi.setSystemTime(new Date(2026, 9, 17, 12, 0));
+      act(() => window.dispatchEvent(new Event("pageshow")));
+      expect(result.current.getDate()).toBe(17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("groups local dates, preserves the existing task rows, and sends only a supported API sort", async () => {
+    const nowLocal = new Date();
+    const makeLocal = (day: number, hour: number) => new Date(nowLocal.getFullYear(), nowLocal.getMonth(), day, hour).toISOString();
+    const fixtures = [
+      makeTask("task-overdue", "Overdue work", makeLocal(nowLocal.getDate() - 1, 9)),
+      makeTask("task-today", "Today work", makeLocal(nowLocal.getDate(), 0)),
+      makeTask("task-tomorrow", "Tomorrow work", makeLocal(nowLocal.getDate() + 1, 9)),
+      makeTask("task-later", "Later work", makeLocal(nowLocal.getDate() + 3, 9)),
+      makeTask("task-undated", "Undated work", null),
+      makeTask("task-invalid", "Legacy date work", "legacy-date"),
+      makeTask("task-completed", "Completed work", makeLocal(nowLocal.getDate() - 2, 9), "done"),
+    ];
+    useTasksFixture(fixtures);
+    render(<App />);
+
+    const sort = await screen.findByRole("combobox", { name: "Sort Tasks" });
+    expect(within(sort).getByRole("option", { name: "Due date" })).toBeInTheDocument();
+    fireEvent.change(sort, { target: { value: "due_date" } });
+
+    expect(await screen.findByRole("region", { name: "Overdue tasks" })).toHaveTextContent("Overdue work");
+    expect(screen.getByRole("region", { name: "Today tasks" })).toHaveTextContent("Today work");
+    expect(screen.getByRole("region", { name: "Tomorrow tasks" })).toHaveTextContent("Tomorrow work");
+    expect(screen.getByRole("button", { name: "Open Later work" }).closest("section")).toHaveTextContent("Later work");
+    expect(screen.getByRole("region", { name: "No due date tasks" })).toHaveTextContent("Undated work");
+    expect(screen.getByText("Date unavailable")).toBeVisible();
+    expect(screen.queryByText("Completed work")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Today work" })).toBeVisible();
+    expect(screen.getByLabelText("6 records")).toHaveTextContent("6");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show completed" }));
+    expect(screen.getByRole("region", { name: "Completed tasks" })).toHaveTextContent("Completed work");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("sort=due_date"))).toBe(false));
+  });
+
+  it("applies task search and project filters before building date groups", async () => {
+    const current = new Date();
+    const due_at = new Date(current.getFullYear(), current.getMonth(), current.getDate(), 12).toISOString();
+    useTasksFixture([
+      makeTask("task-match", "Needle task", due_at, "todo", "dev"),
+      makeTask("task-no-match", "Other task", due_at, "todo", "dev"),
+      makeTask("task-other-project", "Research task", due_at, "todo", "research"),
+    ]);
+    render(<App />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Sort Tasks" }), { target: { value: "due_date" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "needle" } });
+    expect(await screen.findByRole("region", { name: "Today tasks" })).toHaveTextContent("Needle task");
+    expect(screen.queryByText("Other task")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search tasks" }), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter task projects" }), { target: { value: "research" } });
+    expect(await screen.findByRole("region", { name: "Today tasks" })).toHaveTextContent("Research task");
+    expect(screen.queryByText("Needle task")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("1 records")).toBeInTheDocument();
+  });
+
+  it("returns to the unchanged Board while keeping due date as a client-only list mode", async () => {
+    const current = new Date();
+    const due_at = new Date(current.getFullYear(), current.getMonth(), current.getDate(), 12).toISOString();
+    useTasksFixture([makeTask("task-board", "Board task", due_at)]);
+    render(<App />);
+    fireEvent.change(await screen.findByRole("combobox", { name: "Sort Tasks" }), { target: { value: "due_date" } });
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(await screen.findByRole("region", { name: "Task board" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Open Board task" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Sort Tasks" })).toHaveValue("recent");
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("sort=due_date"))).toBe(false);
+  });
 });
