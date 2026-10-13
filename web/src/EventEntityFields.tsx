@@ -44,32 +44,41 @@ export function EntityFields({ initial = {} }: { initial?: SubtypeFields }) {
     <label>Primary classification<select name="primary_category_id" required value={primary} onChange={e => setPrimary(e.target.value)}><option value="">Select a classification</option>{categories.filter(c => selected.includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
   </fieldset>;
 }
-export function EventEntityDetail({ id, kind, revision, onChanged }: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+function EventDetail({ id, kind, revision, onChanged }: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
   const [fields, setFields] = useState<SubtypeFields | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => { let active = true; api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(e => { if (active) setError(String(e)); }); return () => { active = false; }; }, [id, revision]);
-  return <section><h2>{kind === "event" ? "Occurrence" : "Classifications"}</h2>{error && <p role="alert">{error}</p>}{fields && <form key={`${id}:${revision}`} onSubmit={async e => {
+  return <section><h2>Occurrence</h2>{error && <p role="alert">{error}</p>}{fields && <form key={`${id}:${revision}`} onSubmit={async e => {
     e.preventDefault(); const changes = fieldsFromForm(kind, new FormData(e.currentTarget)); setBusy(true); setError("");
     try { await api.applyCorrections([{ operation: "update_object", object_id: id, expected_revision: revision, changes }]); await onChanged(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
-  }}>{kind === "event" ? <EventFields initial={fields} /> : <EntityFields initial={fields} />}<button disabled={busy}>{busy ? "Saving…" : "Save properties"}</button></form>}</section>;
+  }}><EventFields initial={fields} /><button disabled={busy}>{busy ? "Saving…" : "Save properties"}</button></form>}</section>;
 }
-export function CategoryManager() {
-  const [categories, setCategories] = useState<EntityCategory[]>([]);
-  const [editing, setEditing] = useState<EntityCategory | null>(null);
+
+export function EventEntityDetail(props: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+  return props.kind === "entity"
+    ? <EntityClassifications key={`${props.id}:${props.revision}`} id={props.id} />
+    : <EventDetail key={`${props.id}:${props.revision}`} {...props} />;
+}
+
+function EntityClassifications({ id }: { id: string }) {
+  const [assigned, setAssigned] = useState<{ id: string; label: string | null }[] | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const reload = async () => setCategories((await api.entityCategories()).categories);
-  useEffect(() => { void reload().catch(e => setError(String(e))); }, []);
-  const mutate = async (operation: Record<string, unknown>) => { setBusy(true); setError(""); try { await api.applyCorrections([operation]); await reload(); window.dispatchEvent(new Event("entity-categories-changed")); setEditing(null); } catch (e) { setError(String(e)); } finally { setBusy(false); } };
-  return <details className="category-manager"><summary>Manage category definitions</summary><p>Reuse defined categories. Category names classify Entities; they are not research Themes.</p>{error && <p role="alert">{error}</p>}
-    <ul>{categories.map(c => <li key={c.id}><strong>{c.label}</strong> — {c.definition} {c.aliases.length > 0 && <small>Also: {c.aliases.join(", ")}</small>}<button onClick={() => setEditing(c)}>Edit</button><button disabled={busy} onClick={() => void mutate({ operation: c.archived_at ? "restore_entity_category" : "archive_entity_category", category_id: c.id, expected_revision: c.revision })}>{c.archived_at ? "Restore" : "Archive"}</button></li>)}</ul>
-    <form key={editing?.id ?? "new"} onSubmit={e => { e.preventDefault(); const d = new FormData(e.currentTarget); const changes = { label: d.get("label"), definition: d.get("definition"), aliases: String(d.get("aliases") ?? "").split(",").map(v => v.trim()).filter(Boolean), legacy_kind: d.get("legacy_kind") }; void mutate(editing ? { operation: "update_entity_category", category_id: editing.id, expected_revision: editing.revision, changes } : { operation: "create_entity_category", slug: d.get("slug"), ...changes }); }}>
-      <h3>{editing ? `Edit ${editing.label}` : "Add a category"}</h3>
-      {!editing && <label>Stable slug<input name="slug" required pattern="[a-z][a-z0-9]*(-[a-z0-9]+)*" maxLength={100} /></label>}
-      <label>Label<input name="label" defaultValue={editing?.label} required maxLength={100} /></label><label>Definition<textarea name="definition" defaultValue={editing?.definition} required maxLength={1000} /></label>
-      <label>Alternative labels (comma separated)<input name="aliases" defaultValue={editing?.aliases.join(", ")} /></label><label>Legacy classification<select name="legacy_kind" defaultValue={editing?.legacy_kind ?? "other"}>{["person","organization","product","project","publication","place","concept","other"].map(k => <option key={k}>{k}</option>)}</select></label>
-      <button disabled={busy}>{editing ? "Save definition" : "Create category"}</button>{editing && <button type="button" onClick={() => setEditing(null)}>Cancel edit</button>}
-    </form>
-  </details>;
+  useEffect(() => {
+    let active = true;
+    void Promise.all([api.readSubtype(id), api.entityCategories()]).then(([fields, catalogue]) => {
+      if (!active) return;
+      const ids = [...new Set((fields.category_ids as string[] | undefined) ?? [])];
+      const primary = fields.primary_category_id;
+      ids.sort((left, right) => Number(right === primary) - Number(left === primary));
+      const labels = new Map(catalogue.categories.map(category => [category.id, category.label]));
+      setAssigned(ids.map(categoryId => ({ id: categoryId, label: labels.get(categoryId) ?? null })));
+    }).catch(cause => { if (active) setError(String(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  return <section className="entity-classifications properties-block" aria-label="Classifications">
+    <h2>Classifications</h2>
+    {error ? <p role="alert">Could not load classifications: {error}</p> : assigned === null ? <p className="muted" role="status">Loading classifications…</p> : assigned.length === 0 ? <p className="muted">No classification assigned.</p> :
+      <ul className="classification-pills">{assigned.map(category => <li className="visual-badge" key={category.id}>{category.label ?? "Classification unavailable"}</li>)}</ul>}
+  </section>;
 }
