@@ -788,6 +788,16 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
 #workspace-toolbar-slot .connection-graph-controls { order: 3; }
 #workspace-toolbar-slot .connection-graph-controls button { height: 28px; }
 #workspace-toolbar-slot .schema-toolbar { min-height: 30px; padding: 0; border: 0; }
+
+.task-date-groups { display: grid; gap: 8px; }
+.task-date-group { min-width: 0; }
+.task-date-group .list-group-head { margin-bottom: 3px; }
+.due-date-record { grid-template-columns: max-content max-content minmax(0,max-content) minmax(100px,1fr) minmax(118px,max-content); }
+.due-date-record time { white-space: nowrap; }
+@media (max-width: 640px) {
+  .due-date-record { min-height: 58px; grid-template-columns: max-content minmax(0,1fr); }
+  .due-date-record time { display: block; grid-column: 2; grid-row: 2; justify-self: start; text-align: left; font-size: 10px; }
+}
 .connection-graph-workspace { grid-template-rows: minmax(0, 1fr); }
 @media (max-width: 760px) {
   #workspace-toolbar-slot .connection-graph-toolbar > div:first-child { display: none; }

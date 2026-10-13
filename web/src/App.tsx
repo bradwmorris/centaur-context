@@ -10,6 +10,7 @@ import { ConnectionGraphWorkspace, FocusedObjectGraph } from "./ConnectionGraph"
 import { ConnectionId, ObjectId } from "./ObjectIdentity";
 import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, SourceBadge, SourceSiteIcon, StateBadge, TaskStatusBadge } from "./RecordVisuals";
 import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "./TaskIdentity";
+import { formatTaskDueDate, groupListByDateField } from "./taskDateGroups";
 import { CorrectionHistory } from "./CorrectionHistory";
 import { InlineEditor } from "./InlineEditor";
 import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
@@ -25,6 +26,7 @@ const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entit
 const sectionKinds = { chats: "chat", users: "user", entities: "entity", events: "event", memories: "memory" } as const;
 const createSections = new Set<Section>(["events", "objects", "tasks", "chats", "entities", "memories", "sources", "notes", "themes"]);
 type CreateSection = keyof typeof sectionSingular;
+type CollectionSort = ListSort | "due_date";
 const descriptionExamples: Record<ObjectKind, string> = {
   event: "A planned workshop on evaluation methods, with its evidenced calendar dates.",
   "task": "Define and test concise Object descriptions across creation, capture and maintenance paths.",
@@ -55,7 +57,8 @@ export default function App() {
   const [categoryChoices, setCategoryChoices] = useState<import("./EventEntityFields").EntityCategory[]>([]);
 
   const [showDone, setShowDone] = useState(false);
-  const [sort, setSort] = useState<ListSort>("recent");
+  const [sort, setSort] = useState<CollectionSort>("recent");
+  const apiSort: ListSort = sort === "due_date" ? "recent" : sort;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -82,14 +85,14 @@ export default function App() {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
       const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs" || section === "evals";
       const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
-        needsObjects ? section === "entities" && entityFilter && !selectedId ? api.filteredEntities(query, [entityFilter]) : api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, sort) : Promise.resolve(null),
-        section === "tasks" ? api.tasks(sort) : Promise.resolve(null),
-        section === "sources" ? api.sources(selectedId ? "" : query, sort) : Promise.resolve(null),
-        section === "notes" ? api.notes(selectedId ? "" : query, sort) : Promise.resolve(null),
-        section === "themes" ? api.themes(sort) : Promise.resolve(null),
+        needsObjects ? section === "entities" && entityFilter && !selectedId ? api.filteredEntities(query, [entityFilter]) : api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, apiSort) : Promise.resolve(null),
+        section === "tasks" ? api.tasks(apiSort) : Promise.resolve(null),
+        section === "sources" ? api.sources(selectedId ? "" : query, apiSort) : Promise.resolve(null),
+        section === "notes" ? api.notes(selectedId ? "" : query, apiSort) : Promise.resolve(null),
+        section === "themes" ? api.themes(apiSort) : Promise.resolve(null),
         (section === "runs" || section === "evals") && !selectedId ? section === "evals" ? api.evalRuns() : api.runs({ root_only: "true" }) : Promise.resolve(null),
         api.objectVisuals(),
-        sort === "connections" && isObjectBackedSection(section) ? api.connectionGraph() : Promise.resolve(null),
+        apiSort === "connections" && isObjectBackedSection(section) ? api.connectionGraph() : Promise.resolve(null),
       ]);
       if (generation !== requestGeneration.current) return;
       if (nextObjects) setObjects(sortWithGraphFallback(nextObjects, densityGraph));
@@ -105,7 +108,7 @@ export default function App() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [query, section, selectedId, connectionId, sort, refreshKey, entityFilter]);
+  }, [query, section, selectedId, connectionId, apiSort, refreshKey, entityFilter]);
 
   useEffect(() => {
     const syncRoute = () => setRoute(parseRoute(window.location.pathname));
@@ -116,7 +119,7 @@ export default function App() {
 
   useEffect(() => {
     requestGeneration.current += 1;
-  }, [section, selectedId, connectionId, query, sort, refreshKey]);
+  }, [section, selectedId, connectionId, query, apiSort, refreshKey]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void load(), 150);
@@ -151,6 +154,13 @@ export default function App() {
   const currentItems = itemsForSection(section, objects, filteredTasks, sources, notes, themes, runs, query);
   const visualsById = useMemo(() => new Map(visuals.map((visual) => [visual.object_id, visual])), [visuals]);
   const activeModule = resolveActiveModule(section, window.location.search);
+  const dateMode = section === "tasks" && !activeModule && sort === "due_date";
+  const localDateNow = useLocalDateNow(dateMode);
+  const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const taskDateGroups = dateMode
+    ? groupListByDateField(currentItems.filter(isTaskItem), "due_at", localDateNow, localTimeZone, showDone)
+    : [];
+  const visibleItemCount = dateMode ? taskDateGroups.reduce((total, group) => total + group.tasks.length, 0) : currentItems.length;
   const selectedItem = currentItems.find((item) => itemRouteId(item) === selectedId);
   const sectionLabel = sectionLabels[section];
   const collection = !selectedId && !connectionId && section !== "schema" && section !== "connections";
@@ -158,6 +168,23 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     if (value) params.set("project", value); else params.delete("project");
     navigate(`${sectionPath(section)}${params.size ? `?${params}` : ""}`);
+  };
+
+  const renderRecord = (item: ListItem) => {
+    const taskDue = dateMode && isTaskItem(item);
+    const dueDateTime = isTaskItem(item) && item.due_at && Number.isFinite(new Date(item.due_at).getTime()) ? item.due_at : undefined;
+    return <div key={itemRouteId(item)} className={taskDue ? "record due-date-record" : "record"}>
+      <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
+      <span className="record-kind">{section === "tasks" && isTaskItem(item) ? <TaskProject task={item} /> : "actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
+      <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
+      <span className="record-main">
+        <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{isTaskItem(item) && <TaskStatusBadge status={item.status} />}</span>
+        <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
+        <span className="record-users">{isTaskItem(item) ? <>{section !== "tasks" && <TaskProject task={item} />}<TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
+      </span>
+      <DescriptionSnippet description={itemDescription(item, objects)} />
+      <time dateTime={taskDue ? dueDateTime : undefined}>{taskDue && isTaskItem(item) ? formatTaskDueDate(item.due_at, localDateNow, localTimeZone) : relative(item.created_at)}</time>
+    </div>;
   };
 
   return (
@@ -202,10 +229,10 @@ export default function App() {
             <label className="search"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3 3" /></svg><input aria-label={section === "tasks" && activeModule?.id === "kanban" ? "Search task board" : `Search ${sectionLabel.toLowerCase()}`} value={query} onChange={event => setQuery(event.target.value)} placeholder="Search…" /></label>
             {section === "entities" && <label>Category<select aria-label="Filter Entity category" value={entityFilter} onChange={e => setEntityFilter(e.target.value)}><option value="">All categories</option>{categoryChoices.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>}
             {section === "tasks" && <label className="project-filter"><span className="sr-only">Filter task projects</span><select aria-label="Filter task projects" value={selectedProject} onChange={event => filterProject(event.target.value)}><option value="">All projects</option>{projectChoices.map(project => { const display = projectPresentation(project === "_none" ? null : project); return <option key={project} value={project}>{display.icon} {display.label}</option>; })}</select></label>}
-            {isObjectBackedSection(section) && !(section === "entities" && entityFilter) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={sort} onChange={event => setSort(event.target.value as ListSort)}><option value="recent">Recent</option><option value="connections">Connected</option></select></label>}
+            {isObjectBackedSection(section) && !(section === "entities" && entityFilter) && <label className="sort-control"><span className="sr-only">Sort {sectionLabel}</span><select aria-label={`Sort ${sectionLabel}`} value={activeModule ? apiSort : sort} onChange={event => setSort(event.target.value as CollectionSort)}><option value="recent">Recent</option><option value="connections">Connected</option>{section === "tasks" && !activeModule && <option value="due_date">Due date</option>}</select></label>}
             <ModuleViewSwitcher section={section} activeId={activeModule?.id ?? null} />
-            {section === "tasks" && activeModule?.id === "kanban" && <button className={`completed-toggle${showDone ? " active" : ""}`} aria-pressed={showDone} aria-label={showDone ? "Hide completed" : "Show completed"} title={showDone ? "Hide completed" : "Show completed"} onClick={() => setShowDone(!showDone)}>✓</button>}
-            <span className="collection-count" aria-label={`${currentItems.length} records`}>{currentItems.length}</span>
+            {section === "tasks" && (activeModule?.id === "kanban" || dateMode) && <button className={`completed-toggle${showDone ? " active" : ""}`} aria-pressed={showDone} aria-label={showDone ? "Hide completed" : "Show completed"} title={showDone ? "Hide completed" : "Show completed"} onClick={() => setShowDone(!showDone)}>✓</button>}
+            <span className="collection-count" aria-label={`${visibleItemCount} records`}>{visibleItemCount}</span>
           </>}
           <button className="refresh-button" type="button" onClick={() => void refresh()} disabled={refreshState === "refreshing"} aria-label="Refresh current view">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 5.5A5.5 5.5 0 1 0 13 11"/><path d="M13.2 2.5v3.2H10"/></svg><span>{refreshState === "refreshing" ? "Refreshing…" : refreshState === "done" ? "Updated" : refreshState === "error" ? "Retry refresh" : "Refresh"}</span>
@@ -217,24 +244,19 @@ export default function App() {
         <div className="workspace">
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
             {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
+            {dateMode ? <div className="task-date-groups">
+              {taskDateGroups.map((group) => <section className="task-date-group" aria-label={`${group.label} tasks`} key={group.key}>
+                <div className="list-group-head"><strong>{group.label}</strong><span>{group.tasks.length}</span></div>
+                <div className="record-list">{group.tasks.map(renderRecord)}</div>
+              </section>)}
+            </div> : <>
             <div className="list-group-head"><span className="status-ring" /><strong>{section === "objects" ? "Active objects" : `All ${sectionLabel.toLowerCase()}`}</strong><span>{currentItems.length}</span></div>
             <div className="record-list">
-              {currentItems.map((item) => (
-                <div key={itemRouteId(item)} className="record">
-                  <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
-                  <span className="record-kind">{section === "tasks" && "status" in item && !("actor_type" in item) ? <TaskProject task={item} /> : "actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
-                  <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
-                  <span className="record-main">
-                    <span className="record-title"><strong>{itemTitle(item, objects)}</strong>{"source_kind" in item && <SourceSiteIcon sourceKind={item.source_kind} canonicalUri={item.canonical_uri} />}{"actor_type" in item && <StateBadge state={item.status} />}{"status" in item && !('actor_type' in item) && <TaskStatusBadge status={item.status} />}</span>
-                    <span className="record-source"><SourceBadge provider={visualsById.get(itemVisualObjectId(item))?.source_provider} /></span>
-                    <span className="record-users">{"status" in item && !("actor_type" in item) ? <>{section !== "tasks" && <TaskProject task={item} />}<TaskAssignee task={item} visuals={visualsById} /><TaskIssueLink url={item.github_issue_url} /><TaskReadiness task={item} /></> : <AttributionStack users={visualsById.get(itemVisualObjectId(item))?.users ?? []} />}</span>
-                  </span>
-                  <DescriptionSnippet description={itemDescription(item, objects)} />
-                  <time>{relative(item.created_at)}</time>
-                </div>
-              ))}
+              {currentItems.map(renderRecord)}
               {!loading && !error && currentItems.length === 0 && <div className="empty-list">{section === "objects" && query.trim() ? "No active objects match your search." : "Nothing here yet."}</div>}
             </div>
+            </>}
+            {dateMode && !loading && !error && visibleItemCount === 0 && <div className="empty-list">Nothing here yet.</div>}
             </>}
           </section> : <section className="detail-page">
             {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "objects" || section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail key={selectedId} id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
@@ -253,6 +275,39 @@ export default function App() {
 }
 
 type ListItem = SharedObject | Task | Source | NoteSummary | Theme | Run;
+
+function isTaskItem(item: ListItem): item is Task {
+  return "object_id" in item && "due_at" in item;
+}
+
+export function useLocalDateNow(active: boolean): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    if (!active) return;
+    let timeout = 0;
+    const updateAndSchedule = () => {
+      const current = new Date();
+      setNow(current);
+      const nextMidnight = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+      timeout = window.setTimeout(updateAndSchedule, Math.max(1, nextMidnight.getTime() - current.getTime() + 25));
+    };
+    const resume = () => {
+      if (document.visibilityState === "visible") {
+        window.clearTimeout(timeout);
+        updateAndSchedule();
+      }
+    };
+    updateAndSchedule();
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("pageshow", resume);
+    return () => {
+      window.clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("pageshow", resume);
+    };
+  }, [active]);
+  return now;
+}
 
 function sortWithGraphFallback<T extends Exclude<ListItem, Run>>(items: T[], graph: ConnectionGraphSnapshot | null): T[] {
   if (!graph) return items;
