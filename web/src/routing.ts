@@ -1,4 +1,4 @@
-import type { SchemaViewMode } from "./types";
+import type { ObjectKind, SchemaViewMode } from "./types";
 
 export type Section = "events" | "objects" | "connections" | "tasks" | "chats" | "users" | "entities" | "memories" | "sources" | "notes" | "themes" | "runs" | "evals" | "schema";
 
@@ -50,7 +50,7 @@ export function parseRoute(pathname: string): AppRoute {
   }
   const section = sections[parts[0] ?? ""];
   if (!section) return { section: "objects", selectedId: null, connectionId: null, artifact: null };
-  const artifact = (section === "objects" || section === "sources" || section === "notes") && parts[1] && parts[3]
+  const artifact = isObjectDetailSection(section) && parts[1] && parts[3]
     ? parts[2] === "working" ? { kind: "latest" as const, id: parts[3] }
       : parts[2] === "artifacts" ? { kind: "exact" as const, id: parts[3] } : null
     : null;
@@ -82,6 +82,30 @@ export function objectPath(id: string): string {
   return detailPath("objects", id);
 }
 
+const objectKindSections: Record<ObjectKind, Section> = {
+  event: "events",
+  task: "tasks",
+  chat: "chats",
+  user: "users",
+  entity: "entities",
+  memory: "memories",
+  source: "sources",
+  note: "notes",
+  theme: "themes",
+};
+
+export function isObjectDetailSection(section: Section): boolean {
+  return section === "objects" || Object.values(objectKindSections).includes(section);
+}
+
+export function objectDetailPath(kind: string, id: string, artifact: AppRoute["artifact"] = null): string {
+  const section = Object.prototype.hasOwnProperty.call(objectKindSections, kind) ? objectKindSections[kind as ObjectKind] : "objects";
+  const parent = detailPath(section, id);
+  if (!artifact) return parent;
+  const segment = artifact.kind === "latest" ? "working" : "artifacts";
+  return `${parent}/${segment}/${encodeURIComponent(artifact.id)}`;
+}
+
 export function schemaPath(table?: string, view: SchemaViewMode = table ? "rows" : "map"): string {
   if (!table || view === "map") return "/schema";
   return `/schema/${encodeURIComponent(table)}/${view}`;
@@ -108,13 +132,13 @@ export function connectionsPath(objectId?: string): string {
 }
 
 export function navigate(path: string, replace = false): void {
-  if (`${window.location.pathname}${window.location.search}` === path) return;
+  if (`${window.location.pathname}${window.location.search}${window.location.hash}` === path) return;
   if (!window.dispatchEvent(new CustomEvent("beforeappnavigate", { cancelable: true, detail: path }))) return;
   window.history[replace ? "replaceState" : "pushState"]({}, "", path);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-export function interceptNavigation(event: React.MouseEvent<HTMLAnchorElement>, path: string): void {
+export function interceptNavigation(event: React.MouseEvent<HTMLAnchorElement | SVGAElement>, path: string): void {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   event.preventDefault();
   navigate(path);

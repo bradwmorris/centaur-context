@@ -212,7 +212,7 @@ export function FocusedObjectGraph({ objectId, objectTitle, refreshKey = 0 }: { 
       <svg viewBox={viewBox} role="img" aria-label={`${objectTitle} with ${neighbourhood.nodes.length - 1} related Objects and ${neighbourhood.edges.length} direct Connections`}>
         <defs><marker id="focused-connection-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
         <g className="connection-graph-edges">{neighbourhood.edges.map((edge) => <GraphEdge key={edge.id} edge={edge} active selected={false} keyboardEnabled onSelect={() => navigate(connectionPath(edge.id))} markerId="focused-connection-arrow" />)}</g>
-        <g className="connection-graph-nodes">{neighbourhood.nodes.map((node) => <GraphNode key={node.id} node={node} matched active selected={node.id === objectId} hovered={hoveredNode === node.id} onHover={setHoveredNode} onSelect={() => navigate(objectPath(node.id))} />)}</g>
+        <g className="connection-graph-nodes">{neighbourhood.nodes.map((node) => <GraphNode key={node.id} node={node} matched active selected={node.id === objectId} hovered={hoveredNode === node.id} onHover={setHoveredNode} onSelect={() => navigate(objectPath(node.id))} href={objectPath(node.id)} />)}</g>
       </svg>
       <p>{neighbourhood.edges.length} direct {neighbourhood.edges.length === 1 ? "Connection" : "Connections"} · select a node or line to open it</p>
     </div>}
@@ -233,8 +233,9 @@ function focusedViewBox(nodes: PositionedGraphNode[], zoom: number): string {
   return `${centerX - width / 2} ${centerY - height / 2} ${width} ${height}`;
 }
 
-function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect }: {
+function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect, href }: {
   node: PositionedGraphNode;
+  href?: string;
   matched: boolean;
   active: boolean;
   selected: boolean;
@@ -247,11 +248,12 @@ function GraphNode({ node, matched, active, selected, hovered, onHover, onSelect
   const activate = (event: React.KeyboardEvent<SVGGElement>) => {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelect(); }
   };
-  return <g className={className} transform={`translate(${node.x} ${node.y})`} role="button" tabIndex={0} aria-label={`${node.title}, ${node.kind} Object, ${node.degree} direct Connections`} onClick={(event) => { event.stopPropagation(); onSelect(); }} onKeyDown={activate} onMouseEnter={() => onHover(node.id)} onMouseLeave={() => onHover(null)}>
+  const element = <g className={className} transform={`translate(${node.x} ${node.y})`} role={href ? undefined : "button"} tabIndex={href ? undefined : 0} aria-label={href ? undefined : `${node.title}, ${node.kind} Object, ${node.degree} direct Connections`} onClick={href ? undefined : (event) => { event.stopPropagation(); onSelect(); }} onKeyDown={href ? undefined : activate} onMouseEnter={() => onHover(node.id)} onMouseLeave={() => onHover(null)}>
     <circle r={node.radius + 6} className="node-hit-area" />
     <circle r={node.radius} className="node-dot" />
     {showLabel && <text x={node.radius + 7} y="4" className="node-label">{truncate(node.title, 42)}</text>}
   </g>;
+  return href ? <a href={href} aria-label={`${node.title}, ${node.kind} Object, ${node.degree} direct Connections`} onClick={event => interceptNavigation(event, href)}>{element}</a> : element;
 }
 
 function GraphEdge({ edge, active, selected, keyboardEnabled, onSelect, markerId = "connection-arrow" }: {

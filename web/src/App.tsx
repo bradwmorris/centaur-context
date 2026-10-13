@@ -12,10 +12,11 @@ import { AttributionStack, CompactKindBadge, ObjectContext, ObjectTypeBadge, Sou
 import { TaskAssignee, TaskIssueLink, TaskReadiness, TaskProject } from "./TaskIdentity";
 import { formatTaskDueDate, groupListByDateField } from "./taskDateGroups";
 import { CorrectionHistory } from "./CorrectionHistory";
+import { CanonicalObjectRoute } from "./CanonicalObjectRoute";
 import { InlineEditor } from "./InlineEditor";
 import { ContextModuleView, ModuleViewSwitcher, resolveActiveModule } from "./modules/moduleRegistry";
 import { SchemaWorkspace } from "./SchemaWorkspace";
-import { detailPath, navigate, parseRoute, sectionPath } from "./routing";
+import { detailPath, interceptNavigation, isObjectDetailSection, navigate, parseRoute, sectionPath } from "./routing";
 import type { Section } from "./routing";
 import type { Artifact, ChatMessage, Connection, ConnectionGraphSnapshot, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
@@ -85,7 +86,7 @@ export default function App() {
       const objectKind = section in sectionKinds ? sectionKinds[section as keyof typeof sectionKinds] : undefined;
       const needsObjects = Boolean(selectedId || connectionId) || section === "objects" || section in sectionKinds || section === "runs" || section === "evals";
       const [nextObjects, nextTasks, nextSources, nextNotes, nextThemes, nextRuns, nextVisuals, densityGraph] = await Promise.all([
-        needsObjects ? section === "entities" && entityFilter && !selectedId ? api.filteredEntities(query, [entityFilter]) : api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, objectKind, apiSort) : Promise.resolve(null),
+        needsObjects ? section === "entities" && entityFilter && !selectedId ? api.filteredEntities(query, [entityFilter]) : api.objects(selectedId || section === "runs" || section === "evals" ? "" : query, selectedId ? undefined : objectKind, apiSort) : Promise.resolve(null),
         section === "tasks" ? api.tasks(apiSort) : Promise.resolve(null),
         section === "sources" ? api.sources(selectedId ? "" : query, apiSort) : Promise.resolve(null),
         section === "notes" ? api.notes(selectedId ? "" : query, apiSort) : Promise.resolve(null),
@@ -174,7 +175,7 @@ export default function App() {
     const taskDue = dateMode && isTaskItem(item);
     const dueDateTime = isTaskItem(item) && item.due_at && Number.isFinite(new Date(item.due_at).getTime()) ? item.due_at : undefined;
     return <div key={itemRouteId(item)} className={taskDue ? "record due-date-record" : "record"}>
-      <button className="record-open" onClick={() => navigate(detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
+      <a className="record-open" href={detailPath(section, itemRouteId(item))} onClick={(event) => interceptNavigation(event, detailPath(section, itemRouteId(item)))} aria-label={`Open ${itemTitle(item, objects)}`} />
       <span className="record-kind">{section === "tasks" && isTaskItem(item) ? <TaskProject task={item} /> : "actor_type" in item ? <CompactKindBadge kind="run" label={runType(item, objects)} /> : <ObjectTypeBadge kind={itemObjectKind(item)} compact />}</span>
       <span className="record-id">{"actor_type" in item ? <span className="object-id-pill">{shortId(item.id)}</span> : <ObjectId id={canonicalObjectId(item)} rowPill />}</span>
       <span className="record-main">
@@ -259,7 +260,9 @@ export default function App() {
             {dateMode && !loading && !error && visibleItemCount === 0 && <div className="empty-list">Nothing here yet.</div>}
             </>}
           </section> : <section className="detail-page">
-            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : artifact && (section === "objects" || section === "sources" || section === "notes") ? <ArtifactReader section={section} objectId={selectedId!} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId!} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : <ObjectDetail key={selectedId} id={selectedId!} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            {connectionId ? <ConnectionDetail id={connectionId} objects={objects} visuals={visualsById} refreshKey={refreshKey} /> : selectedId && isObjectDetailSection(section) ? <CanonicalObjectRoute key={`${section}:${selectedId}`} id={selectedId} artifact={artifact}>
+              {artifact ? <ArtifactReader section={section as "objects" | "sources" | "notes"} objectId={selectedId} target={artifact} refreshKey={refreshKey} /> : section === "tasks" ? <TaskDetail id={selectedId} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "sources" ? <SourceDetail id={selectedId} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "notes" ? <NoteDetail id={selectedId} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : section === "themes" ? <ThemeDetail id={selectedId} objects={objects} visuals={visualsById} refreshKey={refreshKey} onChanged={load} /> : <ObjectDetail key={selectedId} id={selectedId} objects={objects} visuals={visualsById} onChanged={load} refreshKey={refreshKey} />}
+            </CanonicalObjectRoute> : section === "runs" || section === "evals" ? <RunDetailView id={selectedId!} visuals={visualsById} onChanged={load} refreshKey={refreshKey} /> : null}
           </section>}
         </div>
       </section>
@@ -479,6 +482,9 @@ function EvalRunRow({ run, objects, visual, onUpdated }: { run: Run; objects: Sh
 
 function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: string; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; refreshKey: number; onChanged: () => Promise<void> }) {
   const [theme, setTheme] = useState<Theme | null>(null);
+  const [themeObject, setThemeObject] = useState<SharedObject | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [events, setEvents] = useState<ObjectEvent[]>([]);
   const [assigned, setAssigned] = useState<SharedObject[]>([]);
   const [error, setError] = useState<string | null>(null);
   const revision = useRef(0);
@@ -486,16 +492,15 @@ function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: stri
   const serialize = useSerializedSave();
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
-    try { const [nextTheme, nextAssigned] = await Promise.all([api.theme(id), api.themeObjects(id)]); if (generation !== loadGeneration.current) return; revision.current = nextTheme.revision; setTheme(nextTheme); setAssigned(nextAssigned); setError(null); }
+    try { const [nextTheme, nextAssigned, nextObject, nextConnections, nextEvents] = await Promise.all([api.theme(id), api.themeObjects(id), api.object(id), api.connections(id), api.events(id)]); if (generation !== loadGeneration.current) return; revision.current = nextTheme.revision; setTheme(nextTheme); setAssigned(nextAssigned); setThemeObject(nextObject); setConnections(nextConnections); setEvents(nextEvents); setError(null); }
     catch (cause) { if (generation === loadGeneration.current) setError(message(cause)); }
   }, [id]);
   useEffect(() => { void load(); }, [load, refreshKey]);
-  if (!theme) return <DetailLoading error={error} />;
-  const themeObject = objects.find((item) => item.id === id);
+  if (!theme || !themeObject) return <DetailLoading error={error} />;
   const saveObjectField = async (field: "title" | "description", value: string) => {
     return serialize(async () => {
       const updated = await api.updateObject(id, { expected_revision: revision.current, [field]: value });
-      revision.current = updated.revision;
+      revision.current = updated.revision; setThemeObject(updated);
       setTheme((existing) => existing ? { ...existing, [field]: updated[field], revision: updated.revision, updated_at: updated.updated_at } : existing);
       await onChanged();
       return updated[field];
@@ -506,7 +511,8 @@ function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: stri
     <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Object ID"><ObjectId id={theme.object_id} label={false} navigate /></Property><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
     <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={600} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
     <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
-    <FocusedObjectGraph objectId={theme.object_id} objectTitle={theme.title} refreshKey={refreshKey} />
+    <Connections object={themeObject} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+    <ActivityTimeline events={events} visuals={visuals} />
     <CorrectionHistory key={id} id={id} kind="theme" onChanged={onChanged} />
     {themeObject && <Provenance value={themeObject.provenance} />}
   </div></div>;
@@ -755,6 +761,14 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
       await onChanged(); return updated[field];
     });
   };
+  const saveDescription = (value: string) => serialize(async () => {
+    const updated = await api.updateObject(id, { expected_revision: revision.current, description: value });
+    revision.current = updated.revision;
+    setObject(updated);
+    setNote(current => current ? { ...current, revision: updated.revision } : current);
+    await onChanged();
+    return updated.description;
+  });
   const saveFormat = async (value: Note["content_format"]) => {
     try {
       const updated = await serialize(() => api.updateNote(id, { expected_revision: revision.current, content_format: value }));
@@ -776,6 +790,7 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
         <Property label="Source locator"><span className="property-value-wrap">{note.source_locator ? JSON.stringify(note.source_locator) : "Not set"}</span></Property>
         <Property label="Updated">{relative(note.updated_at)}</Property>
       </div></section>
+      <InlineEditor label="Note description" value={object.description} multiline required maxLength={600} className="detail-body-editor" onSave={saveDescription} onReload={load} />
       <Section title="Content"><InlineEditor label="Note content" value={note.content} multiline required maxLength={100000} placeholder="Write plain text or Markdown…" className="note-content-editor" onSave={(value) => saveField("content", value)} onReload={load} /></Section>
     </div>
     {error && <p className="form-error">{error}</p>}
@@ -836,6 +851,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       </div>
       {error && <p className="form-error">{error}</p>}
       {(item.kind === "event" || item.kind === "entity") && <EventEntityDetail id={item.id} kind={item.kind} revision={item.revision} onChanged={async () => { await load(); await onChanged(); }} />}
+      {item.kind === "memory" && <MemoryDetails key={`${item.id}:${item.revision}`} id={item.id} />}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
       {(item.kind === "source" || item.kind === "note") && <Artifacts section="objects" objectId={id} artifacts={artifacts} onCreated={load} />}
@@ -845,6 +861,19 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       <Provenance value={item.provenance} />
     </div>
   </div>;
+}
+
+function MemoryDetails({ id }: { id: string }) {
+  const [fields, setFields] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(cause => { if (active) setError(message(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  return <section className="properties-block" aria-label="Memory details">
+    {error ? <p role="alert">Could not load Memory details: {error}</p> : fields ? <Property label="Happened at"><time dateTime={typeof fields.happened_at === "string" ? fields.happened_at : undefined}>{textValue(fields.happened_at, "Not recorded")}</time></Property> : <p role="status">Loading Memory details…</p>}
+  </section>;
 }
 
 function UserIdentityPanel({ id, visual, refreshKey }: { id: string; visual: ObjectVisual | undefined; refreshKey: number }) {
@@ -916,12 +945,12 @@ function RelatedObjectRow({ currentObjectId, connection, objects, visuals }: { c
     {related ? <ObjectTypeBadge kind={related.kind} compact /> : <span />}
     <ObjectId id={relatedId} rowPill />
     <span className="related-object-copy">
-      <a className="related-object-title" href={detailPath("objects", relatedId)}>{related?.title ?? shortId(relatedId)}</a>
+      <a className="related-object-title" href={detailPath("objects", relatedId)} onClick={(event) => interceptNavigation(event, detailPath("objects", relatedId))}>{related?.title ?? shortId(relatedId)}</a>
       <span className="related-object-description" title={connection.description}>{connection.description}</span>
     </span>
     <ObjectContext visual={visuals.get(relatedId)} />
     <span className="related-object-meaning"><span title={outbound ? "Outbound from this Object" : "Inbound to this Object"}>{outbound ? "→" : "←"}</span> {connection.kind.replaceAll("_", " ")}</span>
-    <a className="related-connection-link" href={detailPath("connections", connection.id)} aria-label={`Open connection ${connection.id}`}>Connection</a>
+    <a className="related-connection-link" href={detailPath("connections", connection.id)} onClick={(event) => interceptNavigation(event, detailPath("connections", connection.id))} aria-label={`Open connection ${connection.id}`}>Connection</a>
   </article>;
 }
 
@@ -968,6 +997,14 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
     const updated = await saveFields(field === "brief_markdown" ? { brief_markdown: value || undefined, clear_brief_markdown: !value } : { title: value });
     return field === "brief_markdown" ? updated.brief_markdown ?? "" : updated.title;
   };
+  const saveDescription = (value: string) => serialize(async () => {
+    const updated = await api.updateObject(id, { expected_revision: revision.current, description: value });
+    revision.current = updated.revision;
+    setObject(updated);
+    setTask(current => current ? { ...current, revision: updated.revision } : current);
+    await onChanged();
+    return updated.description;
+  });
   const saveProperty = async (changes: Record<string, unknown>) => {
     try { await saveFields(changes); }
     catch (cause) { setError(conflictMessage(cause)); }
@@ -998,6 +1035,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
             <Property label="Updated">{relative(task.updated_at)}</Property>
           </div>
         </section>
+        <InlineEditor label="Task description" value={object.description} multiline required maxLength={600} className="detail-body-editor" onSave={saveDescription} onReload={load} />
         <TaskRoutine task={task} refreshKey={refreshKey} onChanged={async () => { await load(); await onChanged(); }} />
         <Section title="Brief"><InlineEditor label="Task brief" value={task.brief_markdown ?? ""} multiline maxLength={100000} placeholder="Scope, constraints, acceptance criteria, and verification…" className="detail-body-editor task-brief-editor" onSave={(value) => saveText("brief_markdown", value)} onReload={load} /></Section>
       </div>
@@ -1090,7 +1128,7 @@ function RunDetailView({ id, visuals, onChanged, refreshKey }: { id: string; vis
     <Section title="Outcome"><p className="run-outcome">{outcome}</p><details className="run-technical run-result"><summary>Technical result</summary><pre className="source-text-preview">{JSON.stringify(run.result, null, 2)}</pre></details></Section>
     {children.length > 0 && <Section title="Child runs"><div className="run-child-list">{childUsage.map(({ run: child, usage }) => <a className="run-child" href={detailPath("runs", child.id)} key={child.id}><span className="status-ring" /><span><strong>{runType(child, objects)}</strong><small>{runOutcome(child, objects)} · {usage.callCount} model call{usage.callCount === 1 ? "" : "s"} · {formatUsageValue(usage, "total")} tokens · {child.actor_type}:{child.actor_id}</small><small>Input {formatUsageValue(usage, "input")} · Cache read {formatUsageValue(usage, "cacheRead")} · Fresh input {freshInputValue(usage)} · Output {formatUsageValue(usage, "output")} · Provider total {formatUsageValue(usage, "total")}{usage.partial ? " · partial" : ""}</small></span><StateBadge state={child.status} /><span className="object-id-pill">{shortId(child.id)}</span></a>)}</div></Section>}
     <Section title="End-to-end outcome"><div className="change-list"><article className="change"><strong>Parent {shortId(run.id)}</strong><span>{outcome}</span><span>{parentEvents.length} direct mutation{parentEvents.length === 1 ? "" : "s"} · {run.actor_type}:{run.actor_id}</span></article>{children.map((child) => { const mutations = events.filter((event) => event.run_id === child.id); return <article className="change" key={child.id}><strong>Child {shortId(child.id)} · {runType(child, objects)}</strong><span>{runOutcome(child, objects)}</span><span>{mutations.length} mutation{mutations.length === 1 ? "" : "s"} · {child.actor_type}:{child.actor_id}</span></article>; })}</div></Section>
-    <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} compact /><ObjectId id={object.object_id} compact /><a href={detailPath("objects", object.object_id)}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectContext visual={visuals.get(object.object_id)} /></article>)}{objects.length === 0 && <p className="muted">No related Objects.</p>}</div></Section>
+    <Section title="Related Objects"><div className="run-related-objects">{objects.map((object) => <article className="run-related-object" key={object.object_id}><ObjectTypeBadge kind={object.kind} compact /><ObjectId id={object.object_id} compact /><a href={detailPath("objects", object.object_id)} onClick={(event) => interceptNavigation(event, detailPath("objects", object.object_id))}>{object.title}</a><span>{object.role.replaceAll("_", " ")}</span><ObjectContext visual={visuals.get(object.object_id)} /></article>)}{objects.length === 0 && <p className="muted">No related Objects.</p>}</div></Section>
     <Section title="Durable mutations"><div className="change-list"><h4>Parent mutations</h4>{parentEvents.map((item) => <MutationEvidence event={item} runLabel={`Parent ${shortId(run.id)}`} key={item.id} />)}{parentEvents.length === 0 && <p className="muted">No direct parent mutations.</p>}{childEvents.map(({ run: child, events: mutations }) => <div key={child.id}><h4>Child {shortId(child.id)} · {child.actor_type}:{child.actor_id}</h4>{mutations.map((item) => <MutationEvidence event={item} runLabel={`Child ${shortId(child.id)}`} key={item.id} />)}</div>)}</div></Section>
   </div></div>;
 }
