@@ -1,11 +1,11 @@
-// Run with Node 22: node --experimental-strip-types scripts/object-ui-preview.mjs [web root] [port]
+// Run with Node 22: node --experimental-strip-types scripts/object-ui-preview.mjs [web root] [port] [--long-titles]
 // Local synthetic evidence only. No database, credentials, or live Context service is used.
 import { createServer as createHttpServer } from 'node:http';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createObjectFixtureApi } from '../web/src/test-fixtures/objectApi.ts';
 const webRoot = resolve(process.argv[2] || 'web');
-const api = createObjectFixtureApi();
+const api = createObjectFixtureApi({ longTitles: process.argv.includes("--long-titles") });
 const server = createHttpServer(async (req, res) => {
   try {
     let body = '';

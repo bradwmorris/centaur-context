@@ -38,3 +38,12 @@ it("keeps Task workflow editing, secondary information and relationship creation
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("combobox", { name: "Connection kind" })).not.toBeInTheDocument());
 });
+
+it("retains the complete long related title and its native destination", async () => {
+  vi.stubGlobal("fetch", vi.fn(createObjectFixtureApi({ longTitles: true })));
+  window.history.replaceState({}, "", "/sources/synthetic-source");
+  render(<App />);
+  const title = await screen.findByRole("link", { name: /^Synthetic research note:/ });
+  expect(title).toHaveTextContent("Synthetic research note: preserving complete related Object titles across compact desktop layouts and narrow screens, even beside a lengthy relationship explanation");
+  expect(title).toHaveAttribute("href", "/objects/synthetic-note");
+});

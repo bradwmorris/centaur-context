@@ -13,3 +13,10 @@
 .entity-classifications p { font-size: 12px; }
 .classification-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .classification-pills .visual-badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+
+.event-occurrence { margin: 24px 0; }
+.event-occurrence p { margin: 0; font-size: 12px; }
+.event-occurrence-values { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; font-size: 13px; }
+.event-occurrence-values > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.event-occurrence-values dt { color: var(--text-subtle); font-size: 11px; }
+.event-occurrence-values dd { margin: 0; overflow-wrap: anywhere; }

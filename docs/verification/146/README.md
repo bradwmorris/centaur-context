@@ -12,10 +12,10 @@ Issue #146, dependent on #128 / PR #147. Synthetic fixtures only. Both changes r
 | Task | **Changed:** six common workflow fields in a compact responsive grid; description and brief visible before secondary metadata. More details retains ID, attribution, suitability, completion, issue and update information. Blocked reasons stay prominent when present. Removed duplicate assignee/project display and positive readiness boilerplate; missing-readiness warnings remain. |
 | Task Routine | **Changed:** removed Make a Routine and empty scheduling prompt. Existing schedules retain pause/enable, edit, save/cancel, execution history and result acceptance. Failed reads still show errors. |
 | Note body | **Changed:** removed redundant read-mode box and empty minimum height. Edit textarea retains its space, focus and save/cancel behavior. |
-| Related Objects | **Changed:** relationship creation becomes a labelled disclosure with explicit Cancel, preserving the form. Narrow rows wrap title/explanation and expose the Connection link. Meaningful No related Objects state remains. |
+| Related Objects | **Changed:** relationship creation becomes a labelled disclosure with explicit Cancel, preserving the form. Titles now take priority and wrap in full at every width; explanations follow. Narrow rows expose the Connection link. Meaningful No related Objects state remains. |
 | Focused graph | **Changed:** Connection map disclosure defers duplicate visual representation and graph request until opened; no empty map on unconnected Objects. Initial Fit exposes peripheral nodes. Native node links, focus, zoom, Fit and full Connections navigation remain. |
 | Collections and registered views | **Retained:** one New control where supported, search, filters, date groups, list/board switching, copy-ID and pagination each have distinct uses. Broader creation-feature removal would require a separate decision. |
-| Event | **Retained:** occurrence form and Save properties apply subtype edits and are not redundant actions. |
+| Event | **Changed at owner request:** compact read-only occurrence values replace the editor, instructional text and Save properties action. Stored date precision/timezone and creation/backend capabilities remain. |
 | Entity / Memory | **Retained:** assigned classifications and existing subtype details; classification absence and missing occurrence dates communicate actual state. No new classification or image editing. |
 | User / Chat | **Retained:** identity and transcript data, capture coverage, correction display and meaningful empty states. **Deferred:** repeated identity IDs may merit a dedicated identity presentation pass; avoid changing attribution semantics here. |
 | Theme | **Retained:** membership, shared metadata, connections and provenance; empty membership explains that the Theme exists without assigned Objects. |
@@ -41,6 +41,18 @@ Browser limitation: the dirty-document discard confirmation blocked the in-app b
 
 ## Checks and review
 
-Local TypeScript, 166 web tests, production web bundle, npm audit (zero vulnerabilities), package contract, Rust formatting and whitespace checks pass. The preceding routing commit also passed all 80 Python tests and all 19 UI-composition tests. Final composition and required CI results are recorded on the PR. Full Rust/database tests run only in CI using the disposable `centaur_context_test_ci` database, avoiding heavy local builds during storage recovery.
+Local TypeScript, 171 web tests, production web bundle, npm audit (zero vulnerabilities), package contract, Rust formatting and whitespace checks pass. The preceding routing commit also passed all 80 Python tests and all 19 UI-composition tests. Final composition and required CI results are recorded on the PR. Full Rust/database tests run only in CI using the disposable `centaur_context_test_ci` database, avoiding heavy local builds during storage recovery.
 
 Direct self-review covered the full diff, route ownership, revision-aware saves, effect cleanup, native anchors/disclosures, keyboard focus, meaningful empty/error states, and retained information. No schema/data/storage/overlay changes or production service restarts. No merge or deployment performed.
+
+## Follow-up: Event occurrence and full related titles
+
+The reported live page was inspected read-only; CSS flex shrink and ellipsis were compressing even short titles. No live record content or screenshot was copied into the repository. Related titles now use ordinary inline text flow, wrapping in full before the relationship explanation follows. Existing destination links and relationship metadata remain.
+
+Event occurrence shows only recorded Start, End and Timezone values. Values remain exactly as stored, preserving year/month/day precision and instant offsets without timezone conversion. Unknown timing, loading and failed reads are distinct. No Event detail mutation form remains; Event creation still uses its existing fields.
+
+Synthetic browser evidence at 1280×900 and 390×844:
+- [Event desktop](event-readonly-desktop.jpg) and [Event narrow](event-readonly-narrow.jpg).
+- [Long related title desktop](related-title-desktop.jpg) and [long related title narrow](related-title-narrow.jpg).
+
+Reproduce the long-title preview with `node --experimental-strip-types scripts/object-ui-preview.mjs web 49129 --long-titles`. The 164-character title and long explanation are synthetic. Browser inspection confirms normal wrapping and no ellipsis. Added regressions cover all four timing precisions, partial/unknown/error states, absent mutation controls, and complete related-link text/destination.

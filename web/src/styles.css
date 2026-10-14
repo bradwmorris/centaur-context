@@ -366,9 +366,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .connection-properties { margin-top: 14px; }
 .related-object-list { display: grid; }
 .related-object-row { min-width: 0; display: grid; grid-template-columns: max-content max-content minmax(120px,1fr) max-content max-content max-content; align-items: center; gap: 7px; min-height: 38px; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.04); overflow: hidden; }
-.related-object-copy { min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; }
-.related-object-title { min-width: 0; color: #d9dade; font-size: 12px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.related-object-description { min-width: 0; flex: 1 1 auto; color: var(--text-subtle); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.related-object-copy { min-width: 0; display: block; overflow-wrap: anywhere; }
+.related-object-title { color: #d9dade; font-size: 12px; font-weight: 540; white-space: normal; overflow-wrap: anywhere; }
+.related-object-description { margin-left: 6px; color: var(--text-subtle); font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
 .related-object-description::before { content: "— "; }
 .related-object-meaning, .related-connection-link { color: var(--text-subtle); font-size: 9px; text-transform: capitalize; white-space: nowrap; }
 .focused-object-graph { position: relative; width: 100%; min-height: 320px; overflow: hidden; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background-color: #0e0f11; background-image: radial-gradient(rgba(255,255,255,.05) .75px, transparent .75px); background-size: 19px 19px; }
@@ -843,7 +843,7 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
 @media (max-width: 640px) {
   .related-object-row { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 7px; padding: 8px 0; }
   .related-object-copy { display: grid; gap: 3px; white-space: normal; }
-  .related-object-title, .related-object-description { white-space: normal; overflow-wrap: anywhere; }
+  .related-object-description { margin-left: 0; }
   .related-object-meaning, .related-connection-link { grid-column: 2; }
   .related-connection-link { display: inline; width: fit-content; }
 }

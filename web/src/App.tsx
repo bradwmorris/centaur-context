@@ -835,7 +835,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
         <InlineEditor label="Object description" value={item.description} multiline required maxLength={600} placeholder={descriptionExamples[item.kind]} className="detail-body-editor" onSave={(value) => saveField("description", value)} onReload={load} />
       </div>
       {error && <p className="form-error">{error}</p>}
-      {(item.kind === "event" || item.kind === "entity") && <EventEntityDetail id={item.id} kind={item.kind} revision={item.revision} onChanged={async () => { await load(); await onChanged(); }} />}
+      {(item.kind === "event" || item.kind === "entity") && <EventEntityDetail id={item.id} kind={item.kind} revision={item.revision} />}
       {item.kind === "memory" && <MemoryDetails key={`${item.id}:${item.revision}`} id={item.id} />}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
