@@ -366,9 +366,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .connection-properties { margin-top: 14px; }
 .related-object-list { display: grid; }
 .related-object-row { min-width: 0; display: grid; grid-template-columns: max-content max-content minmax(120px,1fr) max-content max-content max-content; align-items: center; gap: 7px; min-height: 38px; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.04); overflow: hidden; }
+/* Related rows stay on one line. Description receives only space left after the title. */
 .related-object-copy { min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; }
-.related-object-title { min-width: 0; color: #d9dade; font-size: 12px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.related-object-description { min-width: 0; flex: 1 1 auto; color: var(--text-subtle); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.related-object-title { flex: 0 1 auto; min-width: 0; max-width: 100%; color: #d9dade; font-size: 12px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.related-object-description { flex: 1 1 0%; min-width: 0; color: var(--text-subtle); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .related-object-description::before { content: "— "; }
 .related-object-meaning, .related-connection-link { color: var(--text-subtle); font-size: 9px; text-transform: capitalize; white-space: nowrap; }
 .focused-object-graph { position: relative; width: 100%; min-height: 320px; overflow: hidden; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background-color: #0e0f11; background-image: radial-gradient(rgba(255,255,255,.05) .75px, transparent .75px); background-size: 19px 19px; }
@@ -806,3 +807,39 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
 /* Focused graph destinations retain native link and keyboard behavior. */
 .connection-graph-nodes > a .node-label { pointer-events: auto; }
 .connection-graph-nodes > a:focus-visible .node-hit-area { stroke: var(--focus); stroke-width: 2; }
+
+/* Compact Object detail reading surfaces. Editing controls keep their focus states. */
+.note-content-editor { min-height: 0; }
+.note-content-editor .inline-editor-view { min-height: 0; padding: 0; border: 0; background: transparent; font-family: inherit; }
+.detail-disclosure { margin: 14px 0; color: var(--text-subtle); font-size: 12px; }
+.detail-disclosure > summary, .connection-editor > summary { width: fit-content; min-height: 28px; cursor: pointer; }
+.detail-disclosure > summary:focus-visible, .connection-editor > summary:focus-visible { outline: 2px solid var(--focus, #8d91a0); outline-offset: 3px; }
+.connection-editor { margin-top: 8px; color: var(--text-subtle); font-size: 11px; }
+.detail-disclosure .focused-object-graph-section { margin: 0; padding-top: 4px; border: 0; }
+.task-detail .record-primary { padding-top: 30px; }
+.task-detail .detail-title-editor { font-size: 28px; margin-bottom: 22px; }
+/* Task properties remain a single vertical stack at every viewport width. */
+.task-workflow-properties { display: flex; flex-direction: column; gap: 10px; }
+.task-workflow-properties > .property, .task-workflow-properties > .field { width: 100%; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 8px; font-size: 13px; }
+.task-workflow-properties > .property > span, .task-workflow-properties > .field > span { flex: 0 0 82px; font-size: 10px; }
+.task-workflow-properties .property > div, .task-workflow-properties > .field > select { flex: 1; min-width: 0; }
+.task-workflow-properties select, .task-workflow-properties input { max-width: 100%; min-width: 0; min-height: 28px; padding: 2px 0; color: var(--text-primary); font: inherit; border: 0; background: transparent; }
+.task-workflow-properties select { width: 100%; }
+.task-workflow-properties input:focus-visible, .task-workflow-properties select:focus-visible { outline: 2px solid var(--focus, #8d91a0); outline-offset: 2px; }
+.task-detail .detail-body-editor { font-size: 14px; line-height: 1.65; }
+.task-metadata .properties-grid { display: flex; flex-direction: column; margin-top: 8px; gap: 9px; }
+.task-routine { margin-top: 18px; font-size: 12px; }
+.task-routine button { margin: 4px 10px 4px 0; }
+@media (max-width: 650px) {
+  .task-detail .record-primary { padding-top: 24px; }
+  .task-detail .detail-title-editor { font-size: 25px; }
+  .task-workflow-properties > .property > span, .task-workflow-properties > .field > span { flex-basis: 74px; }
+}
+.task-detail .detail-body-editor { margin-bottom: 12px; }
+.task-detail .detail-section { padding: 12px 0; }
+.task-detail .detail-form { padding-bottom: 4px; }
+.task-detail .detail-disclosure { margin: 8px 0; }
+@media (max-width: 640px) {
+  .related-object-row { grid-template-columns: max-content minmax(0, 1fr) max-content max-content; }
+  .related-connection-link { display: inline; }
+}

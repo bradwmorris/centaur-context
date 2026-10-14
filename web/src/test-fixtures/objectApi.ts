@@ -1,9 +1,16 @@
 import fixture from "./object-routes.json" with { type: "json" };
 
 /** Synthetic HTTP fixture only: never connects to a Context service or database. */
-export function createObjectFixtureApi({ emptyList = false }: { emptyList?: boolean } = {}) {
+export function createObjectFixtureApi({ emptyList = false, longTitles = false }: { emptyList?: boolean; longTitles?: boolean } = {}) {
   const data = structuredClone(fixture);
   const subtypes = data.subtypes as Record<string, Record<string, unknown>>;
+  if (longTitles) {
+    const note = data.objects.find(object => object.kind === "note")!;
+    note.title = "Synthetic research note: preserving complete related Object titles across compact desktop layouts and narrow screens, even beside a lengthy relationship explanation";
+    subtypes.note.title = note.title;
+    data.connections.forEach(connection => { connection.description = "This synthetic explanation follows the complete related Object title and must never squeeze it into an ellipsis, even when the available space is limited."; });
+  }
+
   const respond = (value: unknown, status = 200) => new Response(JSON.stringify(status === 200 ? { data: value } : { error: { message: value } }), { status, headers: { "Content-Type": "application/json" } });
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input), "http://synthetic.test");

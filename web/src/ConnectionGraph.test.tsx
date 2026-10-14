@@ -62,7 +62,7 @@ describe("Connections graph workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Zoom in focused graph" }));
     expect(focusedGraph.getAttribute("viewBox")).not.toBe(fittedViewBox);
     fireEvent.click(screen.getByRole("button", { name: "Fit" }));
-    expect(focusedGraph.getAttribute("viewBox")).not.toBe(fittedViewBox);
+    expect(focusedGraph.getAttribute("viewBox")).toBe(fittedViewBox);
     expect(screen.getByRole("link", { name: "Open in Connections" })).toHaveAttribute("href", "/connections?object=hub");
     expect(screen.getByRole("link", { name: /Central Object, entity Object/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: /Quiet Object/ })).not.toBeInTheDocument();

@@ -34,15 +34,16 @@ export function TaskRoutine({ task, onChanged, refreshKey = 0 }: { task: Task; o
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save Routine"); }
     finally { setBusy(false); }
   };
-  return <section className="properties-block" aria-label="Routine schedule">
+  if (!detail?.routine && !detail?.runs.length && !error) return null;
+  return <section className="properties-block task-routine" aria-label="Routine schedule">
     <h2>{detail?.routine ? "Routine" : "Schedule"}</h2>
-    <p>A due date is a review date. Only an enabled Routine starts automatically.</p>
+
     {detail?.routine && <>
       <p>{detail.routine.enabled ? "Enabled" : "Paused"} · {detail.routine.schedule.timezone}</p>
       <p>Next run: {detail.routine.next_run_at ? new Date(detail.routine.next_run_at).toLocaleString() : "None"}</p>
       <button disabled={busy} onClick={() => void save(!detail.routine?.enabled, true)}>{detail.routine.enabled ? "Pause Routine" : "Enable Routine"}</button>
     </>}
-    <button disabled={busy} onClick={() => setEditing(!editing)}>{detail?.routine ? "Edit schedule" : "Make a Routine"}</button>
+    {detail?.routine && <button className="text-button" disabled={busy} onClick={() => setEditing(!editing)}>{editing ? "Cancel" : "Edit schedule"}</button>}
     {editing && <div>
       <label>Schedule <select value={mode} onChange={(event) => setMode(event.target.value)}><option value="daily">Selected days at a time</option><option value="interval">Every N minutes</option></select></label>
       <label>Timezone <input value={zone} onChange={(event) => setZone(event.target.value)} /></label>

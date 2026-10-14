@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { api } from "./api";
 import { EventEntityDetail, type EntityCategory, type SubtypeFields } from "./EventEntityFields";
@@ -6,7 +6,7 @@ import { EventEntityDetail, type EntityCategory, type SubtypeFields } from "./Ev
 vi.mock("./api", () => ({ api: { readSubtype: vi.fn(), entityCategories: vi.fn(), applyCorrections: vi.fn() } }));
 const category = (id: string, label: string): EntityCategory => ({ id, label, slug: id, definition: `${label} definition`, aliases: [], legacy_kind: "other", revision: 1, archived_at: null });
 const categories = [category("org", "Organization"), category("fund", "Fund"), category("person", "Person")];
-const props = { id: "first", kind: "entity", revision: 1, onChanged: vi.fn() };
+const props = { id: "first", kind: "entity", revision: 1 };
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.entityCategories).mockResolvedValue({ categories, revision: "1" });
@@ -54,15 +54,35 @@ it("distinguishes no assignment, unavailable labels and failed reads", async () 
   expect(screen.queryByRole("listitem")).toBeNull();
 });
 
-it("retains Event occurrence editing", async () => {
-  vi.mocked(api.readSubtype).mockResolvedValue({ starts_at: "2026-10-13", starts_at_precision: "day" });
-  vi.mocked(api.applyCorrections).mockResolvedValue({});
+it.each([
+  ["year", "2026", "2027"],
+  ["month", "2026-10", "2026-12"],
+  ["day", "2026-10-13", "2026-10-14"],
+  ["instant", "2026-10-13T09:30:00+11:00", "2026-10-13T10:00:00+11:00"],
+])("shows %s timing read-only without inventing precision or changing timezone", async (precision, start, end) => {
+  vi.mocked(api.readSubtype).mockResolvedValue({ starts_at: start, starts_at_precision: precision, ends_at: end, ends_at_precision: precision, timezone: "Australia/Sydney" });
   render(<EventEntityDetail {...props} kind="event" />);
-  const start = await screen.findByRole("textbox", { name: "Event start" });
-  fireEvent.change(start, { target: { value: "2026-10-14" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save properties" }));
-  await waitFor(() => expect(api.applyCorrections).toHaveBeenCalledWith([expect.objectContaining({
-    object_id: "first", expected_revision: 1, changes: expect.objectContaining({ starts_at: "2026-10-14", starts_at_precision: "day" }),
-  })]));
+  expect(await screen.findByText(start)).toHaveAttribute("datetime", start);
+  expect(screen.getByText(end)).toHaveAttribute("datetime", end);
+  expect(screen.getByText("Australia/Sydney")).toBeVisible();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByText("Event timing")).not.toBeInTheDocument();
+  expect(api.applyCorrections).not.toHaveBeenCalled();
   expect(api.entityCategories).not.toHaveBeenCalled();
+});
+
+it("keeps partial, unknown and failed Event timing distinct", async () => {
+  vi.mocked(api.readSubtype).mockResolvedValue({ ends_at: "2026-10", ends_at_precision: "month" });
+  const { rerender } = render(<EventEntityDetail {...props} kind="event" />);
+  expect(await screen.findByText("2026-10")).toBeVisible();
+  expect(screen.queryByText("Start")).not.toBeInTheDocument();
+  vi.mocked(api.readSubtype).mockResolvedValue({});
+  rerender(<EventEntityDetail {...props} kind="event" revision={2} />);
+  expect(await screen.findByText("Timing not recorded.")).toBeVisible();
+  vi.mocked(api.readSubtype).mockRejectedValue(new Error("Synthetic failure"));
+  rerender(<EventEntityDetail {...props} kind="event" revision={3} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not load occurrence");
+  expect(screen.queryByText("Timing not recorded.")).not.toBeInTheDocument();
 });

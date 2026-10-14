@@ -44,21 +44,30 @@ export function EntityFields({ initial = {} }: { initial?: SubtypeFields }) {
     <label>Primary classification<select name="primary_category_id" required value={primary} onChange={e => setPrimary(e.target.value)}><option value="">Select a classification</option>{categories.filter(c => selected.includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
   </fieldset>;
 }
-function EventDetail({ id, kind, revision, onChanged }: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+function EventDetail({ id }: { id: string }) {
   const [fields, setFields] = useState<SubtypeFields | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { let active = true; api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(e => { if (active) setError(String(e)); }); return () => { active = false; }; }, [id, revision]);
-  return <section><h2>Occurrence</h2>{error && <p role="alert">{error}</p>}{fields && <form key={`${id}:${revision}`} onSubmit={async e => {
-    e.preventDefault(); const changes = fieldsFromForm(kind, new FormData(e.currentTarget)); setBusy(true); setError("");
-    try { await api.applyCorrections([{ operation: "update_object", object_id: id, expected_revision: revision, changes }]); await onChanged(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
-  }}><EventFields initial={fields} /><button disabled={busy}>{busy ? "Saving…" : "Save properties"}</button></form>}</section>;
+  useEffect(() => {
+    let active = true;
+    void api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(cause => { if (active) setError(String(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  const timing = [
+    ["Start", fields?.starts_at],
+    ["End", fields?.ends_at],
+    ["Timezone", fields?.timezone],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0);
+  return <section className="properties-block event-occurrence" aria-label="Occurrence">
+    <h2>Occurrence</h2>
+    {error ? <p role="alert">Could not load occurrence: {error}</p> : fields === null ? <p className="muted" role="status">Loading occurrence…</p> : timing.length === 0 ? <p className="muted">Timing not recorded.</p> :
+      <dl className="event-occurrence-values">{timing.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{label === "Timezone" ? value : <time dateTime={value}>{value}</time>}</dd></div>)}</dl>}
+  </section>;
 }
 
-export function EventEntityDetail(props: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+export function EventEntityDetail(props: { id: string; kind: string; revision: number }) {
   return props.kind === "entity"
     ? <EntityClassifications key={`${props.id}:${props.revision}`} id={props.id} />
-    : <EventDetail key={`${props.id}:${props.revision}`} {...props} />;
+    : <EventDetail key={`${props.id}:${props.revision}`} id={props.id} />;
 }
 
 function EntityClassifications({ id }: { id: string }) {

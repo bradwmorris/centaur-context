@@ -18,6 +18,7 @@ describe("complete Object detail routing", () => {
       render(<App />);
       expect(await screen.findByText(content[kind].replace(/\s+/g, " "))).toBeInTheDocument();
       expect(window.location.pathname).toBe(`/${section}/synthetic-${kind}`);
+      expect(screen.queryByRole("button", { name: "Review or correct evidence" })).not.toBeInTheDocument();
       expect(window.location.search + window.location.hash).toBe("?ref=fixture#details");
       expect(screen.getByRole("button", { name: `Edit ${["note", "task", "source", "theme"].includes(kind) ? kind[0].toUpperCase() + kind.slice(1) : "Object"} description` })).toBeInTheDocument();
     });
@@ -26,6 +27,8 @@ describe("complete Object detail routing", () => {
     vi.stubGlobal("fetch", vi.fn(createObjectFixtureApi()));
     window.history.replaceState({}, "", "/objects");
     render(<App />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search objects" }), { target: { value: "Synthetic note" } });
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Open Synthetic task" })).not.toBeInTheDocument());
     fireEvent.click(await screen.findByRole("link", { name: "Open Synthetic note" }));
     expect(await screen.findByText(fixture.subtypes.note.content)).toBeVisible();
     act(() => navigate("/sources/synthetic-source"));
@@ -36,6 +39,7 @@ describe("complete Object detail routing", () => {
   it("opens a Task from a focused graph and retains workflow fields", async () => {
     window.history.replaceState({}, "", "/notes/synthetic-note");
     render(<App />);
+    fireEvent.click(await screen.findByText("Connection map", { selector: "summary" }));
     fireEvent.click(await screen.findByRole("link", { name: /Synthetic task, task Object/ }));
     expect(await screen.findByRole("combobox", { name: "Task status" })).toHaveValue("todo");
     expect(screen.getByRole("button", { name: "Edit Task brief" })).toHaveTextContent("Prepare the synthetic review.");
