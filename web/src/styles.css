@@ -366,9 +366,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .connection-properties { margin-top: 14px; }
 .related-object-list { display: grid; }
 .related-object-row { min-width: 0; display: grid; grid-template-columns: max-content max-content minmax(120px,1fr) max-content max-content max-content; align-items: center; gap: 7px; min-height: 38px; padding: 5px 0; border-top: 1px solid rgba(255,255,255,.04); overflow: hidden; }
-.related-object-copy { min-width: 0; display: block; overflow-wrap: anywhere; }
-.related-object-title { color: #d9dade; font-size: 12px; font-weight: 540; white-space: normal; overflow-wrap: anywhere; }
-.related-object-description { margin-left: 6px; color: var(--text-subtle); font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
+/* Related rows stay on one line. Description receives only space left after the title. */
+.related-object-copy { min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; }
+.related-object-title { flex: 0 1 auto; min-width: 0; max-width: 100%; color: #d9dade; font-size: 12px; font-weight: 540; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.related-object-description { flex: 1 1 0%; min-width: 0; color: var(--text-subtle); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .related-object-description::before { content: "— "; }
 .related-object-meaning, .related-connection-link { color: var(--text-subtle); font-size: 9px; text-transform: capitalize; white-space: nowrap; }
 .focused-object-graph { position: relative; width: 100%; min-height: 320px; overflow: hidden; border: 1px solid rgba(255,255,255,.06); border-radius: 8px; background-color: #0e0f11; background-image: radial-gradient(rgba(255,255,255,.05) .75px, transparent .75px); background-size: 19px 19px; }
@@ -817,33 +818,28 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
 .detail-disclosure .focused-object-graph-section { margin: 0; padding-top: 4px; border: 0; }
 .task-detail .record-primary { padding-top: 30px; }
 .task-detail .detail-title-editor { font-size: 28px; margin-bottom: 22px; }
-.task-workflow-properties { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 24px; }
-.task-workflow-properties > .property, .task-workflow-properties > .field { width: 100%; display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; font-size: 13px; }
-.task-workflow-properties > .property > span, .task-workflow-properties > .field > span { font-size: 10px; }
-.task-workflow-properties .property > div { min-width: 0; }
+/* Task properties remain a single vertical stack at every viewport width. */
+.task-workflow-properties { display: flex; flex-direction: column; gap: 10px; }
+.task-workflow-properties > .property, .task-workflow-properties > .field { width: 100%; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 8px; font-size: 13px; }
+.task-workflow-properties > .property > span, .task-workflow-properties > .field > span { flex: 0 0 82px; font-size: 10px; }
+.task-workflow-properties .property > div, .task-workflow-properties > .field > select { flex: 1; min-width: 0; }
 .task-workflow-properties select, .task-workflow-properties input { max-width: 100%; min-width: 0; min-height: 28px; padding: 2px 0; color: var(--text-primary); font: inherit; border: 0; background: transparent; }
 .task-workflow-properties select { width: 100%; }
 .task-workflow-properties input:focus-visible, .task-workflow-properties select:focus-visible { outline: 2px solid var(--focus, #8d91a0); outline-offset: 2px; }
 .task-detail .detail-body-editor { font-size: 14px; line-height: 1.65; }
-.task-metadata .properties-grid { margin-top: 8px; gap: 9px; }
+.task-metadata .properties-grid { display: flex; flex-direction: column; margin-top: 8px; gap: 9px; }
 .task-routine { margin-top: 18px; font-size: 12px; }
 .task-routine button { margin: 4px 10px 4px 0; }
-@media (max-width: 850px) {
-  .task-workflow-properties { grid-template-columns: minmax(0, 1fr); }
-}
 @media (max-width: 650px) {
   .task-detail .record-primary { padding-top: 24px; }
   .task-detail .detail-title-editor { font-size: 25px; }
-  .task-workflow-properties > .property, .task-workflow-properties > .field { grid-template-columns: 74px minmax(0, 1fr); }
+  .task-workflow-properties > .property > span, .task-workflow-properties > .field > span { flex-basis: 74px; }
 }
 .task-detail .detail-body-editor { margin-bottom: 12px; }
 .task-detail .detail-section { padding: 12px 0; }
 .task-detail .detail-form { padding-bottom: 4px; }
 .task-detail .detail-disclosure { margin: 8px 0; }
 @media (max-width: 640px) {
-  .related-object-row { grid-template-columns: max-content minmax(0, 1fr); gap: 4px 7px; padding: 8px 0; }
-  .related-object-copy { display: grid; gap: 3px; white-space: normal; }
-  .related-object-description { margin-left: 0; }
-  .related-object-meaning, .related-connection-link { grid-column: 2; }
-  .related-connection-link { display: inline; width: fit-content; }
+  .related-object-row { grid-template-columns: max-content minmax(0, 1fr) max-content max-content; }
+  .related-connection-link { display: inline; }
 }

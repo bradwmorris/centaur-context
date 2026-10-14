@@ -62,6 +62,7 @@ export function Artifacts({ section, objectId, artifacts }: { section: ParentSec
     <h2>Artifacts</h2>
     <ul className="artifact-list">{documents.map(({ key, latest, history }) => <li key={key === null ? latest.id : `working:${key}`}>
       <ArtifactLink className="artifact-row" href={artifactHref(section, objectId, latest, key)}>
+        <svg className="artifact-open-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
         {latest.kind === "research_visual" && <img className="artifact-thumbnail" src={visualSrc(latest)} alt="" loading="lazy" />}
         <span className="artifact-row-copy"><span className="artifact-row-title">{artifactLabel(latest)}</span><span className="artifact-row-meta">{displayType(latest)}{history.length > 1 ? ` · ${history.length} versions` : ""}{latest.capture_outcome !== "complete" ? ` · ${latest.capture_outcome.replaceAll("_", " ")}` : ""}</span></span>
       </ArtifactLink>

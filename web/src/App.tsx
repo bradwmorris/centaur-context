@@ -932,7 +932,7 @@ function RelatedObjectRow({ currentObjectId, connection, objects, visuals }: { c
     {related ? <ObjectTypeBadge kind={related.kind} compact /> : <span />}
     <ObjectId id={relatedId} rowPill />
     <span className="related-object-copy">
-      <a className="related-object-title" href={detailPath("objects", relatedId)} onClick={(event) => interceptNavigation(event, detailPath("objects", relatedId))}>{related?.title ?? shortId(relatedId)}</a>
+      <a className="related-object-title" title={related?.title} href={detailPath("objects", relatedId)} onClick={(event) => interceptNavigation(event, detailPath("objects", relatedId))}>{related?.title ?? shortId(relatedId)}</a>
       <span className="related-object-description" title={connection.description}>{connection.description}</span>
     </span>
     <ObjectContext visual={visuals.get(relatedId)} />
@@ -1001,7 +1001,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
       <div className="detail-form">
         <InlineEditor label="Task title" value={task.title} required maxLength={300} className="detail-title-editor" heading onSave={(value) => saveText("title", value)} onReload={load} />
         <section className="properties-block" aria-label="Task properties">
-          <div className="properties-grid task-workflow-properties">
+          <div className="task-workflow-properties">
             <Field label="Status"><select aria-label="Task status" value={task.status} onChange={(event) => void saveProperty({ status: event.target.value })}>{taskStatuses.map((status) => <option key={status} value={status}>{status === "todo" ? "Ready" : status === "doing" ? "In progress" : status.charAt(0).toUpperCase() + status.slice(1)}</option>)}</select></Field>
             <Property label="Assigned to"><select aria-label="Assigned to" value={task.owner_object_id ?? ""} onChange={(e) => void saveProperty({ owner_object_id: e.target.value })}><option value="" disabled>Select a user</option>{task.owner_object_id && !objects.some(o => o.id === task.owner_object_id && o.kind === "user" && o.lifecycle === "active") && <option value={task.owner_object_id} disabled>{task.owner_object_id} (unavailable)</option>}{objects.filter((o) => o.kind === "user" && o.lifecycle === "active").map((u) => <option key={u.id} value={u.id}>{u.title}</option>)}</select></Property>
             <Property label="Due"><input key={task.due_at ?? "unset"} aria-label="Due" type="datetime-local" defaultValue={localDateTime(task.due_at)} onBlur={(e) => { if (e.target.value && localDateTime(task.due_at) !== e.target.value) void saveProperty({ due_at: new Date(e.target.value).toISOString() }); }} /></Property>

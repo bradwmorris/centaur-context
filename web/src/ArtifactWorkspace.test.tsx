@@ -115,6 +115,7 @@ describe("artifact reader", () => {
     rerender(<Artifacts section="sources" objectId={objectId} artifacts={[unavailable]} />);
     expect(screen.getByRole("link", { name: /unavailable/ })).toHaveAttribute("href", `/sources/${objectId}/artifacts/unavailable`);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /unavailable/ }).querySelector(".artifact-open-icon")).toHaveAttribute("aria-hidden", "true");
   });
 
   it("loads a long Unicode document before editing and saves its complete tail", async () => {
