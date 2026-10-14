@@ -143,6 +143,13 @@ async fn cutover_zero_output_new_memory_causal_invalidation_and_authority() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+    // Another saved plan for the identical Event version cannot create a duplicate.
+    let competing = run(&pool, &batch).await;
+    assert!(
+        em::apply_memories(&pool, competing, &batch, &plan, false)
+            .await
+            .is_err()
+    );
     assert!(
         em::synthesis_batch(&pool, false)
             .await
@@ -191,7 +198,7 @@ async fn message(pool: &PgPool, chat: Uuid, user: Uuid, content: &str) -> Uuid {
     id
 }
 async fn conversation_evidence(pool: &PgPool, chat: Uuid) -> Vec<Value> {
-    sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.chat_object_id=$1 ORDER BY m.ingestion_sequence").bind(chat).fetch_all(pool).await.unwrap()
+    sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.chat_object_id=$1 ORDER BY m.ingestion_sequence").bind(chat).fetch_all(pool).await.unwrap()
 }
 async fn capture_run(pool: &PgPool) -> Uuid {
     let id = Uuid::new_v4();

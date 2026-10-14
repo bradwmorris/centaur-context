@@ -570,6 +570,17 @@ async fn apply_plan_mode(
     if status.as_deref() != Some("running") && !(preview && status.as_deref() == Some("preview")) {
         return Err(invalid("dream run is not running"));
     }
+    // Old saved plans cannot reopen the legacy writer after cutover.
+    sqlx::query("SELECT pg_advisory_xact_lock(7818003)")
+        .execute(&mut *tx)
+        .await?;
+    let events_first: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='event_memory_cutover' AND idempotency_key='event-memory-v1' AND status='completed')")
+        .fetch_one(&mut *tx).await?;
+    if events_first {
+        return Err(invalid(
+            "legacy Memory plans are disabled after Events-first cutover",
+        ));
+    }
     // Lock and revalidate the full input in stable order before any mutation.
     let mut ids = batch
         .memories
