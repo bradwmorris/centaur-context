@@ -347,9 +347,9 @@ it.each(["/objects/entity-example", "/entities/entity-example", "/entities"])("r
   await screen.findByText(object.title);
   expect(screen.queryByText("Manage category definitions")).toBeNull();
   if (path !== "/entities") {
-    const classifications = await screen.findByRole("region", { name: "Classifications" });
+    const classifications = await screen.findByRole("group", { name: "Entity kind" });
     expect(await within(classifications).findByText("Organization")).toBeVisible();
-    expect(within(classifications).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(classifications).queryByRole("listitem")).toBeNull();
     expect(within(classifications).queryByRole("button")).toBeNull();
     expect(screen.queryByText("Save properties")).toBeNull();
   } else {

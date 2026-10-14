@@ -39,7 +39,6 @@ describe("complete Object detail routing", () => {
   it("opens a Task from a focused graph and retains workflow fields", async () => {
     window.history.replaceState({}, "", "/notes/synthetic-note");
     render(<App />);
-    fireEvent.click(await screen.findByText("Connection map", { selector: "summary" }));
     fireEvent.click(await screen.findByRole("link", { name: /Synthetic task, task Object/ }));
     expect(await screen.findByRole("combobox", { name: "Task status" })).toHaveValue("todo");
     expect(screen.getByRole("button", { name: "Edit Task brief" })).toHaveTextContent("Prepare the synthetic review.");
@@ -68,12 +67,12 @@ describe("complete Object detail routing", () => {
     fireEvent.click(screen.getByRole("link", { name: "← Back to Object" }));
     expect(await screen.findByText(fixture.subtypes.note.content)).toBeVisible();
   });
-  it("exposes existing Entity kind and image without introducing editing", async () => {
+  it("shows one Entity kind label without extra details or editing", async () => {
     window.history.replaceState({}, "", "/objects/synthetic-entity");
     render(<App />);
-    fireEvent.click(await screen.findByText("Entity details"));
-    expect(await screen.findByText("Kind: organization")).toBeVisible();
-    expect(screen.getByAltText("Entity image")).toHaveAttribute("src", fixture.subtypes.entity.image_url);
+    expect(await screen.findByText("Organization")).toBeVisible();
+    expect(screen.queryByText("Entity details")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Classifications" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save properties" })).not.toBeInTheDocument();
   });
   it("keeps an unknown future kind on a safe generic page", async () => {

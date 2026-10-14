@@ -19,7 +19,6 @@ import { detailPath, interceptNavigation, isObjectDetailSection, navigate, parse
 import type { Section } from "./routing";
 import type { Artifact, ChatMessage, Connection, ConnectionGraphSnapshot, ExternalIdentity, Note, NoteSummary, ObjectEvent, ObjectKind, ObjectVisual, Run, RunDetail, RunObject, RunVerdict, SharedObject, Source, SourceKind, Task, TaskStatus, Theme, User } from "./types";
 
-const connectionKinds = ["involves", "about", "related_to", "depends_on", "derived_from", "themed"];
 const taskStatuses: TaskStatus[] = ["backlog", "todo", "doing", "review", "done", "blocked"];
 const sectionLabels: Record<Section, string> = { objects: "Objects", connections: "Connections", tasks: "Tasks", chats: "Chats", users: "Users", entities: "Entities", events: "Events", memories: "Memories", sources: "Sources", notes: "Notes", themes: "Themes", runs: "Runs", evals: "Evals", schema: "Schema" };
 const sectionSingular = { objects: "object", tasks: "task", chats: "chat", entities: "entity", events: "event", memories: "memory", sources: "source", notes: "note", themes: "theme" } as const;
@@ -511,7 +510,7 @@ function ThemeDetail({ id, objects, visuals, refreshKey, onChanged }: { id: stri
     <section className="properties-block" aria-label="Theme properties"><h2>Properties</h2><div className="properties-grid"><Property label="Object ID"><ObjectId id={theme.object_id} label={false} navigate /></Property><Property label="Slug"><code>{theme.slug}</code></Property><Property label="Assigned Objects">{assigned.length}</Property><Property label="Protected">{theme.protected ? "Yes" : "No"}</Property><Property label="Updated">{relative(theme.updated_at)}</Property></div></section>
     <InlineEditor label="Theme description" value={theme.description} multiline required maxLength={600} className="detail-body-editor" onSave={(value) => saveObjectField("description", value)} onReload={load} />
     <Section title="Themed Objects"><div className="connections themed-object-list">{assigned.map((item) => <article className="connection themed-object-row" key={item.id}><ObjectId id={item.id} linkPill /><ObjectTypeBadge kind={item.kind} /><strong className="themed-object-title" title={item.title}>{item.title}</strong><ObjectContext visual={visuals.get(item.id)} /></article>)}{assigned.length === 0 && <p className="muted">No Objects use this Theme yet.</p>}</div></Section>
-    <Connections object={themeObject} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+    <Connections object={themeObject} objects={objects} visuals={visuals} connections={connections} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
     {themeObject && <Provenance value={themeObject.provenance} />}
   </div></div>;
@@ -716,7 +715,7 @@ function SourceDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
     </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts section="sources" objectId={id} artifacts={artifacts} />
-    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
       <Provenance value={source.provenance} />
   </div></div>;
@@ -784,7 +783,7 @@ function NoteDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
     </div>
     {error && <p className="form-error">{error}</p>}
     <Artifacts section="notes" objectId={id} artifacts={artifacts} />
-    <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+    <Connections object={object} objects={objects} visuals={visuals} connections={connections} refreshKey={refreshKey} />
     <ActivityTimeline events={events} visuals={visuals} />
       <Provenance value={note.provenance} />
   </div></div>;
@@ -840,7 +839,7 @@ function ObjectDetail({ id, objects, visuals, onChanged, refreshKey }: { id: str
       {item.kind === "memory" && <MemoryDetails key={`${item.id}:${item.revision}`} id={item.id} />}
       {item.kind === "user" && <UserIdentityPanel id={item.id} visual={visuals.get(item.id)} refreshKey={refreshKey} />}
       {item.kind === "chat" && <ChatTranscript id={item.id} visuals={visuals} refreshKey={refreshKey} />}
-      <Connections object={item} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+      <Connections object={item} objects={objects} visuals={visuals} connections={connections} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} includeThread />
       <Provenance value={item.provenance} />
     </div>
@@ -907,21 +906,12 @@ function ActivityTimeline({ events, visuals }: { events: ObjectEvent[]; visuals:
   return <Section title="Activity"><div className="timeline">{events.map((event) => <div className="event" key={event.id}><span className="event-dot" /><strong>{event.action.replaceAll("_", " ")}</strong><span className="event-actor">{event.actor_type}:{event.actor_id}</span>{event.target_type === "object" ? <><ObjectId id={event.target_id} linkPill /><ObjectContext visual={visuals.get(event.target_id)} /></> : <ConnectionId id={event.target_id} label={false} compact />}<time>{relative(event.created_at)}</time></div>)}</div></Section>;
 }
 
-function Connections({ object, objects, visuals, connections, onCreated, refreshKey }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; onCreated: () => Promise<void>; refreshKey: number }) {
-  const [graphOpen, setGraphOpen] = useState(false);
-  const [open, setOpen] = useState(false); const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget);
-    try { await api.createConnection({ source_object_id: object.id, kind: String(data.get("kind")), target_object_id: String(data.get("target")), description: String(data.get("description")), protected: data.get("protected") === "on", provenance: { source_type: "human" } }); setOpen(false); await onCreated(); }
-    catch (cause) { setError(message(cause)); }
-  };
+function Connections({ object, objects, visuals, connections, refreshKey }: { object: SharedObject; objects: SharedObject[]; visuals: Map<string, ObjectVisual>; connections: Connection[]; refreshKey: number }) {
   return <>
     <Section title="Related Objects">
       <div className="connections related-object-list">{connections.map((connection) => <RelatedObjectRow currentObjectId={object.id} connection={connection} objects={objects} visuals={visuals} key={connection.id} />)}{connections.length === 0 && <p className="muted">No related Objects.</p>}</div>
-      <details className="connection-editor" open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>Connect an Object</summary>
-      {open && <form className="connection-form" onSubmit={submit}><select name="kind" aria-label="Connection kind">{connectionKinds.map((kind) => <option key={kind}>{kind}</option>)}</select><select name="target" aria-label="Target Object" required defaultValue=""><option value="" disabled>Target record</option>{objects.filter((item) => item.id !== object.id && item.kind !== "task").map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select><input name="description" aria-label="Connection explanation" required placeholder="Explain the exact relationship…" /><label className="property-check"><input type="checkbox" name="protected" /> Protect from curator changes</label><button type="button" className="text-button" onClick={() => setOpen(false)}>Cancel</button><button className="secondary">Add</button>{error && <p className="form-error">{error}</p>}</form>}
-      </details>
     </Section>
-    {connections.length > 0 && <details className="detail-disclosure" open={graphOpen} onToggle={event => setGraphOpen(event.currentTarget.open)}><summary>Connection map</summary>{graphOpen && <FocusedObjectGraph objectId={object.id} objectTitle={object.title} refreshKey={refreshKey} showHeading={false} />}</details>}
+    <FocusedObjectGraph objectId={object.id} objectTitle={object.title} refreshKey={refreshKey} />
   </>;
 }
 
@@ -1031,7 +1021,7 @@ function TaskDetail({ id, objects, visuals, onChanged, refreshKey }: { id: strin
 
       </div>
       {error && <p className="form-error">{error}</p>}
-      <Connections object={object} objects={objects} visuals={visuals} connections={connections} onCreated={load} refreshKey={refreshKey} />
+      <Connections object={object} objects={objects} visuals={visuals} connections={connections} refreshKey={refreshKey} />
       <ActivityTimeline events={events} visuals={visuals} />
       <Provenance value={task.provenance} />
     </div>

@@ -347,11 +347,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .detail-section h3 { margin: 0; font-size: 13px; font-weight: 560; }
 .text-button { min-height: 30px; border: 0; background: transparent; color: #afb1b9; cursor: pointer; font-size: 12px; }
 .text-button:hover { color: white; }
-.connection-form { display: grid; grid-template-columns: 130px 1fr; gap: 8px; margin-bottom: 14px; }
-.connection-form input { grid-column: 1 / -1; }
-.connection-form button { justify-self: start; }
-.connection-form .property-check { grid-column: 1 / -1; }
-.connection-form .form-error { grid-column: 1 / -1; }
 .connections { border-bottom: 1px solid rgba(255,255,255,.035); }
 .connection { border: 0; border-top: 1px solid rgba(255,255,255,.035); background: transparent; padding: 8px 0; margin: 0; }
 .themed-object-row { min-width: 0; min-height: 42px; display: grid; grid-template-columns: max-content max-content minmax(0, 1fr) max-content; align-items: center; gap: 7px; padding: 7px 0; overflow: hidden; }
@@ -423,8 +418,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .chat-message > time { flex: 0 0 auto; color: var(--text-subtle); font-size: 10px; white-space: nowrap; }
 .field { display: grid; gap: 6px; }
 .field > span { color: var(--text-subtle); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-.form input, .form textarea, .form select, .connection-form input, .connection-form select { background: #17181b; color: #e5e5e7; border: 1px solid #3b3d44; border-radius: 6px; padding: 10px 11px; outline: 0; }
-.form input:focus, .form textarea:focus, .form select:focus, .connection-form input:focus, .connection-form select:focus { background: #1b1c1f; border-color: #717580; box-shadow: 0 0 0 3px rgba(174,180,198,.08); }
+.form input, .form textarea, .form select { background: #17181b; color: #e5e5e7; border: 1px solid #3b3d44; border-radius: 6px; padding: 10px 11px; outline: 0; }
+.form input:focus, .form textarea:focus, .form select:focus { background: #1b1c1f; border-color: #717580; box-shadow: 0 0 0 3px rgba(174,180,198,.08); }
 .source-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
 .source-fields input, .source-fields select, .source-properties-grid input, .source-properties-grid select { width: 100%; border: 1px solid #3d3f47; border-radius: 6px; outline: 0; background: #141517; color: #d9dade; padding: 9px 10px; }
 .source-fields input:focus, .source-fields select:focus, .source-properties-grid input:focus, .source-properties-grid select:focus { border-color: #737783; }
@@ -816,10 +811,8 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
 .note-content-editor { min-height: 0; }
 .note-content-editor .inline-editor-view { min-height: 0; padding: 0; border: 0; background: transparent; font-family: inherit; }
 .detail-disclosure { margin: 14px 0; color: var(--text-subtle); font-size: 12px; }
-.detail-disclosure > summary, .connection-editor > summary { width: fit-content; min-height: 28px; cursor: pointer; }
-.detail-disclosure > summary:focus-visible, .connection-editor > summary:focus-visible { outline: 2px solid var(--focus, #8d91a0); outline-offset: 3px; }
-.connection-editor { margin-top: 8px; color: var(--text-subtle); font-size: 11px; }
-.detail-disclosure .focused-object-graph-section { margin: 0; padding-top: 4px; border: 0; }
+.detail-disclosure > summary { width: fit-content; min-height: 28px; cursor: pointer; }
+.detail-disclosure > summary:focus-visible { outline: 2px solid var(--focus, #8d91a0); outline-offset: 3px; }
 .task-detail .record-primary { padding-top: 30px; }
 .task-detail .detail-title-editor { font-size: 28px; margin-bottom: 22px; }
 /* Task properties remain a single vertical stack at every viewport width. */
