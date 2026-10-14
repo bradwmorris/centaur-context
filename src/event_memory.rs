@@ -936,7 +936,7 @@ pub async fn synthesis_pass(
     let result=async {
         let supplied_events: HashSet<String> = batch.events.iter().filter_map(|e| e["id"].as_str().map(ToOwned::to_owned)).collect();
         let supporting: HashSet<String> = batch.memories.iter().flat_map(|m| m["supporting_event_ids"].as_array().into_iter().flatten()).filter_map(|id| id.as_str().map(ToOwned::to_owned)).collect();
-        if !supporting.is_subset(&supplied_events) { return Err(invalid("required prior Memory evidence exceeds bounded context; deferred")); }
+        if batch.memories.iter().any(|m| m["supporting_event_ids"].as_array().is_some_and(|ids| ids.len() > 100)) || !supporting.is_subset(&supplied_events) { return Err(invalid("required prior Memory evidence exceeds bounded context; deferred")); }
         let expected:HashSet<String>=batch.events.iter().flat_map(|e|e["provenance"]["evidence_ids"].as_array().into_iter().flatten()).filter_map(|v|v.as_str().map(ToOwned::to_owned)).collect();
         let present:HashSet<String>=batch.evidence.evidence.iter().filter_map(|e|e["id"].as_str().map(ToOwned::to_owned)).collect();
         if !expected.is_subset(&present){return Err(invalid("required original evidence missing; deferred"));}
