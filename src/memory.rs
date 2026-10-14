@@ -18,6 +18,9 @@ pub async fn capture_outcomes(pool: &PgPool) -> Result<usize, db::DbError> {
     if !claimed {
         return Ok(0);
     }
+    if crate::event_memory::active(pool).await? {
+        return Ok(0);
+    }
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,result,completed_at) VALUES($1,'memory_capture_start','completed','system',$2,'start','{}',now()) ON CONFLICT(kind,idempotency_key) DO NOTHING")
         .bind(Uuid::new_v4()).bind(CAPTURE_ACTOR).execute(&mut *tx).await?;
     let events: Vec<Value> = sqlx::query_scalar(
@@ -237,7 +240,11 @@ pub(crate) async fn journal(
     Ok(())
 }
 
-pub async fn run_capture_worker(pool: PgPool, enabled: bool) {
+pub async fn run_capture_worker(
+    pool: PgPool,
+    enabled: bool,
+    config: Option<crate::config::CuratorModelConfig>,
+) {
     if !enabled {
         std::future::pending::<()>().await;
     }
@@ -245,6 +252,18 @@ pub async fn run_capture_worker(pool: PgPool, enabled: bool) {
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         timer.tick().await;
+        if crate::event_memory::active(&pool).await.unwrap_or(false) {
+            if let Some(config) = &config {
+                let client = reqwest::Client::builder()
+                    .timeout(config.request_timeout)
+                    .build()
+                    .expect("capture client");
+                if let Err(error) = crate::event_memory::action_pass(&pool, &client, config).await {
+                    tracing::warn!(%error,"Event action capture failed");
+                }
+            }
+            continue;
+        }
         if let Err(error) = capture_outcomes(&pool).await {
             tracing::warn!(%error,"memory outcome capture failed; retrying next tick");
         }

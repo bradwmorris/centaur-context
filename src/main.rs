@@ -48,6 +48,13 @@ async fn main() -> Result<()> {
         );
         return Ok(());
     }
+    // Complete the durable cutover before any listener or legacy worker can run.
+    // A failed activation stops startup rather than leaving old writers enabled.
+    if std::env::var("EVENTS_FIRST_ENABLED").as_deref() == Ok("true") {
+        centaur_context::event_memory::activate(&pool)
+            .await
+            .context("activate Events-first capture")?;
+    }
     if workers_disabled {
         info!("maintenance mode: all background writers disabled; authentication unchanged");
     }
@@ -345,6 +352,7 @@ async fn main() -> Result<()> {
     let memory_capture_worker = centaur_context::memory::run_capture_worker(
         state.pool.clone(),
         config.memory_capture_enabled,
+        config.curator_model.clone(),
     );
 
     tokio::select! {

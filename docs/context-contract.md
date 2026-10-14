@@ -146,3 +146,24 @@ the collection interval because concurrent writes can change the live inventory.
 ## Events and Entity classifications (contract 1.2.0, schema 38)
 
 See the embedded `ontology_guide` and [Events/classification RD](../dev/rd/events-classifications.md) for exact fields, definitions and examples. `real_world_events` is a matching Object subtype; `object_events` remains immutable change history. Calendar timing preserves precision and supplied offsets. Entity categories are supporting catalogue metadata, with multiple assignments and one primary determining legacy `entity_kind`. Initial backfill preserves all existing classifications and Object revisions. Catalogue mutations use the three universal tools and attributed Run snapshots; vocabulary changes require explicit user instruction. Empty-ID reads require `include:["entity_categories"]`. `entity_filters` accepts category UUIDs with `match:any|all`; results use ascending UUID order and an exclusive UUID cursor, active Entities only. Text remains title/description discovery. Legacy 1.1.0 writes remain accepted with conflict protection for richer classifications.
+
+## Events-first cutover
+
+When activated, coherent Events capture conversations and verified actions; a single
+synthesis worker creates/refines selective Memories. `provenance.evidence_ids`
+contains actual supporting Chat message or immutable Object Event IDs. Match an
+existing occurrence before creation; do not create one record per message or Note.
+An explicit request to remember saves its Event immediately. Report separately
+whether synthesis saved a Memory. Ordinary agent Memory creation/text edits are
+rejected after cutover. Reviewed maintenance and human corrections remain available.
+A synthesized Memory has `derived_from` links to Events and null `happened_at` when
+there is no single truthful occurrence time. Existing times and evidence survive.
+`GET /api/v2/capture-status` exposes captured/reviewed/pending/deferred/failed
+coverage, zero-output decisions, recent Runs and saved preview hashes.
+
+Activation uses `EVENTS_FIRST_ENABLED=true` with `MEMORY_DREAM_MODE=preview` after
+the compatible broker release. The durable cutover marker fences old writers even
+if that activation flag is subsequently removed. Pause curation/capture and set
+Memory mode off for rollback; never roll back to a pre-cutover binary that ignores
+the marker. Review exact saved proposals through the existing maintenance Memory
+review endpoint before switching to apply. No historical sweep is performed.

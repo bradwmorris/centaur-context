@@ -570,6 +570,17 @@ async fn apply_plan_mode(
     if status.as_deref() != Some("running") && !(preview && status.as_deref() == Some("preview")) {
         return Err(invalid("dream run is not running"));
     }
+    // Old saved plans cannot reopen the legacy writer after cutover.
+    sqlx::query("SELECT pg_advisory_xact_lock(7818003)")
+        .execute(&mut *tx)
+        .await?;
+    let events_first: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='event_memory_cutover' AND idempotency_key='event-memory-v1' AND status='completed')")
+        .fetch_one(&mut *tx).await?;
+    if events_first {
+        return Err(invalid(
+            "legacy Memory plans are disabled after Events-first cutover",
+        ));
+    }
     // Lock and revalidate the full input in stable order before any mutation.
     let mut ids = batch
         .memories
@@ -1227,7 +1238,7 @@ pub async fn run_worker(
                         Err(error) => { tracing::warn!(%error,"Memory review scan failed"); break; }
                     }
                 }
-                let retry: Option<f64> = sqlx::query_scalar("SELECT extract(epoch FROM min((result->>'retry_at')::timestamptz)-now())::float8 FROM runs WHERE kind='memory_dream' AND status='failed' AND result->>'policy_version'=$1 AND result->>'retryable'='true' AND (result->>'retry_at')::timestamptz > now() AND input->'preview'=$2")
+                let retry: Option<f64> = sqlx::query_scalar("SELECT extract(epoch FROM min((result->>'retry_at')::timestamptz)-now())::float8 FROM runs WHERE kind IN ('memory_dream','memory_synthesis') AND status='failed' AND result->>'policy_version' IN ($1,'event-memory-v1') AND result->>'retryable'='true' AND (result->>'retry_at')::timestamptz > now() AND input->'preview'=$2")
                     .bind(POLICY_VERSION).bind(json!(mode == "preview")).fetch_one(&pool).await?;
                 if let Some(delay) = retry {
                     tokio::select! {
@@ -1255,6 +1266,9 @@ pub async fn pass(
     config: &CuratorModelConfig,
     preview: bool,
 ) -> Result<Option<Uuid>, db::DbError> {
+    if crate::event_memory::active(pool).await? {
+        return crate::event_memory::synthesis_pass(pool, client, config, preview).await;
+    }
     // A transaction-scoped lease is released even on process loss; no stale
     // running flag can block future wakes. No Object locks during inference.
     let mut config = config.clone();
@@ -1265,6 +1279,9 @@ pub async fn pass(
         .fetch_one(&mut *lease)
         .await?;
     if !claimed {
+        return Ok(None);
+    }
+    if crate::event_memory::active(pool).await? {
         return Ok(None);
     }
     // Owning the only worker lease proves any prior running attempt was
@@ -1459,7 +1476,7 @@ pub async fn pass(
 /// Any subsequent user/worker revision makes the whole undo fail atomically.
 pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
     let mut tx = pool.begin().await?;
-    let status:Option<String>=sqlx::query_scalar("SELECT status FROM runs WHERE id=$1 AND kind IN ('memory_dream','memory_capture') FOR UPDATE").bind(run).fetch_optional(&mut *tx).await?;
+    let status:Option<String>=sqlx::query_scalar("SELECT status FROM runs WHERE id=$1 AND (kind IN ('memory_dream','memory_capture','memory_synthesis','event_capture') OR (kind='curator' AND result->>'policy_version'='event-memory-v1')) FOR UPDATE").bind(run).fetch_optional(&mut *tx).await?;
     if status.as_deref() == Some("reversed") {
         return Ok(json!({"run_id":run,"status":"reversed"}));
     }
@@ -1488,7 +1505,7 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
         }
         let before = &change["before_state"];
         if kind == "object" {
-            if current["kind"] != "memory" {
+            if current["kind"] != "memory" && current["kind"] != "event" {
                 return Err(invalid("undo cannot alter non-Memory Objects"));
             }
             if before.is_null() {
@@ -1502,6 +1519,17 @@ pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
             } else {
                 sqlx::query("UPDATE objects SET title=$2,description=$3,provenance=$4,archived_at=$5::text::timestamptz,revision=revision+1,updated_by_type='system',updated_by_id=$6,updated_at=now() WHERE id=$1 AND revision=$7")
                     .bind(id).bind(before["title"].as_str()).bind(before["description"].as_str()).bind(&before["provenance"]).bind(before["archived_at"].as_str()).bind(ACTOR).bind(current["revision"].as_i64()).execute(&mut *tx).await?;
+            }
+            if current["kind"] == "event" && !before.is_null() {
+                crate::universal::update_subtype(
+                    &mut tx,
+                    id,
+                    "event",
+                    before["subtype"]
+                        .as_object()
+                        .ok_or_else(|| invalid("missing Event recovery subtype"))?,
+                )
+                .await?;
             }
         } else if kind == "connection" {
             if !before.is_null() && before["archived_at"].is_null() {

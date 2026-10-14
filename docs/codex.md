@@ -1,7 +1,8 @@
 # Codex desktop and Context
 
 The opt-in local bridge stores new visible Codex conversation text as canonical
-Chats and sends bounded windows to the existing Memory-only curator. It also
+Chats and sends bounded windows to the curator. After Events-first cutover, it captures
+coherent Events and selectively synthesizes evolving Memories. It also
 exposes exactly `context_search`, `context_read`, and `context_apply` through MCP.
 Agent execution continues in Codex. The automatic path does not create ordinary
 Tasks, Notes, Entities, Sources or Themes.
@@ -47,7 +48,7 @@ Memory dreaming and generic event capture keep their own independent controls.
 A deployment without curation remains Chat-only and reports that explicitly.
 
 The capture credential can call only capture; the tool credential can call only
-session status and the three universal operations plus their contract. The server
+session status, read-only capture coverage, and the three universal operations plus their contract. The server
 derives actor and thread identity from host configuration, session UUID and the
 allowlisted repository. It verifies replay bodies and immutable message content.
 The configured human remains the human speaker; the Codex agent is separately

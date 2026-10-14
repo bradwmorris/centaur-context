@@ -176,6 +176,30 @@ async fn memory_review(
     Extension(actor): Extension<ActorContext>,
     Json(request): Json<MemoryReviewRequest>,
 ) -> Result<Json<Value>, IntakeError> {
+    let synthesis: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND kind='memory_synthesis')",
+    )
+    .bind(request.preview_run_id)
+    .fetch_one(&state.app.pool)
+    .await?;
+    if synthesis {
+        let (batch, plan, hash) =
+            crate::event_memory::saved_preview(&state.app.pool, request.preview_run_id).await?;
+        if !request.validate_only && !state.config.approved_request_hashes.contains(&hash) {
+            return Err(IntakeError::Forbidden(
+                "exact saved synthesis preview has not been approved".into(),
+            ));
+        }
+        let result = crate::event_memory::apply_memories(
+            &state.app.pool,
+            request.preview_run_id,
+            &batch,
+            &plan,
+            request.validate_only,
+        )
+        .await?;
+        return Ok(Json(json!({"data":result,"approval_sha256":hash})));
+    }
     let (_, _, hash) =
         crate::dreaming::saved_preview(&state.app.pool, request.preview_run_id).await?;
     if !request.validate_only && !state.config.approved_request_hashes.contains(&hash) {

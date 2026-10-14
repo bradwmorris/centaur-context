@@ -293,7 +293,7 @@ pub async fn create_object(
     match input.kind.as_str() {
         "chat" if input.entity_kind.is_none() && input.happened_at.is_none() => {}
         "entity" if input.entity_kind.is_some() && input.happened_at.is_none() => {}
-        "memory" if input.entity_kind.is_none() && input.happened_at.is_some() => {}
+        "memory" if input.entity_kind.is_none() => {}
         "chat" | "entity" | "memory" => {
             return Err(DbError::Invalid(
                 "typed Object creation fields do not match its kind".into(),
@@ -361,7 +361,7 @@ async fn insert_object_subtype(
         "memory" => {
             sqlx::query("INSERT INTO memories (object_id,happened_at) VALUES ($1,$2)")
                 .bind(object_id)
-                .bind(input.happened_at.expect("validated Memory time"))
+                .bind(input.happened_at)
                 .execute(&mut **tx)
                 .await?;
         }

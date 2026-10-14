@@ -804,6 +804,10 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
   #workspace-toolbar-slot .connection-graph-toolbar > div:first-child { display: none; }
   #workspace-toolbar-slot { flex-shrink: 0; min-width: 210px; }
 }
+
+.capture-coverage { padding: 16px 20px; margin-bottom: 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.capture-coverage p { margin: 6px 0; }
+.capture-coverage small { color: var(--text-muted); }
 /* Focused graph destinations retain native link and keyboard behavior. */
 .connection-graph-nodes > a .node-label { pointer-events: auto; }
 .connection-graph-nodes > a:focus-visible .node-hit-area { stroke: var(--focus); stroke-width: 2; }

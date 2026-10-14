@@ -28,4 +28,5 @@ pub mod source_previews;
 
 pub mod entity_categories;
 pub mod entity_classification;
+pub mod event_memory;
 pub mod event_time;

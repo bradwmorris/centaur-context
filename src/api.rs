@@ -161,6 +161,7 @@ pub fn agent_router(state: AppState, token: String) -> Router {
                     post(create_visual).layer(DefaultBodyLimit::max(21 * 1024 * 1024)),
                 )
                 .route("/embeddings/status", get(read_embedding_status))
+                .route("/capture-status", get(crate::event_memory::status_route))
                 .route("/sources", get(list_sources))
                 .route("/search/sources", get(search_sources))
                 .route("/sources/{id}", get(read_source))
@@ -220,6 +221,7 @@ fn service_router(state: AppState) -> Router {
                 .route("/read", post(universal_read))
                 .route("/apply", post(universal_apply))
                 .route("/embeddings/status", get(read_embedding_status))
+                .route("/capture-status", get(crate::event_memory::status_route))
                 .route("/objects", get(list_objects).post(create_object))
                 .route("/object-visuals", get(list_object_visuals))
                 .route("/objects/{id}", get(read_object).patch(update_object))
@@ -2112,7 +2114,7 @@ async fn create_object(
         })
         .transpose()?;
     let happened_at = parse_optional_timestamp(input.happened_at, "happened_at")?;
-    if (kind == "entity") != entity_kind.is_some() || (kind == "memory") != happened_at.is_some() {
+    if (kind == "entity") != entity_kind.is_some() || (kind != "memory" && happened_at.is_some()) {
         return Err(ApiError::BadRequest(
             "entity_kind is required only for Entities and happened_at only for Memories".into(),
         ));
@@ -2632,7 +2634,13 @@ async fn undo_curator_run(
         .fetch_optional(&state.pool)
         .await
         .map_err(db::DbError::from)?;
-    if matches!(kind.as_deref(), Some("memory_dream" | "memory_capture")) {
+    let event_curator:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND kind='curator' AND result->>'policy_version'='event-memory-v1')").bind(id).fetch_one(&state.pool).await.map_err(db::DbError::from)?;
+    if event_curator
+        || matches!(
+            kind.as_deref(),
+            Some("memory_dream" | "memory_capture" | "memory_synthesis" | "event_capture")
+        )
+    {
         return Ok(Json(
             json!({"data":crate::dreaming::undo(&state.pool,id).await?}),
         ));

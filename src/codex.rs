@@ -47,6 +47,10 @@ pub fn router(state: AppState, config: CodexConfig) -> Router {
         .route("/api/v2/codex/session", get(session_status))
         .route("/api/v2/contract", get(api::read_contract))
         .route(
+            "/api/v2/capture-status",
+            get(crate::event_memory::status_route),
+        )
+        .route(
             "/api/v2/audit/objects",
             get(crate::maintenance::audit_objects),
         )
