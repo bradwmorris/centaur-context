@@ -353,6 +353,44 @@ async fn coherent_capture_overlap_and_unrelated_chat_growth() {
             .await
             .unwrap();
     assert!(archived);
+    let shared = message(
+        &pool,
+        chat,
+        user,
+        "I met Sam yesterday and booked a separate appointment for Friday.",
+    )
+    .await;
+    let evidence = conversation_evidence(&pool, chat)
+        .await
+        .into_iter()
+        .filter(|e| e["id"] == shared.to_string())
+        .collect();
+    let shared_batch = em::EvidenceBatch {
+        evidence,
+        candidates: vec![],
+    };
+    let mut meeting = plan.events[0].clone();
+    meeting.title = "Meeting with Sam".into();
+    meeting.description = "Alex reported meeting Sam yesterday.".into();
+    meeting.evidence_ids = vec![shared];
+    let mut booking = meeting.clone();
+    booking.title = "Appointment booking".into();
+    booking.description = "Alex booked a separate appointment for Friday.".into();
+    let multiple = em::EventPlan {
+        events: vec![meeting, booking],
+    };
+    let shared_run = capture_run(&pool).await;
+    let mut agent_only = shared_batch.clone();
+    agent_only.evidence[0]["sender_kind"] = json!("agent");
+    assert!(
+        em::apply_events(&pool, shared_run, &agent_only, &multiple, None)
+            .await
+            .is_err()
+    );
+    let result = em::apply_events(&pool, shared_run, &shared_batch, &multiple, None)
+        .await
+        .unwrap();
+    assert_eq!(result["captured_event_ids"].as_array().unwrap().len(), 2);
     pool.close().await;
 }
 
@@ -436,5 +474,66 @@ async fn concurrent_saved_and_worker_plans_cannot_duplicate_a_memory() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn action_cutover_preserves_pending_scope_without_backfilling_old_updates() {
+    let Some(pool) = pool().await else { return };
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,created_at) VALUES($1,'memory_capture_start','completed','system','test','start',now()-interval '1 hour')")
+        .bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+    let mut late = pool.begin().await.unwrap();
+    for (kind, action, after_cutover) in [
+        ("note", "updated", false),
+        ("task", "created", false),
+        ("note", "updated", true),
+    ] {
+        let run_id = Uuid::new_v4();
+        let sql = "INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'mutation','completed','system','test',$2)";
+        let evidence_sql = "INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state) VALUES($1,$2,1,'object',$3,$4,'system','test',1,$5)";
+        if after_cutover {
+            sqlx::query(sql)
+                .bind(run_id)
+                .bind(run_id.to_string())
+                .execute(&mut *late)
+                .await
+                .unwrap();
+            sqlx::query(evidence_sql)
+                .bind(Uuid::new_v4())
+                .bind(run_id)
+                .bind(Uuid::new_v4())
+                .bind(action)
+                .bind(json!({"kind":kind}))
+                .execute(&mut *late)
+                .await
+                .unwrap();
+        } else {
+            sqlx::query(sql)
+                .bind(run_id)
+                .bind(run_id.to_string())
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query(evidence_sql)
+                .bind(Uuid::new_v4())
+                .bind(run_id)
+                .bind(Uuid::new_v4())
+                .bind(action)
+                .bind(json!({"kind":kind}))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+    em::activate(&pool).await.unwrap();
+    assert_eq!(
+        em::status(&pool).await.unwrap()["pending_action_evidence"],
+        1
+    );
+    late.commit().await.unwrap();
+    assert_eq!(
+        em::status(&pool).await.unwrap()["pending_action_evidence"],
+        2
+    );
     pool.close().await;
 }
