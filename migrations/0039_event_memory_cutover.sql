@@ -12,7 +12,10 @@ CREATE FUNCTION event_memory_fingerprint(event_id uuid) RETURNS text LANGUAGE sq
      FROM evidence_corrections e
      WHERE e.object_id=event_id OR e.target_id::text IN (
        SELECT jsonb_array_elements_text(COALESCE(o.provenance->'evidence_ids','[]'::jsonb)) FROM objects o WHERE o.id=event_id
-     )
+     ) OR (e.target_type='object' AND e.target_id IN (
+       SELECT m.chat_object_id FROM chat_messages m JOIN objects o ON o.id=event_id
+       WHERE o.provenance->'evidence_ids' ? m.id::text
+     ))
    ),'[]'::jsonb),
    'supporting_objects', COALESCE((
      SELECT jsonb_agg(jsonb_build_array(o.id,o.revision,o.archived_at) ORDER BY o.id)

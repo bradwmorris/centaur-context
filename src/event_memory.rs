@@ -373,7 +373,7 @@ async fn validate_evidence(
     for evidence in &batch.evidence {
         let id = value_id(evidence)?;
         let actual: Value = if evidence["type"] == "message" {
-            sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.id=$1 FOR SHARE")
+            sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='message' AND c.target_id=m.id) OR (c.target_type='object' AND c.target_id=m.chat_object_id)),'[]'::jsonb)) FROM chat_messages m WHERE m.id=$1 FOR SHARE")
                 .bind(id).fetch_optional(&mut **tx).await?.ok_or_else(|| invalid("message evidence missing"))?
         } else if evidence["type"] == "committed_event" {
             sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id=$1 AND r.status='completed' FOR SHARE OF r")
@@ -589,7 +589,7 @@ pub async fn conversation_batch(
     additional_ids: &[Uuid],
 ) -> Result<EvidenceBatch, DbError> {
     let mut tx = pool.begin().await?;
-    let evidence:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN (SELECT ingestion_sequence FROM chat_messages WHERE id=$2) AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3) ORDER BY m.ingestion_sequence")
+    let evidence:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='message' AND c.target_id=m.id) OR (c.target_type='object' AND c.target_id=m.chat_object_id)),'[]'::jsonb)) FROM chat_messages m WHERE m.chat_object_id=$1 AND m.ingestion_sequence BETWEEN (SELECT ingestion_sequence FROM chat_messages WHERE id=$2) AND (SELECT ingestion_sequence FROM chat_messages WHERE id=$3) ORDER BY m.ingestion_sequence")
         .bind(run.chat_object_id).bind(run.first_message_id).bind(run.last_message_id).fetch_all(&mut *tx).await?;
     let mut ids: HashSet<Uuid> = additional_ids.iter().copied().collect();
     ids.insert(run.chat_object_id);
@@ -755,7 +755,7 @@ async fn synthesis_batch_limit(
         })
         .filter_map(|v| v.as_str().map(ToOwned::to_owned))
         .collect();
-    let mut evidence:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.id::text=ANY($1) ORDER BY m.id")
+    let mut evidence:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='message' AND c.target_id=m.id) OR (c.target_type='object' AND c.target_id=m.chat_object_id)),'[]'::jsonb)) FROM chat_messages m WHERE m.id::text=ANY($1) ORDER BY m.id")
         .bind(&evidence_ids).fetch_all(&mut *tx).await?;
     let actions:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id::text=ANY($1) AND r.status='completed' ORDER BY e.id")
         .bind(&evidence_ids).fetch_all(&mut *tx).await?;
@@ -891,7 +891,7 @@ pub async fn apply_memories(
 }
 
 fn synthesis_input(batch: &SynthesisBatch) -> Value {
-    let events:Vec<_>=batch.events.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"archived_at":v["archived_at"],"timing":v["subtype"],"evidence_ids":v["provenance"]["evidence_ids"],"corrections":v["corrections"]})).collect();
+    let events:Vec<_>=batch.events.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"archived_at":v["archived_at"],"timing":v["subtype"],"evidence_ids":v["provenance"]["evidence_ids"],"recorded_by":{"type":v["created_by_type"],"id":v["created_by_id"]},"corrections":v["corrections"]})).collect();
     let memories:Vec<_>=batch.memories.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"happened_at":v["subtype"]["happened_at"],"editable":editable_memory(v),"supporting_event_ids":v["supporting_event_ids"]})).collect();
     let evidence:Vec<_>=batch.evidence.evidence.iter().map(|v|{
         if v["type"]=="committed_event" {
@@ -972,7 +972,7 @@ pub async fn saved_preview(
     pool: &PgPool,
     run: Uuid,
 ) -> Result<(SynthesisBatch, MemoryPlan, String), DbError> {
-    let (input,result):(Value,Value)=sqlx::query_as("SELECT input,result FROM runs WHERE id=$1 AND kind='memory_synthesis' AND status='preview'").bind(run).fetch_one(pool).await?;
+    let (input,result):(Value,Value)=sqlx::query_as("SELECT input,result FROM runs WHERE id=$1 AND kind='memory_synthesis' AND status IN ('preview','completed')").bind(run).fetch_one(pool).await?;
     let batch: SynthesisBatch = serde_json::from_value(input["approval_batch"].clone())
         .map_err(|e| invalid(&e.to_string()))?;
     let plan: MemoryPlan =
