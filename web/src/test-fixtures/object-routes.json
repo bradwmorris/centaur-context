@@ -1,0 +1,543 @@
+{
+  "objects": [
+    {
+      "id": "synthetic-event",
+      "kind": "event",
+      "title": "Synthetic event",
+      "description": "A concise synthetic event description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-task",
+      "kind": "task",
+      "title": "Synthetic task",
+      "description": "A concise synthetic task description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-chat",
+      "kind": "chat",
+      "title": "Synthetic chat",
+      "description": "A concise synthetic chat description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-user",
+      "kind": "user",
+      "title": "Synthetic user",
+      "description": "A concise synthetic user description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-entity",
+      "kind": "entity",
+      "title": "Synthetic entity",
+      "description": "A concise synthetic entity description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-memory",
+      "kind": "memory",
+      "title": "Synthetic memory",
+      "description": "A concise synthetic memory description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-source",
+      "kind": "source",
+      "title": "Synthetic source",
+      "description": "A concise synthetic source description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-note",
+      "kind": "note",
+      "title": "Synthetic note",
+      "description": "A concise synthetic note description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-theme",
+      "kind": "theme",
+      "title": "Synthetic theme",
+      "description": "A concise synthetic theme description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null
+    }
+  ],
+  "subtypes": {
+    "event": {
+      "id": "synthetic-event",
+      "kind": "event",
+      "title": "Synthetic event",
+      "description": "A concise synthetic event description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-event",
+      "starts_at": "2026-10-20",
+      "starts_at_precision": "day",
+      "ends_at": null,
+      "ends_at_precision": null,
+      "timezone": "Australia/Sydney"
+    },
+    "task": {
+      "id": "synthetic-task",
+      "kind": "task",
+      "title": "Synthetic task",
+      "description": "A concise synthetic task description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-task",
+      "status": "todo",
+      "priority": "high",
+      "owner_object_id": "synthetic-user",
+      "due_at": "2026-10-16T00:00:00Z",
+      "completed_at": null,
+      "blocked_reason": null,
+      "brief_markdown": "Prepare the synthetic review.\n\nCheck the Note body, artifact history and canonical links.",
+      "agent_suitable": true,
+      "work_kind": "general",
+      "github_issue_url": null,
+      "routine": null
+    },
+    "chat": {
+      "id": "synthetic-chat",
+      "kind": "chat",
+      "title": "Synthetic chat",
+      "description": "A concise synthetic chat description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-chat"
+    },
+    "user": {
+      "id": "synthetic-user",
+      "kind": "user",
+      "title": "Synthetic user",
+      "description": "A concise synthetic user description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-user",
+      "user_kind": "human"
+    },
+    "entity": {
+      "id": "synthetic-entity",
+      "kind": "entity",
+      "title": "Synthetic entity",
+      "description": "A concise synthetic entity description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-entity",
+      "entity_kind": "organization",
+      "category_ids": [
+        "synthetic-category"
+      ],
+      "primary_category_id": "synthetic-category",
+      "image_url": "https://example.test/synthetic-entity.png"
+    },
+    "memory": {
+      "id": "synthetic-memory",
+      "kind": "memory",
+      "title": "Synthetic memory",
+      "description": "A concise synthetic memory description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-memory",
+      "happened_at": "2026-10-10T09:30:00Z"
+    },
+    "source": {
+      "id": "synthetic-source",
+      "kind": "source",
+      "title": "Synthetic source",
+      "description": "A concise synthetic source description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-source",
+      "source_kind": "document",
+      "canonical_uri": null,
+      "byline": "Synthetic author",
+      "publisher": null,
+      "published_at": null,
+      "published_at_precision": null,
+      "last_accessed_at": null,
+      "original_language": "en",
+      "original_media_type": "text/plain",
+      "original_artifact_reference": null,
+      "current_artifact_id": null
+    },
+    "note": {
+      "id": "synthetic-note",
+      "kind": "note",
+      "title": "Synthetic note",
+      "description": "A concise synthetic note description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-note",
+      "content": "Synthetic complete Note body. This content must be reachable from every Object link.",
+      "content_format": "markdown",
+      "intent": "idea",
+      "source_artifact_id": null,
+      "source_locator": null
+    },
+    "theme": {
+      "id": "synthetic-theme",
+      "kind": "theme",
+      "title": "Synthetic theme",
+      "description": "A concise synthetic theme description.",
+      "protected": false,
+      "lifecycle": "active",
+      "revision": 1,
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "provenance": {
+        "source_type": "synthetic_fixture"
+      },
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "archived_at": null,
+      "object_id": "synthetic-theme",
+      "slug": "synthetic-theme"
+    }
+  },
+  "connections": [
+    {
+      "id": "synthetic-connection",
+      "source_object_id": "synthetic-note",
+      "target_object_id": "synthetic-source",
+      "kind": "derived_from",
+      "description": "The Note explains this Source.",
+      "revision": 1,
+      "protected": false,
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "provenance": {},
+      "created_by_type": "human",
+      "created_by_id": "synthetic-user",
+      "updated_by_type": "human",
+      "updated_by_id": "synthetic-user",
+      "archived_at": null
+    },
+    {
+      "id": "synthetic-task-connection",
+      "source_object_id": "synthetic-note",
+      "target_object_id": "synthetic-task",
+      "kind": "related_to",
+      "description": "The Task reviews this Note.",
+      "revision": 1,
+      "protected": false,
+      "created_at": "2026-10-14T00:00:00Z",
+      "updated_at": "2026-10-14T00:00:00Z",
+      "provenance": {},
+      "archived_at": null
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "synthetic-source-artifact-2",
+      "object_id": "synthetic-source",
+      "kind": "research_notes",
+      "title": "Research document with a clear readable title",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": "9fff9a34f090dd8fb7dd2c897d8308aa026ddb179b7ea93413fb1e864ef81543",
+      "size_bytes": 87,
+      "capture_outcome": "complete",
+      "capture_reason": null,
+      "metadata": {
+        "document_key": "research"
+      },
+      "supersedes_artifact_id": "synthetic-source-artifact-1",
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-14T00:00:00Z"
+    },
+    {
+      "id": "synthetic-source-artifact-1",
+      "object_id": "synthetic-source",
+      "kind": "research_notes",
+      "title": "Research document with a clear readable title",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": "9fff9a34f090dd8fb7dd2c897d8308aa026ddb179b7ea93413fb1e864ef81543",
+      "size_bytes": 87,
+      "capture_outcome": "complete",
+      "capture_reason": null,
+      "metadata": {
+        "document_key": "research"
+      },
+      "supersedes_artifact_id": null,
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-13T00:00:00Z"
+    },
+    {
+      "id": "synthetic-source-unavailable",
+      "object_id": "synthetic-source",
+      "kind": "transcript",
+      "title": "Original transcript",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": null,
+      "size_bytes": null,
+      "capture_outcome": "unavailable",
+      "capture_reason": "Synthetic unavailable capture",
+      "metadata": {},
+      "supersedes_artifact_id": null,
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-13T00:00:00Z"
+    },
+    {
+      "id": "synthetic-note-artifact-2",
+      "object_id": "synthetic-note",
+      "kind": "research_notes",
+      "title": "Research document with a clear readable title",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": "9fff9a34f090dd8fb7dd2c897d8308aa026ddb179b7ea93413fb1e864ef81543",
+      "size_bytes": 87,
+      "capture_outcome": "complete",
+      "capture_reason": null,
+      "metadata": {
+        "document_key": "research"
+      },
+      "supersedes_artifact_id": "synthetic-note-artifact-1",
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-14T00:00:00Z"
+    },
+    {
+      "id": "synthetic-note-artifact-1",
+      "object_id": "synthetic-note",
+      "kind": "research_notes",
+      "title": "Research document with a clear readable title",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": "9fff9a34f090dd8fb7dd2c897d8308aa026ddb179b7ea93413fb1e864ef81543",
+      "size_bytes": 87,
+      "capture_outcome": "complete",
+      "capture_reason": null,
+      "metadata": {
+        "document_key": "research"
+      },
+      "supersedes_artifact_id": null,
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-13T00:00:00Z"
+    },
+    {
+      "id": "synthetic-note-unavailable",
+      "object_id": "synthetic-note",
+      "kind": "transcript",
+      "title": "Original transcript",
+      "uri": null,
+      "media_type": "text/markdown",
+      "language": "en",
+      "sha256": null,
+      "size_bytes": null,
+      "capture_outcome": "unavailable",
+      "capture_reason": "Synthetic unavailable capture",
+      "metadata": {},
+      "supersedes_artifact_id": null,
+      "captured_at": "2026-10-14T00:00:00Z",
+      "created_at": "2026-10-13T00:00:00Z"
+    }
+  ],
+  "content": "Synthetic research document. Its complete content and version history remain available."
+}

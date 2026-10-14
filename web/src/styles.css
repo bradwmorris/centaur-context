@@ -803,3 +803,6 @@ input::placeholder, textarea::placeholder { color: #888b95; opacity: 1; }
   #workspace-toolbar-slot .connection-graph-toolbar > div:first-child { display: none; }
   #workspace-toolbar-slot { flex-shrink: 0; min-width: 210px; }
 }
+/* Focused graph destinations retain native link and keyboard behavior. */
+.connection-graph-nodes > a .node-label { pointer-events: auto; }
+.connection-graph-nodes > a:focus-visible .node-hit-area { stroke: var(--focus); stroke-width: 2; }

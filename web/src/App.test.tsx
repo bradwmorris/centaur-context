@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe("minimal canonical UI", () => {
-  it.each(["source", "note"] as const)("opens %s artifacts from the canonical Objects collection and returns there", async (kind) => {
+  it.each(["source", "note"] as const)("opens %s artifacts from the canonical Objects collection and returns to its complete typed page", async (kind) => {
     const object = { ...source, id: `${kind}-canonical`, kind, title: `Synthetic ${kind}` };
     const content = `Complete ${kind} artifact body`;
     const artifact = {
@@ -42,19 +42,20 @@ describe("minimal canonical UI", () => {
     vi.mocked(fetch).mockImplementation((input, init) => {
       const path = String(input);
       if (path.includes("/api/v2/objects?")) return envelope([object]);
+      if (path === `/api/v2/${kind}s/${object.id}`) return envelope({ ...object, object_id: object.id, source_kind: "document", content: "Complete Note content", content_format: "markdown", intent: "idea" });
       if (path === `/api/v2/objects/${object.id}`) return envelope(object);
       if (path === `/api/v2/objects/${object.id}/artifacts`) return envelope([artifact]);
       if (path.startsWith(`/api/v2/artifacts/${artifact.id}/content?`)) return envelope({ ...artifact, text: content, offset: 0, next_offset: null });
       return defaultFetch(input, init);
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: `Open ${object.title}` }));
-    expect(await screen.findByRole("link", { name: /Synthetic .* artifact/ })).toHaveAttribute("href", `/objects/${object.id}/artifacts/${artifact.id}`);
+    fireEvent.click(await screen.findByRole("link", { name: `Open ${object.title}` }));
+    expect(await screen.findByRole("link", { name: /Synthetic .* artifact/ })).toHaveAttribute("href", `/${kind}s/${object.id}/artifacts/${artifact.id}`);
     fireEvent.click(screen.getByRole("link", { name: /Synthetic .* artifact/ }));
     expect(await screen.findByText(content)).toBeInTheDocument();
-    expect(window.location.pathname).toBe(`/objects/${object.id}/artifacts/${artifact.id}`);
+    expect(window.location.pathname).toBe(`/${kind}s/${object.id}/artifacts/${artifact.id}`);
     fireEvent.click(screen.getByRole("link", { name: "← Back to Object" }));
-    expect(window.location.pathname).toBe(`/objects/${object.id}`);
+    expect(window.location.pathname).toBe(`/${kind}s/${object.id}`);
     expect(await screen.findByRole("link", { name: /Synthetic .* artifact/ })).toBeInTheDocument();
   });
 
@@ -320,7 +321,7 @@ it("searches Objects on the server across pages and explains empty active result
   expect(screen.getByText("Active objects")).toBeVisible();
   expect(screen.queryByText(organisation.title)).toBeNull();
   fireEvent.change(screen.getByRole("textbox", { name: "Search objects" }), { target: { value: " nOrThB " } });
-  expect(await screen.findByRole("button", { name: `Open ${organisation.title}` })).toBeVisible();
+  expect(await screen.findByRole("link", { name: `Open ${organisation.title}` })).toBeVisible();
   expect(fetch).toHaveBeenCalledWith(expect.stringContaining("q=nOrThB&sort=recent&cursor=match-499"), expect.anything());
   fireEvent.change(screen.getByRole("textbox", { name: "Search objects" }), { target: { value: "NoSuchName" } });
   expect(await screen.findByText("No active objects match your search.")).toBeVisible();
@@ -408,11 +409,11 @@ describe("Tasks List due-date mode", () => {
     expect(await screen.findByRole("region", { name: "Overdue tasks" })).toHaveTextContent("Overdue work");
     expect(screen.getByRole("region", { name: "Today tasks" })).toHaveTextContent("Today work");
     expect(screen.getByRole("region", { name: "Tomorrow tasks" })).toHaveTextContent("Tomorrow work");
-    expect(screen.getByRole("button", { name: "Open Later work" }).closest("section")).toHaveTextContent("Later work");
+    expect(screen.getByRole("link", { name: "Open Later work" }).closest("section")).toHaveTextContent("Later work");
     expect(screen.getByRole("region", { name: "No due date tasks" })).toHaveTextContent("Undated work");
     expect(screen.getByText("Date unavailable")).toBeVisible();
     expect(screen.queryByText("Completed work")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open Today work" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open Today work" })).toBeVisible();
     expect(screen.getByLabelText("6 records")).toHaveTextContent("6");
 
     fireEvent.click(screen.getByRole("button", { name: "Show completed" }));

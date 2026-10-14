@@ -23,7 +23,7 @@ const statusVisuals: Record<TaskStatus, { icon: string; label: string }> = {
 };
 
 export function ObjectTypeBadge({ kind, compact = false }: { kind: ObjectKind; compact?: boolean }) {
-  const visual = typeVisuals[kind];
+  const visual = typeVisuals[kind] ?? { icon: "◇", label: String(kind), code: "OBJ" };
   return <span className={`visual-badge type-badge ${kind}${compact ? " compact" : ""}`} aria-label={visual.label} title={visual.label}><span aria-hidden="true">{visual.icon}</span>{compact ? visual.code : visual.label}</span>;
 }
 

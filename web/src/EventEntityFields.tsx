@@ -63,11 +63,13 @@ export function EventEntityDetail(props: { id: string; kind: string; revision: n
 
 function EntityClassifications({ id }: { id: string }) {
   const [assigned, setAssigned] = useState<{ id: string; label: string | null }[] | null>(null);
+  const [fields, setFields] = useState<SubtypeFields | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
     void Promise.all([api.readSubtype(id), api.entityCategories()]).then(([fields, catalogue]) => {
       if (!active) return;
+      setFields(fields);
       const ids = [...new Set((fields.category_ids as string[] | undefined) ?? [])];
       const primary = fields.primary_category_id;
       ids.sort((left, right) => Number(right === primary) - Number(left === primary));
@@ -78,6 +80,10 @@ function EntityClassifications({ id }: { id: string }) {
   }, [id]);
   return <section className="entity-classifications properties-block" aria-label="Classifications">
     <h2>Classifications</h2>
+    {fields && <details className="entity-subtype-details"><summary>Entity details</summary>
+      <p>Kind: {String(fields.entity_kind ?? "Not recorded")}</p>
+      {typeof fields.image_url === "string" && /^https:\/\//.test(fields.image_url) && <img src={fields.image_url} alt="Entity image" loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: "100%", maxHeight: 180 }} />}
+    </details>}
     {error ? <p role="alert">Could not load classifications: {error}</p> : assigned === null ? <p className="muted" role="status">Loading classifications…</p> : assigned.length === 0 ? <p className="muted">No classification assigned.</p> :
       <ul className="classification-pills">{assigned.map(category => <li className="visual-badge" key={category.id}>{category.label ?? "Classification unavailable"}</li>)}</ul>}
   </section>;

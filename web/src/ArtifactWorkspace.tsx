@@ -181,6 +181,7 @@ export function ArtifactReader({ section, objectId, target, refreshKey }: { sect
 
   useEffect(() => {
     if (!dirty) return;
+    const returnPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     let approvedPath: string | null = null;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const beforeNavigate = (event: Event) => {
@@ -188,10 +189,10 @@ export function ArtifactReader({ section, objectId, target, refreshKey }: { sect
       else approvedPath = (event as CustomEvent<string>).detail;
     };
     const onPop = () => {
-      if (`${window.location.pathname}` === path) return;
-      if (`${window.location.pathname}${window.location.search}` === approvedPath) return;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` === returnPath) return;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` === approvedPath) return;
       if (!window.confirm("Discard unsaved working-notes changes?")) {
-        window.history.replaceState({}, "", path);
+        window.history.replaceState(window.history.state, "", returnPath);
         window.dispatchEvent(new PopStateEvent("popstate"));
       }
     };
