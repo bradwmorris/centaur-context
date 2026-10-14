@@ -544,7 +544,7 @@ async fn status_excludes_cutover_events_and_irrelevant_run_payloads() {
     event(&pool, "Existing occurrence").await;
     em::activate(&pool).await.unwrap();
     for _ in 0..32 {
-        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,result) VALUES($1,'mutation','completed','system','test',$2)")
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,result) VALUES($1,'mutation','completed','system','test',$1::text,$2)")
             .bind(Uuid::new_v4()).bind(json!({"payload": "x".repeat(100_000)})).execute(&pool).await.unwrap();
     }
     assert_eq!(em::status(&pool).await.unwrap()["events"]["captured"], 0);
