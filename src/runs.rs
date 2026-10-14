@@ -11,7 +11,9 @@ pub(crate) fn is_terminal(kind: &Value, status: &Value, completed_at: &Value) ->
         status.as_str(),
         Some("completed" | "failed" | "reversed" | "delivered" | "suppressed")
     ) || (kind == "slack_interaction" && status == "cancelled" && !completed_at.is_null())
-        || (kind == "memory_dream" && status == "preview" && !completed_at.is_null())
+        || (matches!(kind.as_str(), Some("memory_dream" | "memory_synthesis"))
+            && status == "preview"
+            && !completed_at.is_null())
 }
 
 pub(crate) async fn assert_thread_not_fenced(

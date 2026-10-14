@@ -345,6 +345,7 @@ async fn main() -> Result<()> {
     let memory_capture_worker = centaur_context::memory::run_capture_worker(
         state.pool.clone(),
         config.memory_capture_enabled,
+        config.curator_model.clone(),
     );
 
     tokio::select! {

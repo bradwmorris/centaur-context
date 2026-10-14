@@ -55,7 +55,14 @@ function write(method: "POST" | "PATCH" | "PUT", body: unknown): RequestInit {
   };
 }
 
+export interface CaptureStatus {
+  active: boolean;
+  events: { captured: number; reviewed: number; reviewed_no_memory: number; preview: number; pending: number; deferred: number; failed: number; oldest_pending_at: string | null };
+  runs: { conversation_pending: number; conversation_failed: number; action_pending: number; action_failed: number; last_success_at: string | null };
+}
+
 export const api = {
+  captureStatus: () => request<CaptureStatus>("/api/v2/capture-status"),
   async filteredEntities(query: string, categories: string[]) {
     const items: SharedObject[] = [];
     let cursor: string | null = null;

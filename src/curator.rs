@@ -470,6 +470,11 @@ async fn reconcile_owned(
     mut plan: ReconciliationPlan,
     claimed_by: Option<&str>,
 ) -> Result<Value, CuratorError> {
+    if crate::event_memory::active(pool).await.map_err(invalid)? {
+        return Err(CuratorError::Invalid(
+            "Memory extraction is retired after Events-first cutover".into(),
+        ));
+    }
     validate_plan(&mut plan)?;
     let plan_json =
         serde_json::to_value(&plan).map_err(|e| CuratorError::Invalid(e.to_string()))?;
@@ -477,6 +482,15 @@ async fn reconcile_owned(
     sqlx::query("SET LOCAL statement_timeout = '10s'")
         .execute(&mut *tx)
         .await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(7818003)")
+        .execute(&mut *tx)
+        .await?;
+    let cutover:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='event_memory_cutover' AND idempotency_key='event-memory-v1')").fetch_one(&mut *tx).await?;
+    if cutover {
+        return Err(CuratorError::Invalid(
+            "legacy Memory extraction is disabled".into(),
+        ));
+    }
     let run = lock_run(&mut tx, run_id).await?;
     if run.status == "completed" {
         if run.proposed_plan.as_ref() == Some(&plan_json) {
@@ -1713,6 +1727,27 @@ pub async fn run_worker(
         let outcome = async {
             let (messages, candidates) =
                 worker_context(&pool, embeddings.as_ref(), text_search_config, &run).await?;
+            if crate::event_memory::active(&pool).await.map_err(invalid)? {
+                let ids = candidates
+                    .objects
+                    .iter()
+                    .map(|object| object.id)
+                    .collect::<Vec<_>>();
+                let batch = crate::event_memory::conversation_batch(&pool, &run, &ids)
+                    .await
+                    .map_err(invalid)?;
+                summarize_chat(&pool, &client, &config, &run, &messages).await?;
+                return crate::event_memory::extract(
+                    &pool,
+                    &client,
+                    &config,
+                    run.id,
+                    &batch,
+                    Some(&worker_id),
+                )
+                .await
+                .map_err(invalid);
+            }
             let mut plan =
                 request_plan(&pool, &client, &config, &run, &messages, &candidates, None).await?;
             let dropped = drop_disallowed_worker_creates(&mut plan, &messages);

@@ -224,6 +224,37 @@ async fn apply_with_authority(
     let request_hash = request_hash(&request)?;
     let mut tx = pool.begin().await?;
     crate::runs::assert_thread_not_fenced(&mut tx, actor.centaur_thread_key.as_deref()).await?;
+    // Serialize interactive Event writes with background occurrence matching.
+    sqlx::query("SELECT pg_advisory_xact_lock(7818003)")
+        .execute(&mut *tx)
+        .await?;
+    if actor.is_agent && authority == WriteAuthority::Ordinary {
+        let cutover:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE kind='event_memory_cutover' AND idempotency_key='event-memory-v1')").fetch_one(&mut *tx).await?;
+        if cutover {
+            for operation in &request.operations {
+                let object_id = match operation {
+                    ApplyOperation::CreateObject { kind, .. } if kind == "memory" => {
+                        return Err(DbError::Invalid("Capture an Event; only synthesis may automatically create Memories. Explicit corrections require reviewed maintenance.".into()));
+                    }
+                    ApplyOperation::UpdateObject { object_id, .. }
+                    | ApplyOperation::UpdateDescription { object_id, .. }
+                    | ApplyOperation::ArchiveObject { object_id, .. }
+                    | ApplyOperation::RestoreObject { object_id, .. } => Some(*object_id),
+                    _ => None,
+                };
+                if let Some(id) = object_id {
+                    let kind: Option<String> =
+                        sqlx::query_scalar("SELECT kind FROM objects WHERE id=$1")
+                            .bind(id)
+                            .fetch_optional(&mut *tx)
+                            .await?;
+                    if kind.as_deref() == Some("memory") {
+                        return Err(DbError::Invalid("Memory changes require synthesis or explicitly reviewed correction authority".into()));
+                    }
+                }
+            }
+        }
+    }
 
     if !request.validate_only {
         let claimed: Option<bool> = sqlx::query_scalar(
@@ -1471,13 +1502,11 @@ async fn insert_subtype(
                 .await?;
         }
         "memory" => {
-            sqlx::query(
-                "INSERT INTO memories(object_id,happened_at) VALUES($1,COALESCE($2,now()))",
-            )
-            .bind(id)
-            .bind(optional_time(fields, "happened_at")?)
-            .execute(&mut **tx)
-            .await?;
+            sqlx::query("INSERT INTO memories(object_id,happened_at) VALUES($1,$2)")
+                .bind(id)
+                .bind(optional_time(fields, "happened_at")?)
+                .execute(&mut **tx)
+                .await?;
         }
         _ => unreachable!("write boundary checked before subtype insertion"),
     }

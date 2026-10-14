@@ -243,6 +243,7 @@ export default function App() {
 
         <div className="workspace">
           {section === "schema" ? <SchemaWorkspace selectedTable={selectedId} refreshKey={refreshKey} /> : section === "connections" && !connectionId ? <ConnectionGraphWorkspace refreshKey={refreshKey} /> : !selectedId && !connectionId && section === "evals" ? <EvalsView runs={currentItems as Run[]} objects={objects} visuals={visualsById} loading={loading} onUpdated={(updated) => setRuns((current) => current.map((run) => run.id === updated.id ? updated : run))} /> : !selectedId && !connectionId ? <section className="list-view" aria-label={`${section} records`}>
+            {(section === "events" || section === "memories" || section === "runs") && <CaptureCoverage refreshKey={refreshKey} />}
             {activeModule ? <ContextModuleView module={activeModule} context={{ tasks: section === "tasks" ? currentItems as Task[] : tasks, taskControls: { showDone, onShowDoneChange: setShowDone }, sources, visuals: visualsById, loading, error, onTasksChange: setTasks, onReload: load }} /> : <>
             {dateMode ? <div className="task-date-groups">
               {taskDateGroups.map((group) => <section className="task-date-group" aria-label={`${group.label} tasks`} key={group.key}>
@@ -551,7 +552,7 @@ function NewObject({ fixedKind, label, onCancel, onCreated }: { fixedKind?: "cha
     <textarea className="create-body" name="description" rows={5} required maxLength={600} placeholder={descriptionExamples[kind]} aria-label={`${name} description`} />
     {kind === "entity" && <EntityFields />}
     {kind === "event" && <EventFields />}
-    {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" required /></Field>}
+    {kind === "memory" && <Field label="Happened at"><input name="happened_at" type="datetime-local" /></Field>}
     {error && <p className="form-error">{error}</p>}
     <div className="create-footer">{fixedKind ? <span className="property-chip">{name}</span> : <Field label="Type"><select name="kind" value={kind} onChange={(event) => setKind(event.target.value as typeof kind)}><option value="event">Event</option><option value="memory">Memory</option><option value="entity">Entity</option><option value="chat">Chat</option></select></Field>}<div className="create-actions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Creating…" : `Create ${label}`}</button></div></div>
   </form></CreateModal>;
@@ -1414,3 +1415,21 @@ function textValue(value: unknown, fallback = "") { return typeof value === "str
 function stringList(value: unknown) { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function optional(data: FormData, name: string) { const value = String(data.get(name) ?? "").trim(); return value || null; }
 function optionalDate(data: FormData, name: string) { const value = optional(data, name); return value ? new Date(value).toISOString() : null; }
+
+function CaptureCoverage({ refreshKey }: { refreshKey: number }) {
+  const [status, setStatus] = useState<import("./api").CaptureStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    api.captureStatus().then(value => { if (current) { setStatus(value); setError(null); } }).catch(() => { if (current) setError("Capture status unavailable"); });
+    return () => { current = false; };
+  }, [refreshKey]);
+  if (error) return <p role="status">{error}</p>;
+  if (!status?.active) return null;
+  return <aside aria-label="Event and Memory coverage" className="capture-coverage">
+    <strong>Event capture and Memory review</strong>
+    <p>{status.events.captured} captured · {status.events.reviewed} reviewed · {status.events.reviewed_no_memory} needed no Memory · {status.events.pending} pending · {status.events.preview} previews · {status.events.deferred} deferred · {status.events.failed} failed</p>
+    <p>{status.runs.conversation_pending} conversations queued · {status.runs.conversation_failed} conversation failures · {status.runs.action_failed} action capture failures</p>
+    {status.events.oldest_pending_at && <small>Oldest pending: {new Date(status.events.oldest_pending_at).toLocaleString()}</small>}
+  </aside>;
+}
