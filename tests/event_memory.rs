@@ -574,19 +574,21 @@ async fn ordinary_evidence_gets_one_text_correction_and_oversized_evidence_defer
         em::activate(&pool).await.unwrap();
         let chat = Uuid::new_v4();
         let user = Uuid::new_v4();
+        let mut tx = pool.begin().await.unwrap();
         for (id, kind) in [(chat, "chat"), (user, "user")] {
-            sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,'Fixture','Synthetic evidence.','system','test','system','test')").bind(id).bind(kind).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,'Fixture','Synthetic evidence.','system','test','system','test')").bind(id).bind(kind).execute(&mut *tx).await.unwrap();
         }
         sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
             .bind(chat)
-            .execute(&pool)
+            .execute(&mut *tx)
             .await
             .unwrap();
         sqlx::query("INSERT INTO users(object_id,user_kind) VALUES($1,'human')")
             .bind(user)
-            .execute(&pool)
+            .execute(&mut *tx)
             .await
             .unwrap();
+        tx.commit().await.unwrap();
         let evidence = message(
             &pool,
             chat,
