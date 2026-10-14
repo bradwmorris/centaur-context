@@ -1,8 +1,8 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { ApiError, api } from "./api";
 import { artifactDocuments, artifactLabel, documentKey, editableText, mediaType, readableText, safeArtifactUri, verifyBody } from "./artifactDocuments";
-import { artifactPath, detailPath, interceptNavigation, navigate, workingDocumentPath } from "./routing";
+import { artifactPath, detailPath, interceptNavigation, workingDocumentPath } from "./routing";
 import type { Artifact, SharedObject } from "./types";
 import "./artifactWorkspace.css";
 
@@ -55,80 +55,18 @@ function ArtifactLink({ href, children, className }: { href: string; children: R
   return <a className={className} href={href} onClick={(event) => interceptNavigation(event, href)}>{children}</a>;
 }
 
-export function Artifacts({ section, objectId, artifacts, onCreated }: { section: ParentSection; objectId: string; artifacts: Artifact[]; onCreated: () => Promise<void> }) {
-  const [form, setForm] = useState<"notes" | "generic" | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const pendingCreate = useRef<{ signature: string; idempotencyKey: string; documentKey: string | null; expectedRevision: number | null } | null>(null);
+export function Artifacts({ section, objectId, artifacts }: { section: ParentSection; objectId: string; artifacts: Artifact[] }) {
   const documents = useMemo(() => artifactDocuments(artifacts), [artifacts]);
-  const openForm = (next: "notes" | "generic") => { pendingCreate.current = null; setError(null); setForm(next); };
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setBusy(true); setError(null);
-    const data = new FormData(event.currentTarget);
-    const isNotes = form === "notes";
-    const signature = JSON.stringify({ form, values: [...data.entries()] });
-    const previous = pendingCreate.current;
-    const attempt = previous?.signature === signature ? previous : {
-      signature, idempotencyKey: crypto.randomUUID(), documentKey: isNotes ? crypto.randomUUID() : null,
-      expectedRevision: null,
-    };
-    pendingCreate.current = attempt;
-    const key = attempt.documentKey;
-    try {
-      const { object, artifacts: known } = await consistentSnapshot(objectId);
-      const existing = known.find((item) => isNotes
-        ? documentKey(item) === key && item.kind === "research_notes"
-        : item.metadata.creation_key === attempt.idempotencyKey);
-      if (existing) {
-        if (await fullBody(existing) !== String(data.get("body"))) throw new Error("An earlier submission returned different content. Check the artifact history.");
-        await onCreated(); setForm(null); pendingCreate.current = null;
-        navigate(artifactHref(section, objectId, existing, key));
-        return;
-      }
-      attempt.expectedRevision ??= object.revision;
-      const kind = isNotes ? "research_notes" : String(data.get("kind")).trim();
-      const body = String(data.get("body"));
-      const genericDocumentKey = String(data.get("document_key") ?? "").trim() || "default";
-      const selectedPredecessor = String(data.get("predecessor") ?? "").trim();
-      const predecessor = isNotes ? null : selectedPredecessor || (kind === "research_notes" ? artifactDocuments(known).find((item) => item.key === genericDocumentKey)?.latest.id ?? null : null);
-      const captureOutcome = isNotes ? "complete" : String(data.get("capture_outcome"));
-      const capturedAt = String(data.get("captured_at") ?? "");
-      const artifact = await api.createArtifact(objectId, {
-        expected_revision: attempt.expectedRevision,
-        kind,
-        title: String(data.get("title")).trim() || null,
-        content: body,
-        media_type: isNotes ? "text/markdown" : "text/plain",
-        language: isNotes ? null : String(data.get("language") ?? "").trim() || null,
-        captured_at: capturedAt ? new Date(capturedAt).toISOString() : null,
-        capture_outcome: captureOutcome,
-        capture_reason: captureOutcome === "complete" ? null : String(data.get("capture_reason") ?? "").trim() || null,
-        expected_size_bytes: null,
-        metadata: isNotes ? { document_key: key, source_type: "human_paste" } : { source_type: "human_paste", creation_key: attempt.idempotencyKey, ...(kind === "research_notes" ? { document_key: genericDocumentKey, predecessor_artifact_id: predecessor } : {}) },
-        supersedes_artifact_id: predecessor,
-      }, attempt.idempotencyKey);
-      if (artifact.kind !== kind || artifact.object_id !== objectId || (isNotes ? documentKey(artifact) !== key : artifact.metadata.creation_key !== attempt.idempotencyKey) || await fullBody(artifact) !== body) {
-        throw new Error("The server returned a different artifact. Check the history before retrying.");
-      }
-      await onCreated();
-      setForm(null);
-      pendingCreate.current = null;
-      navigate(artifactHref(section, objectId, artifact, key));
-    } catch (cause) { setError(errorText(cause)); }
-    finally { setBusy(false); }
-  };
+  if (documents.length === 0) return null;
   return <section className="artifact-section" aria-label="Artifacts">
-    <div className="artifact-section-head"><h2>Artifacts</h2><div className="artifact-actions"><button className="secondary" type="button" onClick={() => openForm("notes")}>+ Add research document</button><button className="ghost" type="button" onClick={() => openForm("generic")}>Add artifact</button></div></div>
-    {form && <form className="artifact-create-form" onSubmit={(event) => void submit(event)}>
-      <h3>{form === "notes" ? "New research document" : "New artifact"}</h3>
-      {form === "generic" && <div className="artifact-create-fields"><label>Kind<input name="kind" required maxLength={100} defaultValue="transcript" /></label><label>Document key for research documents<input name="document_key" maxLength={100} placeholder="default" /></label><label>Captured<input name="captured_at" type="datetime-local" /></label><label>Language<input name="language" maxLength={35} placeholder="en" /></label><label>Capture outcome<select name="capture_outcome" defaultValue="complete"><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="unavailable">Unavailable</option><option value="paywalled">Paywalled</option><option value="disallowed">Disallowed</option><option value="too_large">Too large</option><option value="unsupported">Unsupported</option></select></label><label>Reason when not complete<input name="capture_reason" maxLength={1000} /></label><label>Supersedes artifact<select name="predecessor" defaultValue=""><option value="">None / latest research document with this key</option>{artifacts.map((item) => <option key={item.id} value={item.id}>{artifactLabel(item)} · {item.id.slice(0, 8)}</option>)}</select></label></div>}
-      <label>Title<input name="title" maxLength={300} placeholder={form === "notes" ? "Research documents" : "Artifact title"} /></label>
-      <label>Body<textarea name="body" required rows={8} aria-label="Artifact body" /></label>
-      <div className="artifact-actions"><button className="ghost" type="button" onClick={() => { setForm(null); pendingCreate.current = null; }}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save"}</button></div>
-    </form>}
-    {documents.length ? <div className="artifact-list">{documents.map(({ key, latest, history }) => <ArtifactLink key={key === null ? latest.id : `working:${key}`} className={`artifact-row${latest.kind === "research_visual" ? " artifact-visual-row" : ""}`} href={artifactHref(section, objectId, latest, key)}>{latest.kind === "research_visual" && <img className="artifact-thumbnail" src={visualSrc(latest)} alt="" loading="lazy" />}<span className="artifact-row-title">{artifactLabel(latest)}</span><span className="artifact-row-meta">{displayType(latest)}{history.length > 1 ? ` · ${history.length} versions` : ""}{latest.capture_outcome !== "complete" ? ` · ${latest.capture_outcome}` : ""}</span><span aria-hidden="true">›</span></ArtifactLink>)}</div> : <p className="muted">No artifacts yet.</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
+    <h2>Artifacts</h2>
+    <ul className="artifact-list">{documents.map(({ key, latest, history }) => <li key={key === null ? latest.id : `working:${key}`}>
+      <ArtifactLink className="artifact-row" href={artifactHref(section, objectId, latest, key)}>
+        <svg className="artifact-open-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+        {latest.kind === "research_visual" && <img className="artifact-thumbnail" src={visualSrc(latest)} alt="" loading="lazy" />}
+        <span className="artifact-row-copy"><span className="artifact-row-title">{artifactLabel(latest)}</span><span className="artifact-row-meta">{displayType(latest)}{history.length > 1 ? ` · ${history.length} versions` : ""}{latest.capture_outcome !== "complete" ? ` · ${latest.capture_outcome.replaceAll("_", " ")}` : ""}</span></span>
+      </ArtifactLink>
+    </li>)}</ul>
   </section>;
 }
 
@@ -181,6 +119,7 @@ export function ArtifactReader({ section, objectId, target, refreshKey }: { sect
 
   useEffect(() => {
     if (!dirty) return;
+    const returnPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     let approvedPath: string | null = null;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const beforeNavigate = (event: Event) => {
@@ -188,10 +127,10 @@ export function ArtifactReader({ section, objectId, target, refreshKey }: { sect
       else approvedPath = (event as CustomEvent<string>).detail;
     };
     const onPop = () => {
-      if (`${window.location.pathname}` === path) return;
-      if (`${window.location.pathname}${window.location.search}` === approvedPath) return;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` === returnPath) return;
+      if (`${window.location.pathname}${window.location.search}${window.location.hash}` === approvedPath) return;
       if (!window.confirm("Discard unsaved working-notes changes?")) {
-        window.history.replaceState({}, "", path);
+        window.history.replaceState(window.history.state, "", returnPath);
         window.dispatchEvent(new PopStateEvent("popstate"));
       }
     };

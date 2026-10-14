@@ -44,30 +44,41 @@ export function EntityFields({ initial = {} }: { initial?: SubtypeFields }) {
     <label>Primary classification<select name="primary_category_id" required value={primary} onChange={e => setPrimary(e.target.value)}><option value="">Select a classification</option>{categories.filter(c => selected.includes(c.id)).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
   </fieldset>;
 }
-function EventDetail({ id, kind, revision, onChanged }: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+function EventDetail({ id }: { id: string }) {
   const [fields, setFields] = useState<SubtypeFields | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { let active = true; api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(e => { if (active) setError(String(e)); }); return () => { active = false; }; }, [id, revision]);
-  return <section><h2>Occurrence</h2>{error && <p role="alert">{error}</p>}{fields && <form key={`${id}:${revision}`} onSubmit={async e => {
-    e.preventDefault(); const changes = fieldsFromForm(kind, new FormData(e.currentTarget)); setBusy(true); setError("");
-    try { await api.applyCorrections([{ operation: "update_object", object_id: id, expected_revision: revision, changes }]); await onChanged(); } catch (e) { setError(String(e)); } finally { setBusy(false); }
-  }}><EventFields initial={fields} /><button disabled={busy}>{busy ? "Saving…" : "Save properties"}</button></form>}</section>;
+  useEffect(() => {
+    let active = true;
+    void api.readSubtype(id).then(value => { if (active) setFields(value); }).catch(cause => { if (active) setError(String(cause)); });
+    return () => { active = false; };
+  }, [id]);
+  const timing = [
+    ["Start", fields?.starts_at],
+    ["End", fields?.ends_at],
+    ["Timezone", fields?.timezone],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0);
+  return <section className="properties-block event-occurrence" aria-label="Occurrence">
+    <h2>Occurrence</h2>
+    {error ? <p role="alert">Could not load occurrence: {error}</p> : fields === null ? <p className="muted" role="status">Loading occurrence…</p> : timing.length === 0 ? <p className="muted">Timing not recorded.</p> :
+      <dl className="event-occurrence-values">{timing.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{label === "Timezone" ? value : <time dateTime={value}>{value}</time>}</dd></div>)}</dl>}
+  </section>;
 }
 
-export function EventEntityDetail(props: { id: string; kind: string; revision: number; onChanged: () => Promise<void> }) {
+export function EventEntityDetail(props: { id: string; kind: string; revision: number }) {
   return props.kind === "entity"
     ? <EntityClassifications key={`${props.id}:${props.revision}`} id={props.id} />
-    : <EventDetail key={`${props.id}:${props.revision}`} {...props} />;
+    : <EventDetail key={`${props.id}:${props.revision}`} id={props.id} />;
 }
 
 function EntityClassifications({ id }: { id: string }) {
   const [assigned, setAssigned] = useState<{ id: string; label: string | null }[] | null>(null);
+  const [fields, setFields] = useState<SubtypeFields | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
     void Promise.all([api.readSubtype(id), api.entityCategories()]).then(([fields, catalogue]) => {
       if (!active) return;
+      setFields(fields);
       const ids = [...new Set((fields.category_ids as string[] | undefined) ?? [])];
       const primary = fields.primary_category_id;
       ids.sort((left, right) => Number(right === primary) - Number(left === primary));
@@ -78,6 +89,10 @@ function EntityClassifications({ id }: { id: string }) {
   }, [id]);
   return <section className="entity-classifications properties-block" aria-label="Classifications">
     <h2>Classifications</h2>
+    {fields && <details className="entity-subtype-details"><summary>Entity details</summary>
+      <p>Kind: {String(fields.entity_kind ?? "Not recorded")}</p>
+      {typeof fields.image_url === "string" && /^https:\/\//.test(fields.image_url) && <img src={fields.image_url} alt="Entity image" loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: "100%", maxHeight: 180 }} />}
+    </details>}
     {error ? <p role="alert">Could not load classifications: {error}</p> : assigned === null ? <p className="muted" role="status">Loading classifications…</p> : assigned.length === 0 ? <p className="muted">No classification assigned.</p> :
       <ul className="classification-pills">{assigned.map(category => <li className="visual-badge" key={category.id}>{category.label ?? "Classification unavailable"}</li>)}</ul>}
   </section>;
