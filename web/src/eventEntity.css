@@ -9,10 +9,8 @@
 .typed-create-form .create-body { min-height: 72px; }
 .typed-create-form .create-footer { position: sticky; bottom: -14px; background: #151517; padding: 12px 0; }
 
-.entity-classifications { margin: 24px 0; }
-.entity-classifications p { font-size: 12px; }
-.classification-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.classification-pills .visual-badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.entity-kind { margin: 16px 0; }
+.entity-kind p { margin: 0; font-size: 12px; }
 
 .event-occurrence { margin: 24px 0; }
 .event-occurrence p { margin: 0; font-size: 12px; }

@@ -12,11 +12,12 @@ beforeEach(() => {
   vi.mocked(api.entityCategories).mockResolvedValue({ categories, revision: "1" });
 });
 
-it("shows only assigned labels once, primary first, with no mutation controls", async () => {
+it("shows only the primary kind label with no mutation controls", async () => {
   vi.mocked(api.readSubtype).mockResolvedValue({ category_ids: ["fund", "org", "fund"], primary_category_id: "org" });
   render(<EventEntityDetail {...props} />);
   await screen.findByText("Organization");
-  expect(screen.getAllByRole("listitem").map(item => item.textContent)).toEqual(["Organization", "Fund"]);
+  expect(screen.getByRole("group", { name: "Entity kind" })).toHaveTextContent(/^Organization$/);
+  expect(screen.queryByText("Fund")).toBeNull();
   expect(screen.queryByText("Person")).toBeNull();
   expect(screen.queryByText(/definition/)).toBeNull();
   expect(screen.queryByRole("checkbox")).toBeNull();
@@ -29,7 +30,7 @@ it("clears old labels on navigation and ignores an obsolete response", async () 
   let resolveFirst!: (fields: SubtypeFields) => void;
   vi.mocked(api.readSubtype).mockImplementation(id => id === "first" ? new Promise(resolve => { resolveFirst = resolve; }) : Promise.resolve({ category_ids: ["person"], primary_category_id: "person" }));
   const { rerender } = render(<EventEntityDetail {...props} />);
-  expect(screen.getByRole("status")).toHaveTextContent("Loading classifications");
+  expect(screen.getByRole("status")).toHaveTextContent("Loading kind");
   rerender(<EventEntityDetail {...props} id="second" />);
   await screen.findByText("Person");
   await act(async () => resolveFirst({ category_ids: ["org"], primary_category_id: "org" }));
@@ -43,14 +44,14 @@ it("clears old labels on navigation and ignores an obsolete response", async () 
 it("distinguishes no assignment, unavailable labels and failed reads", async () => {
   vi.mocked(api.readSubtype).mockResolvedValue({ category_ids: [] });
   const { rerender } = render(<EventEntityDetail {...props} />);
-  await screen.findByText("No classification assigned.");
+  await screen.findByText("Kind not recorded");
   vi.mocked(api.readSubtype).mockResolvedValue({ category_ids: ["missing"] });
   rerender(<EventEntityDetail {...props} revision={2} />);
-  await screen.findByText("Classification unavailable");
+  await screen.findByText("Kind unavailable");
   vi.mocked(api.entityCategories).mockRejectedValue(new Error("Catalogue unavailable"));
   rerender(<EventEntityDetail {...props} revision={3} />);
-  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not load classifications"));
-  expect(screen.queryByText("No classification assigned.")).toBeNull();
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not load kind"));
+  expect(screen.queryByText("Kind not recorded")).toBeNull();
   expect(screen.queryByRole("listitem")).toBeNull();
 });
 

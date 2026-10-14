@@ -16,12 +16,12 @@ it("shows Source artifacts and connected Notes once without creation or correcti
   expect(screen.getByRole("link", { name: /Research document.*2 versions/ })).toHaveAttribute("href", "/sources/synthetic-source/working/research");
   expect(screen.getByRole("link", { name: /Original transcript.*unavailable/ })).toBeVisible();
   expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith("/api/v2/notes"))).toBe(false);
-  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("connection-graph"))).toBe(false);
+  expect(await screen.findByRole("heading", { name: "Connection map" })).toBeVisible();
   fireEvent.click(screen.getByRole("link", { name: "Synthetic note" }));
   expect(await screen.findByRole("button", { name: "Edit Note content" })).toHaveTextContent("Synthetic complete Note body.");
 });
 
-it("keeps Task workflow editing, secondary information and relationship creation reachable", async () => {
+it("keeps Task workflow editing and secondary information without relationship creation", async () => {
   window.history.replaceState({}, "", "/tasks/synthetic-task");
   render(<App />);
   expect(await screen.findByRole("button", { name: "Edit Task brief" })).toBeVisible();
@@ -33,10 +33,9 @@ it("keeps Task workflow editing, secondary information and relationship creation
   expect(screen.getByRole("button", { name: "Edit GitHub issue URL" })).toBeVisible();
   expect(screen.getByRole("checkbox", { name: "Suitable" })).toBeVisible();
   expect(screen.getByText("Not complete")).toBeVisible();
-  fireEvent.click(screen.getByText("Connect an Object", { selector: "summary" }));
-  expect(await screen.findByRole("combobox", { name: "Connection kind" })).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Connection kind" })).not.toBeInTheDocument());
+  expect(screen.queryByText("Connect an Object")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Connection kind" })).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Connection map" })).toBeVisible();
 });
 
 it("retains the complete long related title and its native destination", async () => {
