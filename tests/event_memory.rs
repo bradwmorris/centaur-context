@@ -407,5 +407,34 @@ async fn late_commit_and_changed_preference_update_preserve_prior_evidence() {
         .await
         .unwrap();
     assert_eq!(description, "Alex prefers morning meetings.");
+    assert!(
+        em::synthesis_batch(&pool, false)
+            .await
+            .unwrap()
+            .fingerprints
+            .is_empty()
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn concurrent_saved_and_worker_plans_cannot_duplicate_a_memory() {
+    let Some(pool) = pool().await else { return };
+    em::activate(&pool).await.unwrap();
+    let id = event(&pool, "Meeting preference").await;
+    let batch = em::synthesis_batch(&pool, false).await.unwrap();
+    let plan = create(id);
+    let first = run(&pool, &batch).await;
+    let second = run(&pool, &batch).await;
+    let (a, b) = tokio::join!(
+        em::apply_memories(&pool, first, &batch, &plan, false),
+        em::apply_memories(&pool, second, &batch, &plan, false)
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE kind='memory'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
     pool.close().await;
 }

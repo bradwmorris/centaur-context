@@ -680,17 +680,29 @@ impl SynthesisBatch {
     }
 }
 
+fn configuration_key(config: &crate::config::CuratorModelConfig) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(format!(
+            "{}:{}:{}:{}:{}",
+            config.endpoint, config.api_token, config.model, config.prompt_version, POLICY
+        ))
+    )
+}
+
 pub async fn synthesis_batch(pool: &PgPool, preview: bool) -> Result<SynthesisBatch, DbError> {
-    synthesis_batch_limit(pool, preview, 10).await
+    synthesis_batch_limit(pool, preview, 10, None).await
 }
 async fn synthesis_batch_limit(
     pool: &PgPool,
     preview: bool,
     limit: i64,
+    configuration: Option<&str>,
 ) -> Result<SynthesisBatch, DbError> {
     let mut tx = pool.begin().await?;
-    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT o.id FROM objects o WHERE o.kind='event' AND EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_fingerprints'->>o.id::text IS DISTINCT FROM event_memory_fingerprint(o.id)) AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.kind='memory_synthesis' AND r.result->>'policy_version'=$1 AND r.input->'fingerprints'->>o.id::text=event_memory_fingerprint(o.id) AND (r.status='completed' OR ($2 AND r.status='preview') OR (r.status='failed' AND (r.result->>'retryable'='false' OR (r.result->>'retry_at')::timestamptz>now())))) ORDER BY o.updated_at,o.id LIMIT $3")
-        .bind(POLICY).bind(preview).bind(limit).fetch_all(&mut *tx).await?;
+    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT o.id FROM objects o WHERE o.kind='event' AND EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_fingerprints'->>o.id::text IS DISTINCT FROM event_memory_fingerprint(o.id)) AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.kind='memory_synthesis' AND r.result->>'policy_version'=$1 AND r.input->'fingerprints'->>o.id::text=event_memory_fingerprint(o.id) AND (r.status IN ('completed','reversed') OR ($2 AND r.status='preview') OR (r.status='failed' AND ($4::text IS NULL OR r.result->>'configuration_key'=$4 OR NOT(r.result ? 'configuration_key')) AND (r.result->>'retryable'='false' OR (r.result->>'retry_at')::timestamptz>now())))) ORDER BY o.updated_at,o.id LIMIT $3")
+        .bind(POLICY).bind(preview).bind(limit).bind(configuration).fetch_all(&mut *tx).await?;
     let mut fingerprints = serde_json::Map::new();
     let mut events = Vec::new();
     for id in &ids {
@@ -804,7 +816,7 @@ pub async fn apply_memories(
     }
     // The serializable coverage predicate prevents a saved preview and worker
     // from both applying the same Event version in separate runs.
-    let already_reviewed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r CROSS JOIN LATERAL jsonb_each_text(r.input->'fingerprints') f WHERE r.kind='memory_synthesis' AND r.status='completed' AND r.id<>$1 AND $2::jsonb->>f.key=f.value)")
+    let already_reviewed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r CROSS JOIN LATERAL jsonb_each_text(r.input->'fingerprints') f WHERE r.kind='memory_synthesis' AND r.status IN ('completed','reversed') AND r.id<>$1 AND $2::jsonb->>f.key=f.value)")
         .bind(run).bind(json!(batch.fingerprints)).fetch_one(&mut *tx).await?;
     if already_reviewed {
         return Err(DbError::Conflict);
@@ -903,8 +915,9 @@ pub async fn synthesis_pass(
         return Ok(None);
     }
     sqlx::query("UPDATE runs SET status='failed',error='worker lease ended before completion',result=result || jsonb_build_object('retryable',true,'retry_at',now()+interval '30 seconds'),completed_at=now() WHERE kind='memory_synthesis' AND status='running'").execute(pool).await?;
+    let configuration = configuration_key(config);
     let mut limit = 10;
-    let mut batch = synthesis_batch_limit(pool, preview, limit).await?;
+    let mut batch = synthesis_batch_limit(pool, preview, limit, Some(&configuration)).await?;
     while serde_json::to_vec(&synthesis_input(&batch))
         .map_err(|e| invalid(&e.to_string()))?
         .len()
@@ -912,14 +925,14 @@ pub async fn synthesis_pass(
         && limit > 1
     {
         limit = (limit / 2).max(1);
-        batch = synthesis_batch_limit(pool, preview, limit).await?;
+        batch = synthesis_batch_limit(pool, preview, limit, Some(&configuration)).await?;
     }
     if batch.fingerprints.is_empty() {
         return Ok(None);
     }
     let run = Uuid::new_v4();
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at) VALUES($1,'memory_synthesis','running','system',$2,$3,$4,$5,now())")
-        .bind(run).bind(SYNTHESIS_ACTOR).bind(run.to_string()).bind(json!({"preview":preview,"fingerprints":batch.fingerprints,"approval_batch":batch})).bind(json!({"policy_version":POLICY})).execute(pool).await?;
+        .bind(run).bind(SYNTHESIS_ACTOR).bind(run.to_string()).bind(json!({"preview":preview,"fingerprints":batch.fingerprints,"approval_batch":batch})).bind(json!({"policy_version":POLICY,"configuration_key":configuration})).execute(pool).await?;
     let result=async {
         let supplied_events: HashSet<String> = batch.events.iter().filter_map(|e| e["id"].as_str().map(ToOwned::to_owned)).collect();
         let supporting: HashSet<String> = batch.memories.iter().flat_map(|m| m["supporting_event_ids"].as_array().into_iter().flatten()).filter_map(|id| id.as_str().map(ToOwned::to_owned)).collect();
@@ -940,8 +953,8 @@ pub async fn synthesis_pass(
         Ok::<(),DbError>(())
     }.await;
     if let Err(error) = result {
-        let attempts:i64=sqlx::query_scalar("SELECT COALESCE(max(n),0) FROM (SELECT count(*) n FROM runs r CROSS JOIN LATERAL jsonb_each_text(r.input->'fingerprints') f WHERE r.kind='memory_synthesis' AND r.status='failed' AND r.input->'preview'=$2 AND $1::jsonb->>f.key=f.value GROUP BY f.key) attempts")
-            .bind(json!(batch.fingerprints)).bind(json!(preview)).fetch_one(pool).await?;
+        let attempts:i64=sqlx::query_scalar("SELECT COALESCE(max(n),0) FROM (SELECT count(*) n FROM runs r CROSS JOIN LATERAL jsonb_each_text(r.input->'fingerprints') f WHERE r.kind='memory_synthesis' AND r.status='failed' AND r.input->'preview'=$2 AND r.result->>'configuration_key'=$3 AND $1::jsonb->>f.key=f.value GROUP BY f.key) attempts")
+            .bind(json!(batch.fingerprints)).bind(json!(preview)).bind(&configuration).fetch_one(pool).await?;
         let deferred = error.to_string().contains("deferred");
         sqlx::query("UPDATE runs SET status='failed',error=$2,result=result || jsonb_build_object('retryable',$3::boolean,'retry_at',now()+interval '30 seconds','deferred',$4::boolean),completed_at=now(),updated_at=now() WHERE id=$1")
             .bind(run).bind(error.to_string()).bind(!deferred && attempts<2).bind(deferred).execute(pool).await?;
@@ -987,8 +1000,9 @@ pub async fn action_pass(
         return Ok(());
     }
     sqlx::query("UPDATE runs SET status='failed',error='capture lease ended before completion',result=result || jsonb_build_object('retryable',true,'retry_at',now()+interval '30 seconds'),completed_at=now() WHERE kind='event_capture' AND status='running'").execute(pool).await?;
-    let evidence:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND (done.status='completed' OR (done.status='failed' AND (done.result->>'retryable'='false' OR (done.result->>'retry_at')::timestamptz>now())))) ORDER BY e.created_at,e.id LIMIT 10")
-        .bind(POLICY).fetch_all(pool).await?;
+    let configuration = configuration_key(config);
+    let evidence:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND (done.status IN ('completed','reversed') OR (done.status='failed' AND (done.result->>'configuration_key'=$2 OR NOT(done.result ? 'configuration_key')) AND (done.result->>'retryable'='false' OR (done.result->>'retry_at')::timestamptz>now())))) ORDER BY e.created_at,e.id LIMIT 10")
+        .bind(POLICY).bind(&configuration).fetch_all(pool).await?;
     if evidence.is_empty() {
         return Ok(());
     }
@@ -1015,10 +1029,10 @@ pub async fn action_pass(
     };
     let run = Uuid::new_v4();
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at) VALUES($1,'event_capture','running','system',$2,$3,$4,$5,now())")
-        .bind(run).bind(CAPTURE_ACTOR).bind(run.to_string()).bind(json!({"evidence_ids":ids})).bind(json!({"policy_version":POLICY})).execute(pool).await?;
+        .bind(run).bind(CAPTURE_ACTOR).bind(run.to_string()).bind(json!({"evidence_ids":ids})).bind(json!({"policy_version":POLICY,"configuration_key":configuration})).execute(pool).await?;
     if let Err(error) = extract(pool, client, config, run, &batch, None).await {
-        let attempts:i64=sqlx::query_scalar("SELECT COALESCE(max(n),0) FROM (SELECT count(*) n FROM runs r CROSS JOIN LATERAL jsonb_array_elements_text(r.input->'evidence_ids') e WHERE r.kind='event_capture' AND r.status='failed' AND $1::jsonb ? e GROUP BY e) attempts")
-            .bind(json!(ids)).fetch_one(pool).await?;
+        let attempts:i64=sqlx::query_scalar("SELECT COALESCE(max(n),0) FROM (SELECT count(*) n FROM runs r CROSS JOIN LATERAL jsonb_array_elements_text(r.input->'evidence_ids') e WHERE r.kind='event_capture' AND r.status='failed' AND r.result->>'configuration_key'=$2 AND $1::jsonb ? e GROUP BY e) attempts")
+            .bind(json!(ids)).bind(&configuration).fetch_one(pool).await?;
         sqlx::query("UPDATE runs SET status='failed',error=$2,result=result || jsonb_build_object('retryable',$3::boolean,'retry_at',now()+interval '30 seconds'),completed_at=now() WHERE id=$1")
             .bind(run).bind(error.to_string()).bind(attempts<2 && !error.to_string().contains("deferred")).execute(pool).await?;
     }
@@ -1029,11 +1043,11 @@ pub async fn action_pass(
 /// Read-only coverage on the existing authenticated agent and owner surfaces.
 pub async fn status(pool: &PgPool) -> Result<Value, DbError> {
     let enabled = active(pool).await?;
-    let counts:Value=sqlx::query_scalar("WITH versions AS (SELECT o.id,o.created_at,event_memory_fingerprint(o.id) fingerprint FROM objects o WHERE o.kind='event' AND EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_fingerprints'->>o.id::text IS DISTINCT FROM event_memory_fingerprint(o.id))), coverage AS (SELECT v.*,r.status,r.result FROM versions v LEFT JOIN LATERAL (SELECT status,result FROM runs r WHERE r.kind='memory_synthesis' AND r.input->'fingerprints'->>v.id::text=v.fingerprint ORDER BY r.created_at DESC,r.id DESC LIMIT 1) r ON true) SELECT jsonb_build_object('captured',count(*),'reviewed',count(*) FILTER(WHERE status='completed'),'reviewed_no_memory',count(*) FILTER(WHERE status='completed' AND result->>'outcome'='reviewed_no_memory'),'preview',count(*) FILTER(WHERE status='preview'),'pending',count(*) FILTER(WHERE status IS NULL OR status='running' OR (status='failed' AND result->>'retryable'='true')),'deferred',count(*) FILTER(WHERE status='failed' AND result->>'deferred'='true'),'failed',count(*) FILTER(WHERE status='failed' AND result->>'retryable'='false' AND result->>'deferred' IS DISTINCT FROM 'true'),'oldest_pending_at',min(created_at) FILTER(WHERE status IS NULL OR status='running')) FROM coverage")
+    let counts:Value=sqlx::query_scalar("WITH versions AS (SELECT o.id,o.created_at,event_memory_fingerprint(o.id) fingerprint FROM objects o WHERE o.kind='event' AND EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_fingerprints'->>o.id::text IS DISTINCT FROM event_memory_fingerprint(o.id))), coverage AS (SELECT v.*,r.status,r.result FROM versions v LEFT JOIN LATERAL (SELECT status,result FROM runs r WHERE r.kind='memory_synthesis' AND r.input->'fingerprints'->>v.id::text=v.fingerprint ORDER BY r.created_at DESC,r.id DESC LIMIT 1) r ON true) SELECT jsonb_build_object('captured',count(*),'reviewed',count(*) FILTER(WHERE status IN ('completed','reversed')),'reviewed_no_memory',count(*) FILTER(WHERE status='completed' AND result->>'outcome'='reviewed_no_memory'),'preview',count(*) FILTER(WHERE status='preview'),'pending',count(*) FILTER(WHERE status IS NULL OR status='running' OR (status='failed' AND result->>'retryable'='true')),'deferred',count(*) FILTER(WHERE status='failed' AND result->>'deferred'='true'),'failed',count(*) FILTER(WHERE status='failed' AND result->>'retryable'='false' AND result->>'deferred' IS DISTINCT FROM 'true'),'oldest_pending_at',min(created_at) FILTER(WHERE status IS NULL OR status='running')) FROM coverage")
         .bind(POLICY).fetch_one(pool).await?;
     let runs:Value=sqlx::query_scalar("SELECT jsonb_build_object('conversation_pending',count(*) FILTER(WHERE kind='curator' AND status IN ('queued','running')),'conversation_failed',count(*) FILTER(WHERE kind='curator' AND status='failed'),'action_pending',count(*) FILTER(WHERE kind='event_capture' AND status='running'),'action_failed',count(*) FILTER(WHERE kind='event_capture' AND status='failed'),'last_success_at',max(completed_at) FILTER(WHERE kind IN ('memory_synthesis','event_capture') AND status='completed')) FROM runs WHERE kind IN ('curator','event_capture','memory_synthesis')").fetch_one(pool).await?;
     let recent:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('run_id',id,'kind',kind,'status',status,'created_at',created_at,'completed_at',completed_at,'retryable',result->'retryable','deferred',result->'deferred','classification',result->'inference_failure'->'classification','outcome',result->'outcome','approval_sha256',result->'approval_sha256') FROM runs WHERE kind IN ('event_capture','memory_synthesis') ORDER BY created_at DESC,id DESC LIMIT 20").fetch_all(pool).await?;
-    let pending_actions:i64=sqlx::query_scalar("SELECT count(*) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND done.status IN ('completed','failed'))").bind(POLICY).fetch_one(pool).await?;
+    let pending_actions:i64=sqlx::query_scalar("SELECT count(*) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND done.status IN ('completed','reversed','failed'))").bind(POLICY).fetch_one(pool).await?;
     Ok(
         json!({"policy_version":POLICY,"active":enabled,"events":counts,"runs":runs,"pending_action_evidence":pending_actions,"recent_runs":recent}),
     )
