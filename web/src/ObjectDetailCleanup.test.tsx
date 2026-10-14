@@ -42,7 +42,7 @@ it("retains the complete long related title and its native destination", async (
   vi.stubGlobal("fetch", vi.fn(createObjectFixtureApi({ longTitles: true })));
   window.history.replaceState({}, "", "/sources/synthetic-source");
   render(<App />);
-  const title = await screen.findByRole("link", { name: /^Synthetic research note:/ });
+  const title = await screen.findByRole("link", { name: "Synthetic research note: preserving complete related Object titles across compact desktop layouts and narrow screens, even beside a lengthy relationship explanation", exact: true });
   expect(title).toHaveTextContent("Synthetic research note: preserving complete related Object titles across compact desktop layouts and narrow screens, even beside a lengthy relationship explanation");
   expect(title).toHaveAttribute("href", "/objects/synthetic-note");
   expect(title).toHaveAttribute("title", title.textContent);
