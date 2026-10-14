@@ -537,3 +537,32 @@ async fn action_cutover_preserves_pending_scope_without_backfilling_old_updates(
     );
     pool.close().await;
 }
+
+#[tokio::test]
+async fn status_excludes_cutover_events_and_irrelevant_run_payloads() {
+    let Some(pool) = pool().await else { return };
+    event(&pool, "Existing occurrence").await;
+    em::activate(&pool).await.unwrap();
+    for _ in 0..32 {
+        sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,result) VALUES($1,'mutation','completed','system','test',$2)")
+            .bind(Uuid::new_v4()).bind(json!({"payload": "x".repeat(100_000)})).execute(&pool).await.unwrap();
+    }
+    assert_eq!(em::status(&pool).await.unwrap()["events"]["captured"], 0);
+    let id = event(&pool, "New occurrence").await;
+    assert_eq!(em::status(&pool).await.unwrap()["events"]["pending"], 1);
+    let batch = em::synthesis_batch(&pool, true).await.unwrap();
+    assert!(batch.fingerprints.contains_key(&id.to_string()));
+    let run_id = run(&pool, &batch).await;
+    em::apply_memories(
+        &pool,
+        run_id,
+        &batch,
+        &em::MemoryPlan { memories: vec![] },
+        false,
+    )
+    .await
+    .unwrap();
+    let state = em::status(&pool).await.unwrap();
+    assert_eq!(state["events"]["reviewed_no_memory"], 1);
+    assert_eq!(state["events"]["pending"], 0);
+}
