@@ -589,15 +589,21 @@ async fn ordinary_evidence_gets_one_text_correction_and_oversized_evidence_defer
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let evidence = message(
-            &pool,
-            chat,
-            user,
-            &"I prefer morning meetings. ".repeat(1600),
-        )
-        .await;
+        let mut evidence = Vec::new();
+        for _ in 0..3 {
+            evidence.push(
+                message(
+                    &pool,
+                    chat,
+                    user,
+                    &"I prefer morning meetings. ".repeat(550),
+                )
+                .await
+                .to_string(),
+            );
+        }
         let id = event(&pool, "Meeting preference discussion").await;
-        sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',jsonb_build_array($2::text)) WHERE id=$1").bind(id).bind(evidence.to_string()).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',$2::jsonb) WHERE id=$1").bind(id).bind(json!(evidence)).execute(&pool).await.unwrap();
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let count = calls.clone();
         let router = axum::Router::new().route("/", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
@@ -659,9 +665,16 @@ async fn ordinary_evidence_gets_one_text_correction_and_oversized_evidence_defer
                     .unwrap()
                     .is_none()
             );
-            let large = message(&pool, chat, user, &"Original evidence. ".repeat(8000)).await;
+            let mut large = Vec::new();
+            for _ in 0..8 {
+                large.push(
+                    message(&pool, chat, user, &"Original evidence. ".repeat(1000))
+                        .await
+                        .to_string(),
+                );
+            }
             let large_event = event(&pool, "Oversized occurrence").await;
-            sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',jsonb_build_array($2::text)) WHERE id=$1").bind(large_event).bind(large.to_string()).execute(&pool).await.unwrap();
+            sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',$2::jsonb) WHERE id=$1").bind(large_event).bind(json!(large)).execute(&pool).await.unwrap();
             let deferred = em::synthesis_pass(&pool, &reqwest::Client::new(), &config, false)
                 .await
                 .unwrap()
