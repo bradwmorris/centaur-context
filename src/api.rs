@@ -135,7 +135,6 @@ pub fn agent_router(state: AppState, token: String) -> Router {
             Router::new()
                 .route("/contract", get(read_contract))
                 .route("/audit/objects", get(crate::maintenance::audit_objects))
-                .route("/capture-status", get(crate::event_memory::status_route))
                 .route(
                     "/audit/connections",
                     get(crate::maintenance::audit_connections),
@@ -2635,10 +2634,13 @@ async fn undo_curator_run(
         .fetch_optional(&state.pool)
         .await
         .map_err(db::DbError::from)?;
-    if matches!(
-        kind.as_deref(),
-        Some("memory_dream" | "memory_capture" | "memory_synthesis" | "event_capture")
-    ) {
+    let event_curator:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND kind='curator' AND result->>'policy_version'='event-memory-v1')").bind(id).fetch_one(&state.pool).await.map_err(db::DbError::from)?;
+    if event_curator
+        || matches!(
+            kind.as_deref(),
+            Some("memory_dream" | "memory_capture" | "memory_synthesis" | "event_capture")
+        )
+    {
         return Ok(Json(
             json!({"data":crate::dreaming::undo(&state.pool,id).await?}),
         ));

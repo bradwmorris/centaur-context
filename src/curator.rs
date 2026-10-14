@@ -1733,10 +1733,10 @@ pub async fn run_worker(
                     .iter()
                     .map(|object| object.id)
                     .collect::<Vec<_>>();
+                summarize_chat(&pool, &client, &config, &run, &messages).await?;
                 let batch = crate::event_memory::conversation_batch(&pool, &run, &ids)
                     .await
                     .map_err(invalid)?;
-                summarize_chat(&pool, &client, &config, &run, &messages).await?;
                 return crate::event_memory::extract(
                     &pool,
                     &client,

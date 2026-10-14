@@ -1471,7 +1471,7 @@ pub async fn pass(
 /// Any subsequent user/worker revision makes the whole undo fail atomically.
 pub async fn undo(pool: &PgPool, run: Uuid) -> Result<Value, db::DbError> {
     let mut tx = pool.begin().await?;
-    let status:Option<String>=sqlx::query_scalar("SELECT status FROM runs WHERE id=$1 AND kind IN ('memory_dream','memory_capture','memory_synthesis','event_capture') FOR UPDATE").bind(run).fetch_optional(&mut *tx).await?;
+    let status:Option<String>=sqlx::query_scalar("SELECT status FROM runs WHERE id=$1 AND (kind IN ('memory_dream','memory_capture','memory_synthesis','event_capture') OR (kind='curator' AND result->>'policy_version'='event-memory-v1')) FOR UPDATE").bind(run).fetch_optional(&mut *tx).await?;
     if status.as_deref() == Some("reversed") {
         return Ok(json!({"run_id":run,"status":"reversed"}));
     }
