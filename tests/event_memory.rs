@@ -490,7 +490,7 @@ async fn action_cutover_preserves_pending_scope_without_backfilling_old_updates(
     ] {
         let run_id = Uuid::new_v4();
         let sql = "INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'mutation','completed','system','test',$2)";
-        let evidence_sql = "INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state) VALUES($1,$2,1,'object',$3,$4,'system','test',1,$5)";
+        let evidence_sql = "INSERT INTO object_events(id,run_id,sequence,target_type,target_id,action,actor_type,actor_id,to_revision,after_state,reversible,created_at) VALUES($1,$2,1,'object',$3,$4,'system','test',1,$5,true,now())";
         if after_cutover {
             sqlx::query(sql)
                 .bind(run_id)
