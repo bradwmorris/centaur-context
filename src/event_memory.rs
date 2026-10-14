@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub const POLICY: &str = "event-memory-v1";
 pub const CAPTURE_ACTOR: &str = "context-event-capture";
 pub const SYNTHESIS_ACTOR: &str = "context-memory-synthesis";
+const SYNTHESIS_INPUT_BYTES: usize = 96_000;
+const SYNTHESIS_CORRECTION_BYTES: usize = 128_000;
 
 pub fn extraction_schema() -> Value {
     serde_json::from_str(include_str!("curator_contracts/event-extraction-v1.json")).unwrap()
@@ -685,7 +687,7 @@ fn configuration_key(config: &crate::config::CuratorModelConfig) -> String {
     format!(
         "{:x}",
         Sha256::digest(format!(
-            "{}:{}:{}:{}:{}:text-bounds-v2",
+            "{}:{}:{}:{}:{}:bounded-evidence-repair-v3",
             config.endpoint, config.api_token, config.model, config.prompt_version, POLICY
         ))
     )
@@ -921,7 +923,7 @@ pub async fn synthesis_pass(
     while serde_json::to_vec(&synthesis_input(&batch))
         .map_err(|e| invalid(&e.to_string()))?
         .len()
-        > 24_000
+        > SYNTHESIS_INPUT_BYTES
         && limit > 1
     {
         limit = (limit / 2).max(1);
@@ -941,9 +943,19 @@ pub async fn synthesis_pass(
         let present:HashSet<String>=batch.evidence.evidence.iter().filter_map(|e|e["id"].as_str().map(ToOwned::to_owned)).collect();
         if !expected.is_subset(&present){return Err(invalid("required original evidence missing; deferred"));}
         let input=serde_json::to_string(&synthesis_input(&batch)).map_err(|e|invalid(&e.to_string()))?;
-        if input.len()>24_000 {return Err(invalid("required synthesis evidence exceeds bounded input; deferred"));}
-        let value=crate::curator::request_json_model_with_effort(pool,client,config,run,None,SYNTHESIS_PROMPT,input,synthesis_schema(),format!("synthesis-{run}"),"high").await.map_err(|e|invalid(&e.to_string()))?;
-        let plan:MemoryPlan=serde_json::from_value(value).map_err(|e|invalid(&e.to_string()))?;
+        if input.len()>SYNTHESIS_INPUT_BYTES {return Err(invalid("required synthesis evidence exceeds bounded input; deferred"));}
+        let value=crate::curator::request_json_model_with_effort(pool,client,config,run,None,SYNTHESIS_PROMPT,input.clone(),synthesis_schema(),format!("synthesis-{run}"),"high").await.map_err(|e|invalid(&e.to_string()))?;
+        let mut plan:MemoryPlan=serde_json::from_value(value).map_err(|e|invalid(&e.to_string()))?;
+        if let Err(error) = plan.memories.iter().try_for_each(|m| text(&m.title, &m.description)) {
+            // Reuse the existing reviewer's one-correction pattern. Keep the
+            // original evidence and rejected plan, never mechanically truncate.
+            sqlx::query("UPDATE runs SET result=result || $2 WHERE id=$1")
+                .bind(run).bind(json!({"initial_plan":plan,"validation_error":error.to_string(),"correction_calls":1})).execute(pool).await?;
+            let correction=json!({"evidence":serde_json::from_str::<Value>(&input).map_err(|e|invalid(&e.to_string()))?,"previous_plan":plan,"validation_error":error.to_string(),"correction":"Return a corrected complete Memory plan using the same evidence. Each title is at most 300 characters and each description at most 600 characters including spaces. Aim below 450 characters to leave room. Keep the current useful context and essential qualifications; the evidence retains historical detail. Do not copy a chronology into the Memory."}).to_string();
+            if correction.len()>SYNTHESIS_CORRECTION_BYTES { return Err(invalid("required synthesis correction exceeds bounded input; deferred")); }
+            let corrected=crate::curator::request_json_model_with_effort(pool,client,config,run,None,SYNTHESIS_PROMPT,correction,synthesis_schema(),format!("synthesis-{run}-correction"),"high").await.map_err(|e|invalid(&e.to_string()))?;
+            plan=serde_json::from_value(corrected).map_err(|e|invalid(&e.to_string()))?;
+        }
         sqlx::query("UPDATE runs SET result=result || $2 WHERE id=$1").bind(run).bind(json!({"plan":plan})).execute(pool).await?;
         let result=apply_memories(pool,run,&batch,&plan,preview).await?;
         if preview {
