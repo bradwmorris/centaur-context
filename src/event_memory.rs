@@ -186,6 +186,7 @@ impl EventPlan {
 pub fn editable_memory(object: &Value) -> bool {
     object["kind"] == "memory"
         && object["protected"] != true
+        && object["explicitly_corrected"] != true
         && object["archived_at"].is_null()
         && object["provenance"]["memory_locked"] != true
         && object["created_by_type"] == "system"
@@ -375,7 +376,7 @@ async fn validate_evidence(
             sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.id=$1 FOR SHARE")
                 .bind(id).fetch_optional(&mut **tx).await?.ok_or_else(|| invalid("message evidence missing"))?
         } else if evidence["type"] == "committed_event" {
-            sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event') FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id=$1 AND r.status='completed' FOR SHARE OF r")
+            sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id=$1 AND r.status='completed' FOR SHARE OF r")
                 .bind(id).fetch_optional(&mut **tx).await?.ok_or_else(|| invalid("committed evidence missing"))?
         } else {
             return Err(invalid("unknown evidence type"));
@@ -480,11 +481,14 @@ pub async fn apply_events(
     .await?;
     let mut ids = Vec::new();
     for proposal in &plan.events {
-        // Stable evidence identity catches replay and an interactive Event saved
-        // after model input was built. Do not guess equivalence from its title.
+        // Reject unseen overlapping writes that committed after model input.
+        // Supplied occurrences and distinct proposals in this plan can share a
+        // message: one human statement can describe several different activities.
         let overlaps:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM objects WHERE kind='event' AND archived_at IS NULL AND provenance->'evidence_ids' ?| $1 ORDER BY id")
             .bind(proposal.evidence_ids.iter().map(ToString::to_string).collect::<Vec<_>>()).fetch_all(&mut *tx).await?;
-        if overlaps.iter().any(|id| Some(*id) != proposal.object_id) {
+        if overlaps.iter().any(|id| {
+            Some(*id) != proposal.object_id && !candidates.contains_key(id) && !ids.contains(id)
+        }) {
             return Err(DbError::Conflict);
         }
         let id = proposal.object_id.unwrap_or_else(Uuid::new_v4);
@@ -718,9 +722,13 @@ async fn synthesis_batch_limit(
     };
     let mut memories = Vec::new();
     for id in &memory_ids {
-        memories.push(db::target_snapshot(&mut tx, "object", *id).await?);
+        let mut memory = db::target_snapshot(&mut tx, "object", *id).await?;
+        let supporting: Vec<Uuid> = sqlx::query_scalar("SELECT c.target_object_id FROM connections c JOIN objects o ON o.id=c.target_object_id WHERE c.source_object_id=$1 AND c.kind='derived_from' AND c.archived_at IS NULL AND o.kind='event' ORDER BY c.target_object_id LIMIT 101")
+            .bind(id).fetch_all(&mut *tx).await?;
+        memory["supporting_event_ids"] = json!(supporting);
+        memories.push(memory);
     }
-    let related_events:Vec<Uuid>=sqlx::query_scalar("SELECT DISTINCT o.id FROM objects o JOIN connections c ON c.target_object_id=o.id WHERE o.kind='event' AND c.source_object_id=ANY($1) AND c.kind='derived_from' AND c.archived_at IS NULL AND NOT(o.id=ANY($2)) ORDER BY o.id LIMIT 10")
+    let related_events:Vec<Uuid>=sqlx::query_scalar("SELECT DISTINCT o.id FROM objects o JOIN connections c ON c.target_object_id=o.id WHERE o.kind='event' AND c.source_object_id=ANY($1) AND c.kind='derived_from' AND c.archived_at IS NULL AND NOT(o.id=ANY($2)) ORDER BY o.id LIMIT 100")
         .bind(&memory_ids).bind(&ids).fetch_all(&mut *tx).await?;
     for id in related_events {
         events.push(db::target_snapshot(&mut tx, "object", id).await?);
@@ -737,7 +745,7 @@ async fn synthesis_batch_limit(
         .collect();
     let mut evidence:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',m.id,'type','message','chat_object_id',m.chat_object_id,'content',m.content,'sender_id',m.sender_user_object_id,'sender_kind',(SELECT user_kind FROM users WHERE object_id=m.sender_user_object_id),'at',m.source_created_at,'corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE c.target_type='message' AND c.target_id=m.id),'[]'::jsonb)) FROM chat_messages m WHERE m.id::text=ANY($1) ORDER BY m.id")
         .bind(&evidence_ids).fetch_all(&mut *tx).await?;
-    let actions:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event') FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id::text=ANY($1) AND r.status='completed' ORDER BY e.id")
+    let actions:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id::text=ANY($1) AND r.status='completed' ORDER BY e.id")
         .bind(&evidence_ids).fetch_all(&mut *tx).await?;
     evidence.extend(actions);
     tx.commit().await?;
@@ -872,10 +880,10 @@ pub async fn apply_memories(
 
 fn synthesis_input(batch: &SynthesisBatch) -> Value {
     let events:Vec<_>=batch.events.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"archived_at":v["archived_at"],"timing":v["subtype"],"evidence_ids":v["provenance"]["evidence_ids"],"corrections":v["corrections"]})).collect();
-    let memories:Vec<_>=batch.memories.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"happened_at":v["subtype"]["happened_at"],"editable":editable_memory(v)})).collect();
+    let memories:Vec<_>=batch.memories.iter().map(|v|json!({"id":v["id"],"title":v["title"],"description":v["description"],"revision":v["revision"],"happened_at":v["subtype"]["happened_at"],"editable":editable_memory(v),"supporting_event_ids":v["supporting_event_ids"]})).collect();
     let evidence:Vec<_>=batch.evidence.evidence.iter().map(|v|{
         if v["type"]=="committed_event" {
-            json!({"id":v["id"],"type":v["type"],"actor_id":v["actor_id"],"actor_type":v["actor_type"],"at":v["created_at"],"action":v["action"],"object_id":v["target_id"],"title":v["after_state"]["title"],"description":v["after_state"]["description"],"previous_description":v["before_state"]["description"],"subtype":v["after_state"]["subtype"]})
+            json!({"id":v["id"],"type":v["type"],"actor_id":v["actor_id"],"actor_type":v["actor_type"],"at":v["created_at"],"action":v["action"],"object_id":v["target_id"],"title":v["after_state"]["title"],"description":v["after_state"]["description"],"previous_description":v["before_state"]["description"],"subtype":v["after_state"]["subtype"],"corrections":v["corrections"]})
         }else{v.clone()}
     }).collect();
     json!({"events":events,"memories":memories,"original_evidence":evidence,"changed_event_ids":batch.fingerprints.keys().collect::<Vec<_>>()})
@@ -913,6 +921,9 @@ pub async fn synthesis_pass(
     sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key,input,result,started_at) VALUES($1,'memory_synthesis','running','system',$2,$3,$4,$5,now())")
         .bind(run).bind(SYNTHESIS_ACTOR).bind(run.to_string()).bind(json!({"preview":preview,"fingerprints":batch.fingerprints,"approval_batch":batch})).bind(json!({"policy_version":POLICY})).execute(pool).await?;
     let result=async {
+        let supplied_events: HashSet<String> = batch.events.iter().filter_map(|e| e["id"].as_str().map(ToOwned::to_owned)).collect();
+        let supporting: HashSet<String> = batch.memories.iter().flat_map(|m| m["supporting_event_ids"].as_array().into_iter().flatten()).filter_map(|id| id.as_str().map(ToOwned::to_owned)).collect();
+        if !supporting.is_subset(&supplied_events) { return Err(invalid("required prior Memory evidence exceeds bounded context; deferred")); }
         let expected:HashSet<String>=batch.events.iter().flat_map(|e|e["provenance"]["evidence_ids"].as_array().into_iter().flatten()).filter_map(|v|v.as_str().map(ToOwned::to_owned)).collect();
         let present:HashSet<String>=batch.evidence.evidence.iter().filter_map(|e|e["id"].as_str().map(ToOwned::to_owned)).collect();
         if !expected.is_subset(&present){return Err(invalid("required original evidence missing; deferred"));}
@@ -976,7 +987,7 @@ pub async fn action_pass(
         return Ok(());
     }
     sqlx::query("UPDATE runs SET status='failed',error='capture lease ended before completion',result=result || jsonb_build_object('retryable',true,'retry_at',now()+interval '30 seconds'),completed_at=now() WHERE kind='event_capture' AND status='running'").execute(pool).await?;
-    let evidence:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event') FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND (done.status='completed' OR (done.status='failed' AND (done.result->>'retryable'='false' OR (done.result->>'retry_at')::timestamptz>now())))) ORDER BY e.created_at,e.id LIMIT 10")
+    let evidence:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(e) || jsonb_build_object('type','committed_event','corrections',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.object_revision) FROM evidence_corrections c WHERE (c.target_type='event' AND c.target_id=e.id) OR (c.target_type='run' AND c.target_id=e.run_id) OR (c.target_type='object' AND c.target_id=e.target_id)),'[]'::jsonb)) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND (e.created_at >= (SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') OR (NOT EXISTS(SELECT 1 FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start') AND NOT EXISTS(SELECT 1 FROM runs cut WHERE cut.kind='event_memory_cutover' AND cut.idempotency_key=$1 AND cut.result->'baseline_action_ids' ? e.id::text))) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND (done.status='completed' OR (done.status='failed' AND (done.result->>'retryable'='false' OR (done.result->>'retry_at')::timestamptz>now())))) ORDER BY e.created_at,e.id LIMIT 10")
         .bind(POLICY).fetch_all(pool).await?;
     if evidence.is_empty() {
         return Ok(());

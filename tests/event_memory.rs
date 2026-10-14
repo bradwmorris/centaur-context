@@ -157,6 +157,24 @@ async fn cutover_zero_output_new_memory_causal_invalidation_and_authority() {
             .fingerprints
             .is_empty()
     );
+    let legacy_run = Uuid::new_v4();
+    sqlx::query("INSERT INTO runs(id,kind,status,actor_type,actor_id,idempotency_key) VALUES($1,'memory_dream','running','system','context-memory-dream',$2)").bind(legacy_run).bind(legacy_run.to_string()).execute(&pool).await.unwrap();
+    let legacy_batch = centaur_context::dreaming::Batch {
+        memories: vec![],
+        connections: vec![],
+        evidence: vec![],
+        targets: vec![],
+    };
+    assert!(
+        centaur_context::dreaming::apply_plan(
+            &pool,
+            legacy_run,
+            &legacy_batch,
+            &centaur_context::dreaming::Plan { changes: vec![] }
+        )
+        .await
+        .is_err()
+    );
     let actor = ActorContext {
         actor_type: "centaur_agent",
         actor_id: "test-agent".into(),
@@ -298,6 +316,29 @@ async fn coherent_capture_overlap_and_unrelated_chat_growth() {
             .unwrap()
             .fingerprints
             .is_empty()
+    );
+    // Correcting cited evidence reopens exactly the affected Event version.
+    sqlx::query("INSERT INTO evidence_corrections(id,object_id,target_type,target_id,reason,representation,actor_type,actor_id,object_revision) VALUES($1,$2,'message',$3,'Correction to the stated preference','{\"content\":\"Afternoon meetings are preferred\"}','human','test',2)").bind(Uuid::new_v4()).bind(chat).bind(one).execute(&pool).await.unwrap();
+    let corrected = em::synthesis_batch(&pool, false).await.unwrap();
+    assert_eq!(corrected.fingerprints.len(), 1);
+    assert!(
+        corrected
+            .evidence
+            .evidence
+            .iter()
+            .any(|e| e["corrections"].as_array().is_some_and(|c| !c.is_empty()))
+    );
+    let stale_review = run(&pool, &synthesis).await;
+    assert!(
+        em::apply_memories(
+            &pool,
+            stale_review,
+            &synthesis,
+            &em::MemoryPlan { memories: vec![] },
+            false
+        )
+        .await
+        .is_err()
     );
     let event_id = Uuid::parse_str(result["captured_event_ids"][0].as_str().unwrap()).unwrap();
     let edges:i64=sqlx::query_scalar("SELECT count(*) FROM connections WHERE source_object_id=$1 AND target_object_id=$2 AND kind='derived_from' AND archived_at IS NULL").bind(event_id).bind(chat).fetch_one(&pool).await.unwrap();
