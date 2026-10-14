@@ -1218,12 +1218,6 @@ pub async fn run_worker(
     if !matches!(mode.as_str(), "preview" | "apply") || config.is_none() {
         std::future::pending::<()>().await;
     }
-    if std::env::var("EVENTS_FIRST_ENABLED").as_deref() == Ok("true")
-        && let Err(error) = crate::event_memory::activate(&pool).await
-    {
-        tracing::error!(%error,"Events-first activation failed; worker stopped");
-        return;
-    }
     let config = config.expect("enabled dreaming requires model");
     let client = reqwest::Client::builder()
         .timeout(config.request_timeout)
