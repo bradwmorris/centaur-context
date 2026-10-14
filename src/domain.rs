@@ -197,11 +197,37 @@ pub fn provenance(value: Option<Value>) -> Result<Value, ValidationError> {
     let value = value.unwrap_or_else(|| Value::Object(Map::new()));
     let object = value.as_object().ok_or(ValidationError::ProvenanceObject)?;
     for key in object.keys() {
-        if !["source_type", "source_ref", "note", "publication_allowed"].contains(&key.as_str()) {
+        if ![
+            "source_type",
+            "source_ref",
+            "note",
+            "publication_allowed",
+            "evidence_ids",
+        ]
+        .contains(&key.as_str())
+        {
             return Err(ValidationError::Unsupported {
                 field: "provenance key",
                 value: key.clone(),
             });
+        }
+    }
+    if let Some(evidence) = object.get("evidence_ids") {
+        let ids = evidence
+            .as_array()
+            .ok_or(ValidationError::Required("provenance.evidence_ids"))?;
+        let unique = ids
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        if ids.is_empty()
+            || ids.len() > 50
+            || unique.len() != ids.len()
+            || unique.iter().any(|s| uuid::Uuid::parse_str(s).is_err())
+        {
+            return Err(ValidationError::Required(
+                "provenance.evidence_ids must contain 1..50 unique UUIDs",
+            ));
         }
     }
     if let Some(source_type) = object.get("source_type") {

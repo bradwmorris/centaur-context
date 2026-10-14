@@ -14,6 +14,13 @@ CREATE FUNCTION event_memory_fingerprint(event_id uuid) RETURNS text LANGUAGE sq
        SELECT jsonb_array_elements_text(COALESCE(o.provenance->'evidence_ids','[]'::jsonb)) FROM objects o WHERE o.id=event_id
      )
    ),'[]'::jsonb),
+   'supporting_objects', COALESCE((
+     SELECT jsonb_agg(jsonb_build_array(o.id,o.revision,o.archived_at) ORDER BY o.id)
+     FROM objects o WHERE o.kind<>'chat' AND o.kind<>'memory' AND EXISTS(
+       SELECT 1 FROM connections c WHERE c.source_object_id=event_id
+       AND c.kind='derived_from' AND c.archived_at IS NULL AND c.target_object_id=o.id
+     )
+   ),'[]'::jsonb),
    'links', COALESCE((
      SELECT jsonb_agg(jsonb_build_array(c.id,c.revision,c.archived_at) ORDER BY c.id)
      FROM connections c WHERE c.source_object_id=event_id AND c.kind='derived_from'

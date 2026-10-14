@@ -1331,6 +1331,27 @@ pub(crate) async fn create_object(
     let title = required_text(title.to_owned(), "title", 300)?;
     let description = object_description(&title, description.to_owned())?;
     let provenance_value = provenance(provenance_value)?;
+    if kind == "event"
+        && let Some(evidence) = provenance_value["evidence_ids"].as_array()
+    {
+        let ids = evidence
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let present:i64=sqlx::query_scalar("SELECT count(*) FROM (SELECT id FROM chat_messages WHERE id::text=ANY($1) UNION SELECT e.id FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.id::text=ANY($1) AND r.status='completed') evidence")
+            .bind(&ids).fetch_one(&mut **tx).await?;
+        if present != ids.len() as i64 {
+            return Err(DbError::Invalid(
+                "Event evidence IDs must refer to committed evidence in this store".into(),
+            ));
+        }
+        let overlap:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM objects WHERE kind='event' AND archived_at IS NULL AND provenance->'evidence_ids' ?| $1)")
+            .bind(&ids).fetch_one(&mut **tx).await?;
+        if overlap {
+            return Err(DbError::Invalid("An Event already references this evidence; read and enrich the existing occurrence".into()));
+        }
+    }
     sqlx::query(
         r#"INSERT INTO objects
            (id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id,provenance)

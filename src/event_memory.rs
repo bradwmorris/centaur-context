@@ -145,12 +145,12 @@ impl EventPlan {
                 candidates,
                 "event",
             )?;
-            if let Some(id) = event.object_id {
-                if candidates[&id]["explicitly_corrected"] == true {
-                    return Err(invalid(
-                        "corrected Event requires explicit correction authority",
-                    ));
-                }
+            if let Some(id) = event.object_id
+                && candidates[&id]["explicitly_corrected"] == true
+            {
+                return Err(invalid(
+                    "corrected Event requires explicit correction authority",
+                ));
             }
             if let Some(id) = event.object_id
                 && !updates.insert(id)
@@ -975,8 +975,9 @@ pub async fn status(pool: &PgPool) -> Result<Value, DbError> {
         .bind(POLICY).fetch_one(pool).await?;
     let runs:Value=sqlx::query_scalar("SELECT jsonb_build_object('conversation_pending',count(*) FILTER(WHERE kind='curator' AND status IN ('queued','running')),'conversation_failed',count(*) FILTER(WHERE kind='curator' AND status='failed'),'action_pending',count(*) FILTER(WHERE kind='event_capture' AND status='running'),'action_failed',count(*) FILTER(WHERE kind='event_capture' AND status='failed'),'last_success_at',max(completed_at) FILTER(WHERE kind IN ('memory_synthesis','event_capture') AND status='completed')) FROM runs WHERE kind IN ('curator','event_capture','memory_synthesis')").fetch_one(pool).await?;
     let recent:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('run_id',id,'kind',kind,'status',status,'created_at',created_at,'completed_at',completed_at,'retryable',result->'retryable','deferred',result->'deferred','classification',result->'inference_failure'->'classification','outcome',result->'outcome','approval_sha256',result->'approval_sha256') FROM runs WHERE kind IN ('event_capture','memory_synthesis') ORDER BY created_at DESC,id DESC LIMIT 20").fetch_all(pool).await?;
+    let pending_actions:i64=sqlx::query_scalar("SELECT count(*) FROM object_events e JOIN runs r ON r.id=e.run_id WHERE e.target_type='object' AND e.after_state->>'kind' IN ('task','source','note') AND e.action IN ('created','updated','task_status_changed') AND r.status='completed' AND e.created_at>=COALESCE((SELECT created_at FROM runs WHERE kind='memory_capture_start' AND idempotency_key='start'),(SELECT created_at FROM runs WHERE kind='event_memory_cutover' AND idempotency_key=$1)) AND NOT EXISTS(SELECT 1 FROM runs old WHERE old.kind='memory_capture' AND old.idempotency_key=e.id::text) AND NOT EXISTS(SELECT 1 FROM runs done WHERE done.kind='event_capture' AND done.input->'evidence_ids' ? e.id::text AND done.status IN ('completed','failed'))").bind(POLICY).fetch_one(pool).await?;
     Ok(
-        json!({"policy_version":POLICY,"active":enabled,"events":counts,"runs":runs,"recent_runs":recent}),
+        json!({"policy_version":POLICY,"active":enabled,"events":counts,"runs":runs,"pending_action_evidence":pending_actions,"recent_runs":recent}),
     )
 }
 pub(crate) async fn status_route(
