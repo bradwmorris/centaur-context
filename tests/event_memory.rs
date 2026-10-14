@@ -566,3 +566,128 @@ async fn status_excludes_cutover_events_and_irrelevant_run_payloads() {
     assert_eq!(state["events"]["reviewed_no_memory"], 1);
     assert_eq!(state["events"]["pending"], 0);
 }
+
+#[tokio::test]
+async fn ordinary_evidence_gets_one_text_correction_and_oversized_evidence_defers() {
+    for repair_succeeds in [true, false] {
+        let Some(pool) = pool().await else { return };
+        em::activate(&pool).await.unwrap();
+        let chat = Uuid::new_v4();
+        let user = Uuid::new_v4();
+        let mut tx = pool.begin().await.unwrap();
+        for (id, kind) in [(chat, "chat"), (user, "user")] {
+            sqlx::query("INSERT INTO objects(id,kind,title,description,created_by_type,created_by_id,updated_by_type,updated_by_id) VALUES($1,$2,'Fixture','Synthetic evidence.','system','test','system','test')").bind(id).bind(kind).execute(&mut *tx).await.unwrap();
+        }
+        sqlx::query("INSERT INTO chats(object_id) VALUES($1)")
+            .bind(chat)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users(object_id,user_kind) VALUES($1,'human')")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let mut evidence = Vec::new();
+        for _ in 0..3 {
+            evidence.push(
+                message(
+                    &pool,
+                    chat,
+                    user,
+                    &"I prefer morning meetings. ".repeat(550),
+                )
+                .await
+                .to_string(),
+            );
+        }
+        let id = event(&pool, "Meeting preference discussion").await;
+        sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',$2::jsonb) WHERE id=$1").bind(id).bind(json!(evidence)).execute(&pool).await.unwrap();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let router = axum::Router::new().route("/", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+            let count = count.clone();
+            async move {
+                let attempt = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let payload = body.to_string();
+                assert!(payload.len()>24_000, "original long evidence must not be truncated");
+                let mut plan = create(id);
+                if attempt == 0 || !repair_succeeds { plan.memories[0].description = "supported detail ".repeat(50); }
+                if attempt == 1 {
+                    assert!(payload.contains("validation_error"));
+                    assert!(payload.contains("previous_plan"));
+                }
+                axum::Json(json!({"choices":[{"message":{"content":serde_json::to_string(&plan).unwrap()}}]}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let config = centaur_context::config::CuratorModelConfig {
+            transport: centaur_context::config::CuratorModelTransport::DirectApi,
+            endpoint: format!("http://{address}/"),
+            api_token: "synthetic".into(),
+            model: "gpt-6-luna".into(),
+            prompt_version: "test".into(),
+            poll_interval: std::time::Duration::from_secs(1),
+            request_timeout: std::time::Duration::from_secs(5),
+        };
+        let run = em::synthesis_pass(&pool, &reqwest::Client::new(), &config, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let (status, result): (String, Value) =
+            sqlx::query_as("SELECT status,result FROM runs WHERE id=$1")
+                .bind(run)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(result["correction_calls"], 1);
+        assert_eq!(
+            status,
+            if repair_succeeds {
+                "completed"
+            } else {
+                "failed"
+            }
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM objects WHERE kind='memory'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, if repair_succeeds { 1 } else { 0 });
+        if repair_succeeds {
+            assert!(
+                em::synthesis_pass(&pool, &reqwest::Client::new(), &config, false)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let mut large = Vec::new();
+            for _ in 0..8 {
+                large.push(
+                    message(&pool, chat, user, &"Original evidence. ".repeat(1000))
+                        .await
+                        .to_string(),
+                );
+            }
+            let large_event = event(&pool, "Oversized occurrence").await;
+            sqlx::query("UPDATE objects SET provenance=jsonb_build_object('evidence_ids',$2::jsonb) WHERE id=$1").bind(large_event).bind(json!(large)).execute(&pool).await.unwrap();
+            let deferred = em::synthesis_pass(&pool, &reqwest::Client::new(), &config, false)
+                .await
+                .unwrap()
+                .unwrap();
+            let result: Value = sqlx::query_scalar("SELECT result FROM runs WHERE id=$1")
+                .bind(deferred)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(result["deferred"], true);
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        }
+        server.abort();
+        pool.close().await;
+    }
+}
